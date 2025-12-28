@@ -3,7 +3,7 @@
 //  ClearVoiceCoreML
 //
 //  CoreML-based MossFormer GAN Speech Enhancement (16kHz)
-//  Uses Accelerate for STFT/ISTFT
+//  Uses MLX for STFT/ISTFT, CoreML for model inference
 //
 
 import Foundation
@@ -11,6 +11,8 @@ import CoreML
 import Accelerate
 import ClearVoice
 import ClearVoiceCore
+import MLX
+import MLXNN
 
 // MARK: - MossFormer GAN CoreML Provider
 
@@ -37,36 +39,30 @@ public final class MossFormerGANCoreMLProvider: SpeechEnhancer, @unchecked Senda
     private let modelPath: String
     private let computeUnits: MLComputeUnits
     
-    // Accelerate FFT setup
-    private var fftSetup: FFTSetup?
-    private var log2n: UInt
-    private var window: [Float]
+    // MLX STFT window
+    private let mlxWindow: MLXArray
     
     public init(modelPath: String, computeUnits: MLComputeUnits = .cpuAndGPU) {
         self.modelPath = modelPath
         self.computeUnits = computeUnits
         
-        // FFT setup
-        self.log2n = UInt(log2(Double(nFFT)))
-        self.fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
-        
-        // Create Hann window
-        self.window = [Float](repeating: 0, count: winLength)
-        vDSP_hann_window(&self.window, vDSP_Length(winLength), Int32(vDSP_HANN_NORM))
+        // Create periodic Hann window for MLX STFT
+        self.mlxWindow = createPeriodicHannWindow(length: winLength)
     }
     
-    deinit {
-        if let setup = fftSetup {
-            vDSP_destroy_fftsetup(setup)
-        }
-    }
-    
-    /// Load CoreML model
+    /// Load CoreML model (auto-compiles .mlpackage if needed)
     public func load() async throws {
         let config = MLModelConfiguration()
         config.computeUnits = computeUnits
         
-        let modelURL = URL(fileURLWithPath: modelPath)
+        var modelURL = URL(fileURLWithPath: modelPath)
+        
+        // If it's an .mlpackage, compile it first
+        if modelPath.hasSuffix(".mlpackage") {
+            let compiledURL = try await MLModel.compileModel(at: modelURL)
+            modelURL = compiledURL
+        }
+        
         model = try await MLModel.load(contentsOf: modelURL, configuration: config)
     }
     
@@ -84,7 +80,198 @@ public final class MossFormerGANCoreMLProvider: SpeechEnhancer, @unchecked Senda
         return try await processWithChunking(input.samples, model: model)
     }
     
-    /// Process a single segment (up to 1.594s)
+    // MARK: - Background Extraction
+    
+    /// Result containing both enhanced speech and background/residual audio
+    public struct EnhancedWithBackground: Sendable {
+        public let enhanced: AudioBuffer
+        public let background: AudioBuffer
+    }
+    
+    /// Process audio and extract both enhanced speech and background track
+    /// Uses mask-based spectral extraction for high-quality background separation
+    public func processWithBackground(_ input: AudioBuffer) async throws -> EnhancedWithBackground {
+        guard let model = model else {
+            throw ClearVoiceError.modelNotLoaded("MossFormerGAN_CoreML")
+        }
+        
+        // Process in segments for long audio
+        if input.samples.count <= segmentSamples {
+            return try await processSegmentWithBackground(input.samples, model: model)
+        }
+        
+        // Process in segments without overlap
+        return try await processWithChunkingAndBackground(input.samples, model: model)
+    }
+    
+    /// Process a single segment with background extraction using MLX
+    private func processSegmentWithBackground(_ samples: [Float], model: MLModel) async throws -> EnhancedWithBackground {
+        // Pad to segment size if needed
+        var paddedSamples = samples
+        let trimStart: Int
+        
+        if samples.count < segmentSamples {
+            let needPadding = segmentSamples - samples.count
+            paddedSamples = [Float](repeating: 0, count: needPadding) + samples
+            trimStart = needPadding
+        } else {
+            trimStart = 0
+        }
+        
+        // Convert to MLXArray [1, samples]
+        let inputMLX = MLXArray(paddedSamples).expandedDimensions(axis: 0).asType(.float32)
+        
+        // Normalize using MLX
+        let inputLen = MLXArray(Float(paddedSamples.count))
+        let sumSquares = sum(inputMLX * inputMLX, axis: 1, keepDims: true)
+        let normFactor = sqrt(inputLen / (sumSquares + 1e-9))
+        let normedAudio = inputMLX * normFactor
+        
+        // MLX STFT -> [batch, freq, time] (keep noisy for background extraction)
+        let (noisyReal, noisyImag) = mlxSTFT(
+            normedAudio,
+            nFFT: nFFT,
+            hopLength: hopLength,
+            winLength: winLength,
+            window: mlxWindow,
+            center: true
+        )
+        
+        // Power compress for model input
+        let (realC, imagC) = mlxPowerCompress(real: noisyReal, imag: noisyImag)
+        
+        // Prepare for CoreML: [1, 2, T, F]
+        let coremlInput = try prepareForCoreMLFromMLX(real: realC, imag: imagC)
+        
+        // CoreML inference
+        let prediction = try await model.prediction(from: coremlInput)
+        
+        // Parse output -> [batch, freq, time]
+        let (enhancedReal, enhancedImag) = parseModelOutputToMLX(prediction)
+        
+        // Power uncompress for enhanced
+        let (realUC, imagUC) = mlxPowerUncompress(real: enhancedReal, imag: enhancedImag)
+        
+        // Compute magnitude mask and extract background using MLX
+        let (backgroundReal, backgroundImag) = mlxComputeBackgroundSpectrogram(
+            noisyReal: noisyReal,
+            noisyImag: noisyImag,
+            enhancedReal: realUC,
+            enhancedImag: imagUC
+        )
+        
+        // MLX ISTFT for enhanced
+        let enhancedRecon = mlxISTFT(
+            realPart: realUC,
+            imagPart: imagUC,
+            nFFT: nFFT,
+            hopLength: hopLength,
+            winLength: winLength,
+            window: mlxWindow,
+            center: true,
+            audioLength: paddedSamples.count
+        )
+        
+        // MLX ISTFT for background
+        let backgroundRecon = mlxISTFT(
+            realPart: backgroundReal,
+            imagPart: backgroundImag,
+            nFFT: nFFT,
+            hopLength: hopLength,
+            winLength: winLength,
+            window: mlxWindow,
+            center: true,
+            audioLength: paddedSamples.count
+        )
+        
+        // De-normalize both
+        let enhancedOut = (enhancedRecon / normFactor).squeezed(axis: 0)
+        let backgroundOut = (backgroundRecon / normFactor).squeezed(axis: 0)
+        eval(enhancedOut, backgroundOut)
+        
+        // Convert to [Float] and trim
+        let enhancedSamples = Array(enhancedOut.asArray(Float.self).suffix(from: trimStart))
+        let backgroundSamples = Array(backgroundOut.asArray(Float.self).suffix(from: trimStart))
+        
+        return EnhancedWithBackground(
+            enhanced: AudioBuffer(samples: enhancedSamples, sampleRate: sampleRate, channels: 1),
+            background: AudioBuffer(samples: backgroundSamples, sampleRate: sampleRate, channels: 1)
+        )
+    }
+    
+    /// Compute background spectrogram using inverse magnitude mask (MLX version)
+    private func mlxComputeBackgroundSpectrogram(
+        noisyReal: MLXArray,
+        noisyImag: MLXArray,
+        enhancedReal: MLXArray,
+        enhancedImag: MLXArray
+    ) -> (MLXArray, MLXArray) {
+        // Compute magnitudes
+        let noisyMag = sqrt(noisyReal * noisyReal + noisyImag * noisyImag + 1e-9)
+        let enhancedMag = sqrt(enhancedReal * enhancedReal + enhancedImag * enhancedImag + 1e-9)
+        
+        // Compute soft mask: enhanced / noisy (clipped to [0, 1])
+        let mask = clip(enhancedMag / (noisyMag + 1e-9), min: MLXArray(0.0), max: MLXArray(1.0))
+        
+        // Background = noisy * (1 - mask)
+        let inverseMask = 1.0 - mask
+        let backgroundReal = noisyReal * inverseMask
+        let backgroundImag = noisyImag * inverseMask
+        
+        return (backgroundReal, backgroundImag)
+    }
+    
+    /// Process long audio in segments with background extraction
+    private func processWithChunkingAndBackground(_ samples: [Float], model: MLModel) async throws -> EnhancedWithBackground {
+        let numSegments = Int(ceil(Double(samples.count) / Double(segmentSamples)))
+        var enhancedSegments: [Float] = []
+        var backgroundSegments: [Float] = []
+        
+        for idx in 0..<numSegments {
+            let start = idx * segmentSamples
+            let end = min(start + segmentSamples, samples.count)
+            let actualLen = end - start
+            
+            // For short final segment, use context from previous audio
+            var segment: [Float]
+            let trimAmount: Int
+            
+            if actualLen < segmentSamples {
+                let needExtra = segmentSamples - actualLen
+                let contextStart = max(0, start - needExtra)
+                segment = Array(samples[contextStart..<end])
+                
+                if segment.count < segmentSamples {
+                    let padAmt = segmentSamples - segment.count
+                    segment = [Float](repeating: 0, count: padAmt) + segment
+                    trimAmount = padAmt + (segment.count - actualLen - padAmt)
+                } else {
+                    trimAmount = segment.count - actualLen
+                }
+            } else {
+                segment = Array(samples[start..<end])
+                trimAmount = 0
+            }
+            
+            let result = try await processSegmentWithBackground(segment, model: model)
+            
+            // Trim to actual portion
+            if trimAmount > 0 && trimAmount < result.enhanced.samples.count {
+                enhancedSegments.append(contentsOf: result.enhanced.samples.suffix(result.enhanced.samples.count - trimAmount).prefix(actualLen))
+                backgroundSegments.append(contentsOf: result.background.samples.suffix(result.background.samples.count - trimAmount).prefix(actualLen))
+            } else {
+                enhancedSegments.append(contentsOf: result.enhanced.samples.prefix(actualLen))
+                backgroundSegments.append(contentsOf: result.background.samples.prefix(actualLen))
+            }
+        }
+        
+        return EnhancedWithBackground(
+            enhanced: AudioBuffer(samples: enhancedSegments, sampleRate: sampleRate, channels: 1),
+            background: AudioBuffer(samples: backgroundSegments, sampleRate: sampleRate, channels: 1)
+        )
+    }
+    
+    /// Process a single segment (up to 1.594s) using MLX STFT/ISTFT
     private func processSegment(_ samples: [Float], model: MLModel) async throws -> AudioBuffer {
         // Pad to segment size if needed
         var paddedSamples = samples
@@ -98,43 +285,61 @@ public final class MossFormerGANCoreMLProvider: SpeechEnhancer, @unchecked Senda
             trimStart = 0
         }
         
-        // Normalize
-        let inputLen = Float(paddedSamples.count)
-        var sumSquares: Float = 0
-        vDSP_svesq(paddedSamples, 1, &sumSquares, vDSP_Length(paddedSamples.count))
+        // Convert to MLXArray [1, samples]
+        let inputMLX = MLXArray(paddedSamples).expandedDimensions(axis: 0).asType(.float32)
+        
+        // Normalize using MLX
+        let inputLen = MLXArray(Float(paddedSamples.count))
+        let sumSquares = sum(inputMLX * inputMLX, axis: 1, keepDims: true)
         let normFactor = sqrt(inputLen / (sumSquares + 1e-9))
-        var normedAudio = [Float](repeating: 0, count: paddedSamples.count)
-        vDSP_vsmul(paddedSamples, 1, [normFactor], &normedAudio, 1, vDSP_Length(paddedSamples.count))
+        let normedAudio = inputMLX * normFactor
         
-        // STFT using Accelerate
-        let (stftReal, stftImag) = performSTFT(normedAudio)
+        // MLX STFT -> [batch, freq, time]
+        let (stftReal, stftImag) = mlxSTFT(
+            normedAudio,
+            nFFT: nFFT,
+            hopLength: hopLength,
+            winLength: winLength,
+            window: mlxWindow,
+            center: true
+        )
         
-        // Power compress
-        let (realC, imagC) = powerCompress(real: stftReal, imag: stftImag)
+        // Power compress using MLX
+        let (realC, imagC) = mlxPowerCompress(real: stftReal, imag: stftImag)
         
-        // Prepare for CoreML: [1, 2, T, F]
-        let coremlInput = try prepareForCoreML(real: realC, imag: imagC)
+        // Prepare for CoreML: [1, 2, T, F] (transpose from [1, F, T])
+        let coremlInput = try prepareForCoreMLFromMLX(real: realC, imag: imagC)
         
         // CoreML inference
         let prediction = try await model.prediction(from: coremlInput)
         
-        // Parse output
-        let (enhancedReal, enhancedImag) = parseModelOutput(prediction)
+        // Parse output -> [batch, freq, time]
+        let (enhancedReal, enhancedImag) = parseModelOutputToMLX(prediction)
         
-        // Power uncompress
-        let (realUC, imagUC) = powerUncompress(real: enhancedReal, imag: enhancedImag)
+        // Power uncompress using MLX
+        let (realUC, imagUC) = mlxPowerUncompress(real: enhancedReal, imag: enhancedImag)
         
-        // ISTFT using Accelerate
-        var reconstructed = performISTFT(real: realUC, imag: imagUC, originalLength: paddedSamples.count)
+        // MLX ISTFT -> [batch, samples]
+        let reconstructed = mlxISTFT(
+            realPart: realUC,
+            imagPart: imagUC,
+            nFFT: nFFT,
+            hopLength: hopLength,
+            winLength: winLength,
+            window: mlxWindow,
+            center: true,
+            audioLength: paddedSamples.count
+        )
         
         // De-normalize
-        var invNorm = 1.0 / normFactor
-        vDSP_vsmul(reconstructed, 1, &invNorm, &reconstructed, 1, vDSP_Length(reconstructed.count))
+        let output = (reconstructed / normFactor).squeezed(axis: 0)
+        eval(output)
         
-        // Trim to original length
-        let outputSamples = Array(reconstructed[trimStart...])
+        // Convert to [Float] and trim
+        let outputSamples = output.asArray(Float.self)
+        let finalSamples = Array(outputSamples.suffix(from: trimStart))
         
-        return AudioBuffer(samples: outputSamples, sampleRate: sampleRate, channels: 1)
+        return AudioBuffer(samples: finalSamples, sampleRate: sampleRate, channels: 1)
     }
     
     /// Process long audio in segments (no overlap per model recommendation)
@@ -182,217 +387,81 @@ public final class MossFormerGANCoreMLProvider: SpeechEnhancer, @unchecked Senda
         return AudioBuffer(samples: enhancedSegments, sampleRate: sampleRate, channels: 1)
     }
     
-    // MARK: - STFT/ISTFT using Accelerate
+    // MARK: - MLX Power Compression
     
-    private func performSTFT(_ samples: [Float]) -> ([[Float]], [[Float]]) {
-        guard let fftSetup = fftSetup else { return ([], []) }
-        
-        // Pad for center mode
-        let padAmount = nFFT / 2
-        var paddedSamples = [Float](repeating: 0, count: padAmount) + samples + [Float](repeating: 0, count: padAmount)
-        
-        let numFrames = (paddedSamples.count - winLength) / hopLength + 1
-        let freqBins = nFFT / 2 + 1
-        
-        var realFrames = [[Float]](repeating: [Float](repeating: 0, count: numFrames), count: freqBins)
-        var imagFrames = [[Float]](repeating: [Float](repeating: 0, count: numFrames), count: freqBins)
-        
-        // FFT buffers
-        var realBuffer = [Float](repeating: 0, count: nFFT)
-        var imagBuffer = [Float](repeating: 0, count: nFFT)
-        var splitComplex = DSPSplitComplex(realp: &realBuffer, imagp: &imagBuffer)
-        
-        for frame in 0..<numFrames {
-            let start = frame * hopLength
-            let end = start + winLength
-            
-            // Apply window
-            var windowedFrame = [Float](repeating: 0, count: nFFT)
-            for i in 0..<winLength {
-                windowedFrame[i] = paddedSamples[start + i] * window[i]
-            }
-            
-            // Forward FFT
-            windowedFrame.withUnsafeMutableBufferPointer { framePtr in
-                vDSP_ctoz(UnsafePointer<DSPComplex>(OpaquePointer(framePtr.baseAddress!)),
-                          2, &splitComplex, 1, vDSP_Length(nFFT / 2))
-            }
-            
-            vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(FFT_FORWARD))
-            
-            // Scale
-            var scale = Float(0.5)
-            vDSP_vsmul(splitComplex.realp, 1, &scale, splitComplex.realp, 1, vDSP_Length(nFFT / 2))
-            vDSP_vsmul(splitComplex.imagp, 1, &scale, splitComplex.imagp, 1, vDSP_Length(nFFT / 2))
-            
-            // Store result [F, T]
-            for f in 0..<freqBins {
-                if f < nFFT / 2 {
-                    realFrames[f][frame] = realBuffer[f]
-                    imagFrames[f][frame] = imagBuffer[f]
-                } else {
-                    realFrames[f][frame] = 0
-                    imagFrames[f][frame] = 0
-                }
-            }
-        }
-        
-        return (realFrames, imagFrames)
+    /// Power compress spectrogram using MLX (matches Python exactly)
+    private func mlxPowerCompress(real: MLXArray, imag: MLXArray) -> (MLXArray, MLXArray) {
+        let mag = sqrt(real * real + imag * imag + 1e-8)
+        let phase = atan2(imag, real)
+        let magC = pow(mag, MLXArray(powerCompress))
+        return (magC * cos(phase), magC * sin(phase))
     }
     
-    private func performISTFT(real: [[Float]], imag: [[Float]], originalLength: Int) -> [Float] {
-        guard let fftSetup = fftSetup, !real.isEmpty, !real[0].isEmpty else { return [] }
-        
-        let freqBins = real.count
-        let numFrames = real[0].count
-        let padAmount = nFFT / 2
-        let outputLength = (numFrames - 1) * hopLength + winLength + 2 * padAmount
-        
-        var output = [Float](repeating: 0, count: outputLength)
-        var windowSum = [Float](repeating: 0, count: outputLength)
-        
-        // Buffers
-        var realBuffer = [Float](repeating: 0, count: nFFT)
-        var imagBuffer = [Float](repeating: 0, count: nFFT)
-        var splitComplex = DSPSplitComplex(realp: &realBuffer, imagp: &imagBuffer)
-        var frameOutput = [Float](repeating: 0, count: nFFT)
-        
-        for frame in 0..<numFrames {
-            // Load frequency data
-            for f in 0..<min(freqBins, nFFT / 2) {
-                realBuffer[f] = real[f][frame]
-                imagBuffer[f] = imag[f][frame]
-            }
-            
-            // Inverse FFT
-            vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(FFT_INVERSE))
-            
-            // Scale
-            var scale = Float(1.0 / Float(nFFT))
-            vDSP_vsmul(splitComplex.realp, 1, &scale, splitComplex.realp, 1, vDSP_Length(nFFT / 2))
-            vDSP_vsmul(splitComplex.imagp, 1, &scale, splitComplex.imagp, 1, vDSP_Length(nFFT / 2))
-            
-            // Convert split complex to interleaved real signal
-            // The inverse FFT produces interleaved results that we extract from realp
-            for i in 0..<winLength {
-                if i < nFFT / 2 {
-                    frameOutput[i * 2] = realBuffer[i]
-                    frameOutput[i * 2 + 1] = imagBuffer[i]
-                }
-            }
-            // Simplified: just use the real part directly for reconstruction
-            for i in 0..<winLength {
-                frameOutput[i] = realBuffer[i % (nFFT / 2)] + imagBuffer[i % (nFFT / 2)]
-            }
-            
-            // Apply window and overlap-add
-            let start = frame * hopLength
-            for i in 0..<winLength {
-                let windowed = realBuffer[i % (nFFT / 2)] * window[i]
-                output[start + i] += windowed
-                windowSum[start + i] += window[i] * window[i]
-            }
-        }
-        
-        // Normalize by window sum
-        for i in 0..<output.count {
-            if windowSum[i] > 1e-8 {
-                output[i] /= windowSum[i]
-            }
-        }
-        
-        // Remove padding
-        let trimStart = padAmount
-        let trimEnd = trimStart + originalLength
-        return Array(output[trimStart..<min(trimEnd, output.count)])
+    /// Power uncompress spectrogram using MLX
+    private func mlxPowerUncompress(real: MLXArray, imag: MLXArray) -> (MLXArray, MLXArray) {
+        let mag = sqrt(real * real + imag * imag + 1e-8)
+        let phase = atan2(imag, real)
+        let magUC = pow(mag, MLXArray(1.0 / powerCompress))
+        return (magUC * cos(phase), magUC * sin(phase))
     }
     
-    // MARK: - Power Compression
+    // MARK: - MLX CoreML I/O
     
-    private func powerCompress(real: [[Float]], imag: [[Float]]) -> ([[Float]], [[Float]]) {
-        var realC = real
-        var imagC = imag
+    /// Prepare MLXArray spectrogram for CoreML input [1, 2, T, F]
+    private func prepareForCoreMLFromMLX(real: MLXArray, imag: MLXArray) throws -> MLFeatureProvider {
+        // real/imag are [batch=1, F, T], need [1, 2, T, F]
+        let realT = real.transposed(0, 2, 1)  // [1, T, F]
+        let imagT = imag.transposed(0, 2, 1)  // [1, T, F]
         
-        for f in 0..<real.count {
-            for t in 0..<real[f].count {
-                let r = real[f][t]
-                let im = imag[f][t]
-                let mag = sqrt(r * r + im * im + 1e-9)
-                let phase = atan2(im, r)
-                let magC = pow(mag, powerCompress)
-                realC[f][t] = magC * cos(phase)
-                imagC[f][t] = magC * sin(phase)
-            }
-        }
+        eval(realT, imagT)
         
-        return (realC, imagC)
-    }
-    
-    private func powerUncompress(real: [[Float]], imag: [[Float]]) -> ([[Float]], [[Float]]) {
-        var realUC = real
-        var imagUC = imag
+        let T = realT.shape[1]
+        let F = realT.shape[2]
         
-        for f in 0..<real.count {
-            for t in 0..<real[f].count {
-                let r = real[f][t]
-                let im = imag[f][t]
-                let mag = sqrt(r * r + im * im + 1e-9)
-                let phase = atan2(im, r)
-                let magUC = pow(mag, 1.0 / powerCompress)
-                realUC[f][t] = magUC * cos(phase)
-                imagUC[f][t] = magUC * sin(phase)
-            }
-        }
+        // Stack as [1, 2, T, F]
+        let spec = MLX.stacked([realT, imagT], axis: 1)  // [1, 2, T, F]
+        eval(spec)
         
-        return (realUC, imagUC)
-    }
-    
-    // MARK: - CoreML I/O
-    
-    private func prepareForCoreML(real: [[Float]], imag: [[Float]]) throws -> MLFeatureProvider {
-        // real and imag are [F, T] shaped
-        // CoreML expects [1, 2, T, F]
-        let F = real.count
-        let T = real.isEmpty ? 0 : real[0].count
-        
-        // Create [1, 2, T, F] MLMultiArray
+        // Convert to MLMultiArray
         let shape: [NSNumber] = [1, 2, NSNumber(value: T), NSNumber(value: F)]
-        let array = try MLMultiArray(shape: shape, dataType: .float32)
+        let multiArray = try MLMultiArray(shape: shape, dataType: .float32)
         
-        for t in 0..<T {
-            for f in 0..<F {
-                let idx0 = t * F + f  // channel 0 (real)
-                let idx1 = T * F + t * F + f  // channel 1 (imag)
-                array[idx0] = NSNumber(value: real[f][t])
-                array[idx1] = NSNumber(value: imag[f][t])
-            }
+        // Copy data
+        let flatData = spec.flattened().asArray(Float.self)
+        for i in 0..<flatData.count {
+            multiArray[i] = NSNumber(value: flatData[i])
         }
         
-        return try MLDictionaryFeatureProvider(dictionary: ["spectrogram": array])
+        return try MLDictionaryFeatureProvider(dictionary: ["spectrogram": multiArray])
     }
     
-    private func parseModelOutput(_ output: MLFeatureProvider) -> ([[Float]], [[Float]]) {
-        guard let multiArray = output.featureValue(for: "enhanced")?.multiArrayValue 
-              ?? output.featureValue(for: output.featureNames.first!)?.multiArrayValue else {
-            return ([], [])
+    /// Parse CoreML output to MLXArray [batch, freq, time]
+    private func parseModelOutputToMLX(_ output: MLFeatureProvider) -> (MLXArray, MLXArray) {
+        guard let multiArray = output.featureValue(for: "enhanced_spectrogram")?.multiArrayValue ??
+                              output.featureValue(for: output.featureNames.first ?? "")?.multiArrayValue else {
+            return (MLXArray.zeros([1, nFFT / 2 + 1, 1]), MLXArray.zeros([1, nFFT / 2 + 1, 1]))
         }
         
         // Output is [1, 2, T, F]
         let T = multiArray.shape[2].intValue
         let F = multiArray.shape[3].intValue
         
-        var real = [[Float]](repeating: [Float](repeating: 0, count: T), count: F)
-        var imag = [[Float]](repeating: [Float](repeating: 0, count: T), count: F)
-        
-        for t in 0..<T {
-            for f in 0..<F {
-                let idx0 = t * F + f  // channel 0 (real)
-                let idx1 = T * F + t * F + f  // channel 1 (imag)
-                real[f][t] = multiArray[idx0].floatValue
-                imag[f][t] = multiArray[idx1].floatValue
-            }
+        // Convert to flat array and reshape
+        var flatData = [Float](repeating: 0, count: 2 * T * F)
+        for i in 0..<flatData.count {
+            flatData[i] = multiArray[i].floatValue
         }
         
+        let mlxData = MLXArray(flatData).reshaped([1, 2, T, F])
+        
+        // Extract real/imag and transpose to [1, F, T]
+        let realT = mlxData[0..., 0, 0..., 0...]  // [1, T, F]
+        let imagT = mlxData[0..., 1, 0..., 0...]  // [1, T, F]
+        
+        let real = realT.transposed(0, 2, 1)  // [1, F, T]
+        let imag = imagT.transposed(0, 2, 1)  // [1, F, T]
+        
+        eval(real, imag)
         return (real, imag)
     }
     

@@ -47,6 +47,9 @@ let package = Package(
         .package(name: "DemucsMLXSwift", path: "../Models/demucs_mlx_swift"),
         .package(name: "USSMLXSwift", path: "../Models/uss_mlx_swift"),
         
+        // MLX for neural engine operations
+        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.2"),
+        
         // FluidAudio for VAD, transcription, diarization
         .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.7.8"),
     ],
@@ -88,6 +91,8 @@ let package = Package(
                 "ClearVoice",
                 "ClearVoiceCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
             ],
             path: "Sources/ClearVoiceCoreML"
         ),
