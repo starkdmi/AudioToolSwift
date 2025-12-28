@@ -1,0 +1,281 @@
+//
+//  MLXEnhancerProvider.swift
+//  ClearVoiceMLX
+//
+//  MLX-based speech enhancement providers with chunking support
+//
+
+import Foundation
+import ClearVoice
+import ClearVoiceCore
+import MLX
+import MLXNN
+import AudioUtils  // SwiftAudio - used for audio I/O
+import Mossformer2MLXSwift
+import FRCRNMLXSwift
+
+// MARK: - MossFormer2 SE 48K Provider
+
+/// MLX MossFormer2 Speech Enhancement (48kHz)
+/// Chunking: 4s chunks, 25% overlap, discard-edges (from benchmarks)
+public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable {
+    
+    public let sampleRate: Int = 48000
+    public let inputChannels: Int = 1
+    public let outputChannels: Int = 1
+    public let minChunkSize: Int = 9600   // 0.2s at 48kHz
+    public let recommendedChunkSize: Int = 192000  // 4s at 48kHz (optimal from benchmarks)
+    
+    private var pipeline: MossFormer2Pipeline?
+    private let weightsPath: String?
+    private let precision: String
+    
+    /// Chunking config: 4s chunks, 25% overlap, discard-edges
+    private let chunkingConfig = ChunkingConfig.mossformer2SE48K()
+    
+    /// Max audio duration that can be processed without chunking (seconds)
+    private let maxDirectDuration: Float = 4.0
+    
+    public init(weightsPath: String? = nil, precision: String = "fp32") {
+        self.weightsPath = weightsPath
+        self.precision = precision
+    }
+    
+    /// Load model weights
+    public func load() async throws {
+        let config = Mossformer2MLXSwift.PipelineConfiguration()
+        pipeline = MossFormer2Pipeline(configuration: config)
+        
+        let resolvedPath: String
+        if let path = weightsPath {
+            resolvedPath = path
+        } else {
+            // Try to find weights in HuggingFace cache
+            let hfCache = NSHomeDirectory() + "/.cache/huggingface/hub/models--starkdmi--MossFormer2_SE_48K_MLX"
+            let snapshotsDir = hfCache + "/snapshots"
+            
+            // Find first snapshot directory and get model weights
+            if let snapshots = try? FileManager.default.contentsOfDirectory(atPath: snapshotsDir),
+               let firstSnapshot = snapshots.first(where: { !$0.hasPrefix(".") }) {
+                let modelPath = snapshotsDir + "/" + firstSnapshot + "/model_fp32.safetensors"
+                if FileManager.default.fileExists(atPath: modelPath) {
+                    resolvedPath = modelPath
+                } else {
+                    throw ClearVoiceError.modelNotFound("MossFormer2SE48K weights not found in HuggingFace cache. Please provide --weights path.")
+                }
+            } else {
+                throw ClearVoiceError.modelNotFound("MossFormer2SE48K weights not found. Run: huggingface-cli download starkdmi/MossFormer2_SE_48K_MLX")
+            }
+        }
+        
+        try pipeline?.loadWeights(from: resolvedPath)
+    }
+    
+    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
+        guard let pipeline = pipeline else {
+            throw ClearVoiceError.modelNotLoaded("MossFormer2SE48K")
+        }
+        
+        let durationSeconds = Float(input.samples.count) / Float(sampleRate)
+        
+        // Use chunking for longer audio
+        if durationSeconds > maxDirectDuration {
+            return try await processWithChunking(input, pipeline: pipeline)
+        }
+        
+        // Direct processing for short audio
+        return try await processChunk(input.samples, pipeline: pipeline)
+    }
+    
+    /// Process with chunking - direct port from Python benchmark_chunking.py
+    /// Uses discard-edges strategy: keep center of each chunk, discard edges where overlap occurs
+    private func processWithChunking(_ input: AudioBuffer, pipeline: MossFormer2Pipeline) async throws -> AudioBuffer {
+        let audio = input.samples
+        let totalLength = audio.count
+        let chunkSamples = chunkingConfig.chunkSamples
+        let stride = chunkingConfig.strideSamples
+        let giveUp = chunkingConfig.overlapSamples / 2
+        
+        print("DEBUG MossFormer2SE: totalLength=\(totalLength), chunkSamples=\(chunkSamples), stride=\(stride), giveUp=\(giveUp)")
+        
+        // Pre-allocate output
+        var result = [Float](repeating: 0, count: totalLength)
+        
+        var currentIdx = 0
+        var chunkCount = 0
+        
+        while currentIdx + chunkSamples <= totalLength + stride {
+            let endIdx = min(currentIdx + chunkSamples, totalLength)
+            
+            // Extract and pad chunk
+            var chunk = Array(audio[currentIdx..<endIdx])
+            if chunk.count < chunkSamples {
+                chunk.append(contentsOf: [Float](repeating: 0, count: chunkSamples - chunk.count))
+            }
+            
+            // Process through model
+            let processed = try await processChunk(chunk, pipeline: pipeline)
+            let output = processed.samples
+            
+            // Determine valid range
+            let validStart = currentIdx == 0 ? 0 : giveUp
+            let validEnd = chunkSamples - giveUp
+            let outputRangeStart = currentIdx == 0 ? 0 : currentIdx + giveUp
+            let outputRangeEnd = currentIdx == 0 ? chunkSamples - giveUp : currentIdx + chunkSamples - giveUp
+            
+            // Copy valid portion
+            let actualEnd = min(outputRangeEnd, totalLength)
+            for i in outputRangeStart..<actualEnd {
+                let srcIdx = validStart + (i - outputRangeStart)
+                if srcIdx < output.count {
+                    result[i] = output[srcIdx]
+                }
+            }
+            
+            currentIdx += stride
+            chunkCount += 1
+        }
+        
+        print("DEBUG MossFormer2SE: Processed \(chunkCount) chunks")
+        
+        return AudioBuffer(samples: result, sampleRate: sampleRate, channels: 1)
+    }
+    
+    /// Process a single chunk using pure MLX (no file I/O)
+    private func processChunk(_ samples: [Float], pipeline: MossFormer2Pipeline) async throws -> AudioBuffer {
+        let inputMLX = MLXArray(samples)
+        
+        // Use batch method with single array for pure MLX processing
+        let results = try pipeline.enhanceAudioArrayBatch([inputMLX])
+        
+        guard let enhanced = results.first else {
+            throw ClearVoiceError.pipelineConfigurationInvalid("SE 48K enhancement returned empty")
+        }
+        
+        eval(enhanced)
+        return AudioBuffer(samples: enhanced.asArray(Float.self), sampleRate: sampleRate, channels: 1)
+    }
+    
+    public func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                for await chunk in input {
+                    do {
+                        let processed = try await process(chunk)
+                        continuation.yield(processed)
+                    } catch {
+                        continuation.finish(throwing: error)
+                        return
+                    }
+                }
+                continuation.finish()
+            }
+        }
+    }
+    
+    public func reset() async {}
+}
+
+// MARK: - FRCRN SE 16K Provider
+
+/// MLX FRCRN Speech Enhancement (16kHz)
+/// Chunking: 4s chunks, 25% overlap, discard-edges (auto-enabled by default)
+public final class FRCRNSE16KProvider: SpeechEnhancer, @unchecked Sendable {
+    
+    public let sampleRate: Int = 16000
+    public let inputChannels: Int = 1
+    public let outputChannels: Int = 1
+    public let minChunkSize: Int = 3200   // 0.2s at 16kHz
+    public let recommendedChunkSize: Int = 64000  // 4s at 16kHz
+    
+    private var model: FRCRN_SE_16K?
+    private let weightsPath: String
+    
+    /// Chunking config: 4s chunks, 25% overlap, discard-edges
+    private let chunkingConfig: ChunkingConfig
+    
+    public init(weightsPath: String) {
+        self.weightsPath = weightsPath
+        self.chunkingConfig = ChunkingConfig.frcrnSE16K(sampleRate: sampleRate)
+    }
+    
+    /// Load model weights
+    public func load() async throws {
+        model = FRCRN_SE_16K()
+        try model?.loadWeights(from: weightsPath)
+        model?.prepareForInference()
+        
+        // Prewarm (JIT compilation)
+        let dummy = MLXArray.zeros([1, sampleRate])
+        _ = model?(dummy)
+        eval(dummy)
+        GPU.clearCache()
+    }
+    
+    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
+        guard let model = model else {
+            throw ClearVoiceError.modelNotLoaded("FRCRN_SE_16K")
+        }
+        
+        // Always use chunking for consistent quality
+        return try await processWithChunking(input, model: model)
+    }
+    
+    /// Process with chunking using MLXOverlap
+    /// Uses discard-edges strategy: keep center of each chunk, discard edges
+    private func processWithChunking(_ input: AudioBuffer, model: FRCRN_SE_16K) async throws -> AudioBuffer {
+        let inputMLX = MLXArray(input.samples)
+        
+        let result = try await MLXOverlap.processWithChunking(
+            audio: inputMLX,
+            chunkSamples: chunkingConfig.chunkSamples,
+            overlapRatio: chunkingConfig.overlapRatio,
+            strategy: .discardEdges
+        ) { [self] chunk in
+            // Process chunk through FRCRN model
+            let batchedChunk = chunk.reshaped([1, -1])
+            let output = model(batchedChunk)
+            eval(output)
+            return output[0]
+        }
+        eval(result)
+        
+        return AudioBuffer(samples: result.asArray(Float.self), sampleRate: sampleRate, channels: 1)
+    }
+    
+    /// Process a single chunk
+    private func processChunk(_ samples: [Float], model: FRCRN_SE_16K) async throws -> AudioBuffer {
+        let inputMLX = MLXArray(samples).reshaped([1, -1])
+        let outputMLX = model(inputMLX)
+        eval(outputMLX)
+        
+        var outputSamples = outputMLX.asArray(Float.self)
+        if outputMLX.shape[0] == 1 && outputMLX.ndim == 2 {
+            outputSamples = outputMLX[0].asArray(Float.self)
+        }
+        
+        return AudioBuffer(samples: outputSamples, sampleRate: sampleRate, channels: 1)
+    }
+    
+    public func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                for await chunk in input {
+                    do {
+                        let processed = try await process(chunk)
+                        continuation.yield(processed)
+                    } catch {
+                        continuation.finish(throwing: error)
+                        return
+                    }
+                }
+                continuation.finish()
+            }
+        }
+    }
+    
+    public func reset() async {}
+}
+
+// Note: MossFormer GAN SE is now available via ClearVoiceCoreML (CoreML-based provider)
+// Use CoreMLProviders.mossformerGANSE16K() instead

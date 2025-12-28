@@ -1,0 +1,202 @@
+//
+//  AudioBuffer.swift
+//  ClearVoice
+//
+//  Core immutable audio buffer type - thread-safe across isolation boundaries
+//
+
+import Foundation
+
+/// Immutable audio buffer - Sendable for safe cross-isolation transfer
+public struct AudioBuffer: Sendable, Hashable {
+    
+    // MARK: - Properties
+    
+    /// Raw audio samples (interleaved if multi-channel)
+    public let samples: [Float]
+    
+    /// Sample rate in Hz
+    public let sampleRate: Int
+    
+    /// Number of audio channels
+    public let channels: Int
+    
+    /// Duration in seconds
+    public var duration: Double {
+        guard channels > 0, sampleRate > 0 else { return 0 }
+        return Double(samples.count / channels) / Double(sampleRate)
+    }
+    
+    /// Number of frames (samples per channel)
+    public var frameCount: Int {
+        guard channels > 0 else { return 0 }
+        return samples.count / channels
+    }
+    
+    /// Check if buffer is empty
+    public var isEmpty: Bool {
+        samples.isEmpty
+    }
+    
+    // MARK: - Initialization
+    
+    /// Create buffer from samples
+    public init(samples: [Float], sampleRate: Int, channels: Int = 1) {
+        precondition(sampleRate > 0, "Sample rate must be positive")
+        precondition(channels > 0, "Channels must be positive")
+        self.samples = samples
+        self.sampleRate = sampleRate
+        self.channels = channels
+    }
+    
+    /// Create empty buffer with capacity
+    public init(capacity: Int, sampleRate: Int, channels: Int = 1) {
+        self.samples = [Float](repeating: 0, count: capacity * channels)
+        self.sampleRate = sampleRate
+        self.channels = channels
+    }
+    
+    // MARK: - Slicing
+    
+    /// Extract slice by time range
+    public func slice(_ range: Range<Double>) -> AudioBuffer {
+        let startSample = max(0, Int(range.lowerBound * Double(sampleRate)) * channels)
+        let endSample = min(samples.count, Int(range.upperBound * Double(sampleRate)) * channels)
+        
+        guard startSample < endSample else {
+            return AudioBuffer(samples: [], sampleRate: sampleRate, channels: channels)
+        }
+        
+        return AudioBuffer(
+            samples: Array(samples[startSample..<endSample]),
+            sampleRate: sampleRate,
+            channels: channels
+        )
+    }
+    
+    /// Extract slice by sample range
+    public func slice(samples range: Range<Int>) -> AudioBuffer {
+        let startSample = max(0, range.lowerBound * channels)
+        let endSample = min(samples.count, range.upperBound * channels)
+        
+        guard startSample < endSample else {
+            return AudioBuffer(samples: [], sampleRate: sampleRate, channels: channels)
+        }
+        
+        return AudioBuffer(
+            samples: Array(samples[startSample..<endSample]),
+            sampleRate: sampleRate,
+            channels: channels
+        )
+    }
+    
+    // MARK: - Operations
+    
+    /// Replace segment at time range with new audio
+    public func replacing(_ range: Range<Double>, with replacement: AudioBuffer) -> AudioBuffer {
+        let startSample = max(0, Int(range.lowerBound * Double(sampleRate)) * channels)
+        let endSample = min(samples.count, Int(range.upperBound * Double(sampleRate)) * channels)
+        
+        var newSamples = samples
+        newSamples.replaceSubrange(startSample..<endSample, with: replacement.samples)
+        
+        return AudioBuffer(
+            samples: newSamples,
+            sampleRate: sampleRate,
+            channels: channels
+        )
+    }
+    
+    /// Subtract another buffer (for residual computation)
+    public func subtracting(_ other: AudioBuffer) -> AudioBuffer {
+        precondition(other.sampleRate == sampleRate, "Sample rates must match")
+        precondition(other.channels == channels, "Channel counts must match")
+        
+        let minCount = min(samples.count, other.samples.count)
+        var result = [Float](repeating: 0, count: minCount)
+        
+        for i in 0..<minCount {
+            result[i] = samples[i] - other.samples[i]
+        }
+        
+        return AudioBuffer(samples: result, sampleRate: sampleRate, channels: channels)
+    }
+    
+    /// Mix with another buffer at optional offset
+    public func mixing(with other: AudioBuffer, at offset: Double = 0) -> AudioBuffer {
+        precondition(other.sampleRate == sampleRate, "Sample rates must match")
+        precondition(other.channels == channels, "Channel counts must match")
+        
+        let offsetSamples = Int(offset * Double(sampleRate)) * channels
+        let totalLength = max(samples.count, offsetSamples + other.samples.count)
+        
+        var result = [Float](repeating: 0, count: totalLength)
+        
+        // Copy original
+        for i in 0..<samples.count {
+            result[i] = samples[i]
+        }
+        
+        // Mix in other
+        for i in 0..<other.samples.count {
+            let idx = offsetSamples + i
+            if idx < totalLength {
+                result[idx] += other.samples[i]
+            }
+        }
+        
+        return AudioBuffer(samples: result, sampleRate: sampleRate, channels: channels)
+    }
+    
+    /// Append another buffer
+    public func appending(_ other: AudioBuffer) -> AudioBuffer {
+        precondition(other.sampleRate == sampleRate, "Sample rates must match")
+        precondition(other.channels == channels, "Channel counts must match")
+        
+        return AudioBuffer(
+            samples: samples + other.samples,
+            sampleRate: sampleRate,
+            channels: channels
+        )
+    }
+    
+    /// Scale amplitude
+    public func scaled(by factor: Float) -> AudioBuffer {
+        AudioBuffer(
+            samples: samples.map { $0 * factor },
+            sampleRate: sampleRate,
+            channels: channels
+        )
+    }
+}
+
+// MARK: - Test Utilities
+
+extension AudioBuffer {
+    
+    /// Create silence buffer for testing
+    public static func silence(duration: Double, sampleRate: Int, channels: Int = 1) -> AudioBuffer {
+        let frameCount = Int(duration * Double(sampleRate))
+        return AudioBuffer(
+            samples: [Float](repeating: 0, count: frameCount * channels),
+            sampleRate: sampleRate,
+            channels: channels
+        )
+    }
+    
+    /// Create sine wave for testing
+    public static func sine(frequency: Float, duration: Double, sampleRate: Int, amplitude: Float = 0.5) -> AudioBuffer {
+        let frameCount = Int(duration * Double(sampleRate))
+        let samples = (0..<frameCount).map { i in
+            amplitude * sin(2 * .pi * frequency * Float(i) / Float(sampleRate))
+        }
+        return AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
+    }
+    
+    /// Create white noise for testing
+    public static func noise(duration: Double, sampleRate: Int, amplitude: Float = 0.5) -> AudioBuffer {
+        let frameCount = Int(duration * Double(sampleRate))
+        let samples = (0..<frameCount).map { _ in Float.random(in: -amplitude...amplitude) }
+        return AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
+    }
+}
