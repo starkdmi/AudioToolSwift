@@ -1,0 +1,125 @@
+//
+//  FluidAudioTranscriber.swift
+//  ClearVoiceFluidAudio
+//
+//  Parakeet v3 transcription provider using FluidAudio
+//
+
+import Foundation
+import FluidAudio
+import ClearVoiceCore
+
+// MARK: - Model Version Enum
+
+/// Parakeet model version selection
+public enum ParakeetVersion {
+    case v2  // English-only, faster
+    case v3  // Multilingual (English + others)
+    
+    var asrVersion: AsrModelVersion {
+        switch self {
+        case .v2: return .v2
+        case .v3: return .v3
+        }
+    }
+}
+
+// MARK: - FluidAudio Transcriber
+
+/// Parakeet v3 transcription provider using FluidAudio's ASR
+/// Implements Transcriber protocol for integration with ClearVoice pipeline
+public final class FluidAudioTranscriber: Transcriber, @unchecked Sendable {
+    
+    // MARK: - AudioProcessor Conformance
+    
+    public let sampleRate: Int = 16000
+    public let inputChannels: Int = 1
+    public let outputChannels: Int = 1
+    
+    // MARK: - Private Properties
+    
+    private var asrManager: AsrManager?
+    private var models: AsrModels?
+    private let version: ParakeetVersion
+    
+    // MARK: - Initialization
+    
+    /// Initialize Parakeet transcriber
+    /// - Parameter version: Model version (.v3 for multilingual, .v2 for English-only)
+    public init(version: ParakeetVersion = .v3) {
+        self.version = version
+    }
+    
+    /// Load the ASR model (downloads if needed)
+    public func load() async throws {
+        models = try await AsrModels.downloadAndLoad(version: version.asrVersion)
+        asrManager = AsrManager(config: .default)
+        try await asrManager?.initialize(models: models!)
+    }
+    
+    // MARK: - Transcriber Conformance
+    
+    /// Transcribe audio to text
+    /// - Parameter audio: Input audio buffer (16kHz mono expected)
+    /// - Returns: Transcription with text
+    public func transcribe(_ audio: AudioBuffer) async throws -> Transcription {
+        guard let manager = asrManager else {
+            throw ClearVoiceError.modelNotLoaded("FluidAudio ASR")
+        }
+        
+        let result = try await manager.transcribe(audio.samples)
+        
+        // FluidAudio ASRResult has .text property
+        // Segments with timestamps may require additional configuration
+        return Transcription(
+            text: result.text,
+            segments: [],  // Basic implementation - segments require additional API
+            language: nil  // Language detection not exposed in basic API
+        )
+    }
+    
+    /// Stream transcription segments as recognized
+    public func streamTranscription(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                guard let manager = self.asrManager else {
+                    continuation.finish(throwing: ClearVoiceError.modelNotLoaded("FluidAudio ASR"))
+                    return
+                }
+                
+                // Collect audio chunks for batch processing
+                // Note: FluidAudio ASR is primarily batch-oriented
+                var allSamples = [Float]()
+                
+                for await chunk in audio {
+                    allSamples.append(contentsOf: chunk.samples)
+                }
+                
+                // Transcribe collected audio
+                do {
+                    let result = try await manager.transcribe(allSamples)
+                    
+                    // Emit as single segment for basic implementation
+                    let duration = Double(allSamples.count) / 16000.0
+                    let segment = TranscriptionSegment(
+                        text: result.text,
+                        timeRange: TimeRange(start: 0, end: duration),
+                        speakerID: nil,
+                        confidence: 1.0
+                    )
+                    continuation.yield(segment)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+    // MARK: - AudioProcessor Conformance
+    
+    /// Process audio (passthrough - transcription doesn't modify audio)
+    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
+        return input
+    }
+}

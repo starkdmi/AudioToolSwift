@@ -31,8 +31,14 @@ public struct FluidAudioProviders {
         )
     }
     
+    /// Create Parakeet transcription provider
+    /// - Parameter version: Model version (.v3 for multilingual, .v2 for English-only faster)
+    /// - Returns: Transcriber ready for loading
+    public static func parakeetTranscriber(version: ParakeetVersion = .v3) -> FluidAudioTranscriber {
+        FluidAudioTranscriber(version: version)
+    }
+    
     // Future providers:
-    // public static func parakeetTranscriber() -> FluidAudioTranscriber
     // public static func diarization() -> FluidAudioDiarizationProvider
 }
 
