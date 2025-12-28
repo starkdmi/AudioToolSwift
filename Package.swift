@@ -161,6 +161,8 @@ let package = Package(
             name: "ClearVoiceUSSTests",
             dependencies: [
                 "ClearVoiceUSS",
+                "ClearVoiceCoreML",
+                "ClearVoiceMLX",
                 "ClearVoiceCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],

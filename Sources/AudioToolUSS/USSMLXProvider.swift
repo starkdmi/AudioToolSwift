@@ -133,6 +133,60 @@ public final class USSMLXProvider: AudioProcessor, @unchecked Sendable {
     public func separate(_ audio: AudioBuffer) async throws -> AudioBuffer {
         return try await process(audio)
     }
+    
+    // MARK: - Background Extraction
+    
+    /// Result containing both separated target sound and background/residual audio
+    public struct SeparatedWithBackground: Sendable {
+        public let separated: AudioBuffer
+        public let background: AudioBuffer
+    }
+    
+    /// Separate target sound and extract background (everything else)
+    /// Uses simple subtraction: background = input - separated
+    /// - Parameter audio: Input audio buffer at 32kHz
+    /// - Returns: Separated target and background audio
+    public func separateWithBackground(_ audio: AudioBuffer) async throws -> SeparatedWithBackground {
+        guard let inference = inference, let conditioning = conditioning else {
+            throw ClearVoiceError.modelNotLoaded("USS MLX")
+        }
+        
+        // Convert to MLXArray
+        let inputSamples = MLXArray(audio.samples)
+        let inputAudio = inputSamples.reshaped([1, -1])
+        
+        // Run separation
+        let separated = inference.separate(
+            audio: inputAudio,
+            conditioning: conditioning,
+            compile: compile,
+            useSimpleSegmentation: true
+        )
+        eval(separated)
+        
+        // Extract output samples
+        let separatedSamples: [Float]
+        if separated.ndim == 3 {
+            separatedSamples = separated[0, 0, 0...].asArray(Float.self)
+        } else if separated.ndim == 2 {
+            separatedSamples = separated[0, 0...].asArray(Float.self)
+        } else {
+            separatedSamples = separated.asArray(Float.self)
+        }
+        
+        // Compute background via subtraction: input - separated
+        // Handle potential length mismatch (separated may be slightly different due to padding)
+        let minLen = min(audio.samples.count, separatedSamples.count)
+        var backgroundSamples = [Float](repeating: 0, count: minLen)
+        for i in 0..<minLen {
+            backgroundSamples[i] = audio.samples[i] - separatedSamples[i]
+        }
+        
+        return SeparatedWithBackground(
+            separated: AudioBuffer(samples: Array(separatedSamples.prefix(minLen)), sampleRate: sampleRate),
+            background: AudioBuffer(samples: backgroundSamples, sampleRate: sampleRate)
+        )
+    }
 }
 
 // MARK: - Sound Type Alias

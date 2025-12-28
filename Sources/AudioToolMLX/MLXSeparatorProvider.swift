@@ -376,6 +376,49 @@ public final class DemucsProvider: SpeechSeparator, @unchecked Sendable {
         return results
     }
     
+    // MARK: - Background / Accompaniment Extraction
+    
+    /// Result containing vocals and accompaniment (instrumental) tracks
+    public struct VocalsWithAccompaniment: Sendable {
+        public let vocals: AudioBuffer
+        public let accompaniment: AudioBuffer  // drums + bass + other
+    }
+    
+    /// Separate audio into vocals and accompaniment (instrumental) tracks
+    /// Accompaniment = drums + bass + other (everything except vocals)
+    /// - Parameter audio: Input audio buffer at 44.1kHz
+    /// - Returns: Vocals and accompaniment (instrumental) audio buffers
+    public func separateVocalsWithAccompaniment(_ audio: AudioBuffer) async throws -> VocalsWithAccompaniment {
+        // Ensure all models are loaded
+        for source in Source.allCases {
+            if models[source] == nil {
+                try loadSync(source: source)
+            }
+        }
+        
+        // Get all 4 stems
+        let allStems = try await separateAll(audio)
+        
+        guard let vocals = allStems[.vocals],
+              let drums = allStems[.drums],
+              let bass = allStems[.bass],
+              let other = allStems[.other] else {
+            throw ClearVoiceError.modelNotLoaded("Demucs - not all stems available")
+        }
+        
+        // Combine non-vocal stems into accompaniment
+        let minLen = min(drums.samples.count, bass.samples.count, other.samples.count)
+        var accompanimentSamples = [Float](repeating: 0, count: minLen)
+        for i in 0..<minLen {
+            accompanimentSamples[i] = drums.samples[i] + bass.samples[i] + other.samples[i]
+        }
+        
+        return VocalsWithAccompaniment(
+            vocals: vocals,
+            accompaniment: AudioBuffer(samples: accompanimentSamples, sampleRate: sampleRate, channels: 1)
+        )
+    }
+    
     // MARK: - SpeechSeparator Conformance
     
     /// Separate all 4 sources
