@@ -38,11 +38,17 @@ public struct FluidAudioProviders {
         FluidAudioTranscriber(version: version)
     }
     
-    // Future providers:
-    // public static func diarization() -> FluidAudioDiarizationProvider
+    /// Create pyannote diarization provider
+    /// - Parameter threshold: Speaker clustering threshold (default 0.7045655, pyannote community-1)
+    /// Higher values = more speaker separation, lower values = more merging
+    public static func pyannote(threshold: Float = 0.7045655) -> FluidAudioDiarizationProvider {
+        FluidAudioDiarizationProvider(threshold: threshold)
+    }
 }
 
 // MARK: - ClearVoiceFluidAudio Module Exports
 
 /// Re-export key types for convenience
 public typealias SileroVADProvider = FluidAudioVADProvider
+public typealias ParakeetTranscriberProvider = FluidAudioTranscriber
+public typealias PyannoteDiarizationProvider = FluidAudioDiarizationProvider

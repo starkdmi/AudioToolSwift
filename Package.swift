@@ -26,6 +26,10 @@ let package = Package(
             name: "ClearVoiceFluidAudio",
             targets: ["ClearVoiceFluidAudio"]
         ),
+        .library(
+            name: "ClearVoiceUSS",
+            targets: ["ClearVoiceUSS"]
+        ),
         .executable(
             name: "Generate",
             targets: ["Generate"]
@@ -41,6 +45,7 @@ let package = Package(
         .package(name: "MossFormer2SS", path: "../Models/mosforrmer2_ss_mlx_swift"),
         .package(name: "MossFormer2SR", path: "../Models/mossformer2_sr_mlx_swift"),
         .package(name: "DemucsMLXSwift", path: "../Models/demucs_mlx_swift"),
+        .package(name: "USSMLXSwift", path: "../Models/uss_mlx_swift"),
         
         // FluidAudio for VAD, transcription, diarization
         .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.7.8"),
@@ -98,6 +103,18 @@ let package = Package(
             path: "Sources/ClearVoiceFluidAudio"
         ),
         
+        // USS MLX Backend providers (speech separation)
+        .target(
+            name: "ClearVoiceUSS",
+            dependencies: [
+                "ClearVoice",
+                "ClearVoiceCore",
+                .product(name: "USSMLXSwift", package: "USSMLXSwift"),
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Sources/ClearVoiceUSS"
+        ),
+        
         // Unit tests with mocks (swift test compatible)
         .testTarget(
             name: "ClearVoiceTests",
@@ -133,6 +150,21 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Tests/ClearVoiceFluidAudioTests",
+            resources: [
+                .copy("Fixtures/")
+            ]
+        ),
+        
+        // USS MLX Integration tests (speech separation)
+        // Run with: xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' -only-testing:ClearVoiceUSSTests
+        .testTarget(
+            name: "ClearVoiceUSSTests",
+            dependencies: [
+                "ClearVoiceUSS",
+                "ClearVoiceCore",
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Tests/ClearVoiceUSSTests",
             resources: [
                 .copy("Fixtures/")
             ]
