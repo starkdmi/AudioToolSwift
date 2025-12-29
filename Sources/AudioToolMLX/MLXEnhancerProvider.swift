@@ -54,7 +54,11 @@ public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable
     
     /// Load model weights
     public func load() async throws {
-        let config = Mossformer2MLXSwift.PipelineConfiguration()
+        // Disable normalization to match Python behavior - critical for clean background extraction
+        let config = Mossformer2MLXSwift.PipelineConfiguration(
+            enableFloat16: false,
+            normalizationMode: .disabled
+        )
         pipeline = MossFormer2Pipeline(configuration: config)
         
         let resolvedPath: String
@@ -188,21 +192,23 @@ public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable
     
     // MARK: - Background Extraction
     
-    /// Process audio with background extraction using modelMaskThreshold method
-    /// Background is extracted where model's predicted mask < threshold (default 0.1)
-    /// This is more accurate than simple time-domain subtraction
+    /// Process audio with background extraction using soft inverse mask
+    /// Background = pow(1 - mask, gamma) * spectrum
     /// - Parameters:
     ///   - input: Input audio buffer
-    ///   - threshold: Mask threshold for background (default 0.1, range 0.08-0.12)
+    ///   - gamma: Power exponent for background mask (default 1.10)
+    ///            1.10 = Closest to GAN backgrounds
+    ///            1.20 = Slightly more aggressive
+    ///            1.40 = More aggressive, less background bleed
     /// - Returns: Enhanced audio with background track
-    public func processWithBackground(_ input: AudioBuffer, threshold: Float = 0.1) async throws -> MLXEnhancedWithBackground {
+    public func processWithBackground(_ input: AudioBuffer, gamma: Float = 1.10) async throws -> MLXEnhancedWithBackground {
         guard let pipeline = pipeline else {
             throw ClearVoiceError.modelNotLoaded("MossFormer2SE48K")
         }
         
-        // For short audio, use direct processing with background extraction
+        // Use direct processing with background extraction (matches Python implementation)
         let inputMLX = MLXArray(input.samples)
-        let result = try pipeline.enhanceAudioWithBackground(inputMLX, threshold: threshold)
+        let result = try pipeline.enhanceAudioWithBackground(inputMLX, gamma: gamma)
         eval(result.enhanced, result.background)
         
         return MLXEnhancedWithBackground(
