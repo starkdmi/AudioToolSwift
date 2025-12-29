@@ -24,6 +24,7 @@ public actor ClearVoice {
     internal var transcriberProviders: [TranscriptionModel: any Transcriber] = [:]
     internal var upscalerProvider: (any AudioUpscaler)?
     internal var classifierProvider: (any SoundClassifier)?
+    internal var synthesizerProviders: [String: any SpeechSynthesizer] = [:]
     
     // MARK: - Initialization
     
@@ -74,6 +75,11 @@ public actor ClearVoice {
     /// Register an upscaler provider
     public func register(upscaler: any AudioUpscaler) {
         self.upscalerProvider = upscaler
+    }
+    
+    /// Register a synthesizer provider
+    public func register(synthesizer: any SpeechSynthesizer, for model: SynthesisModel) {
+        self.synthesizerProviders[model.modelName] = synthesizer
     }
     
     // MARK: - Audio I/O
@@ -211,6 +217,44 @@ public actor ClearVoice {
             throw ClearVoiceError.modelNotLoaded("Classifier")
         }
         return try await classifier.classify(audio)
+    }
+    
+    // MARK: - Speech Synthesis
+    
+    /// Synthesize text to speech
+    /// - Parameters:
+    ///   - text: Text to synthesize
+    ///   - voice: Voice identifier (must be loaded by the provider)
+    ///   - model: Synthesis model to use
+    /// - Returns: Audio buffer with synthesized speech
+    public func synthesize(
+        _ text: String,
+        voice: String,
+        model: SynthesisModel = .kokoro(language: .americanEnglish, voice: "af_heart")
+    ) async throws -> AudioBuffer {
+        guard let synthesizer = synthesizerProviders[model.modelName] else {
+            throw ClearVoiceError.modelNotLoaded(model.modelName)
+        }
+        return try await synthesizer.synthesize(text, voice: voice)
+    }
+    
+    /// Stream synthesized audio chunks
+    /// - Parameters:
+    ///   - text: Text to synthesize
+    ///   - voice: Voice identifier
+    ///   - model: Synthesis model to use
+    /// - Returns: Async stream of audio chunks
+    public func streamSynthesis(
+        _ text: String,
+        voice: String,
+        model: SynthesisModel = .kokoro(language: .americanEnglish, voice: "af_heart")
+    ) -> AsyncThrowingStream<AudioBuffer, Error> {
+        guard let synthesizer = synthesizerProviders[model.modelName] else {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: ClearVoiceError.modelNotLoaded(model.modelName))
+            }
+        }
+        return synthesizer.streamSynthesis(text, voice: voice)
     }
     
     // MARK: - Pipeline Builder

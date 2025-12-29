@@ -94,12 +94,31 @@ public enum TranscriptionModel: Sendable, Hashable {
     case appleSpeech      // Native, iOS 26+
 }
 
+/// Kokoro TTS supported languages
+public enum KokoroLanguage: String, Sendable, Hashable, CaseIterable {
+    case americanEnglish = "a"  // 🇺🇸 en-US
+    case britishEnglish = "b"   // 🇬🇧 en-GB
+    case japanese = "j"         // 🇯🇵 ja
+    case chinese = "z"          // 🇨🇳 zh
+}
+
 /// Available TTS models
 public enum SynthesisModel: Sendable, Hashable {
-    case kokoro(voice: String)
+    case kokoro(language: KokoroLanguage, voice: String)
     case f5tts
     case cosyVoice        // Voice cloning
     case outeTTS          // Voice cloning
+}
+
+extension SynthesisModel: ModelIdentifier {
+    public var modelName: String {
+        switch self {
+        case .kokoro: return "kokoro_tts"
+        case .f5tts: return "f5_tts"
+        case .cosyVoice: return "cosy_voice"
+        case .outeTTS: return "oute_tts"
+        }
+    }
 }
 
 /// Audio format for export

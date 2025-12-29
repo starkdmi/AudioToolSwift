@@ -6,8 +6,8 @@ import PackageDescription
 let package = Package(
     name: "ClearVoice",
     platforms: [
-        .iOS(.v17),
-        .macOS(.v14)
+        .iOS(.v18),
+        .macOS(.v15)
     ],
     products: [
         .library(
@@ -29,6 +29,10 @@ let package = Package(
         .library(
             name: "ClearVoiceUSS",
             targets: ["ClearVoiceUSS"]
+        ),
+        .library(
+            name: "ClearVoiceTTS",
+            targets: ["ClearVoiceTTS"]
         ),
         .executable(
             name: "Generate",
@@ -52,12 +56,20 @@ let package = Package(
         
         // FluidAudio for VAD, transcription, diarization
         .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.7.8"),
+        
+        // Kokoro TTS with MisakiSwift G2P (MIT license, no ESpeakNG)
+        .package(url: "https://github.com/mlalma/kokoro-ios.git", from: "1.0.8"),
+        
+        // HuggingFace Hub for model downloading
+        .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.0.0"),
     ],
     targets: [
         // Core shared infrastructure
         .target(
             name: "ClearVoiceCore",
-            dependencies: [],
+            dependencies: [
+                .product(name: "Hub", package: "swift-transformers"),
+            ],
             path: "Sources/ClearVoiceCore"
         ),
         
@@ -118,6 +130,18 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/ClearVoiceUSS"
+        ),
+        
+        // TTS Backend providers (Kokoro with MisakiSwift G2P)
+        .target(
+            name: "ClearVoiceTTS",
+            dependencies: [
+                "ClearVoice",
+                "ClearVoiceCore",
+                .product(name: "KokoroSwift", package: "kokoro-ios"),
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Sources/ClearVoiceTTS"
         ),
         
         // Unit tests with mocks (swift test compatible)
@@ -184,6 +208,7 @@ let package = Package(
             name: "Generate",
             dependencies: [
                 "ClearVoiceMLX",
+                "ClearVoiceTTS",
                 "ClearVoiceCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],

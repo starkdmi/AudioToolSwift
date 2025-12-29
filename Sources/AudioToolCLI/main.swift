@@ -78,8 +78,8 @@ func printUsage() {
     """)
 }
 
-// Validate input
-guard !inputPath.isEmpty else {
+// Validate input (skip for TTS which doesn't need input audio)
+guard !inputPath.isEmpty || model.lowercased() == "kokoro" || model.lowercased() == "tts" else {
     print("Error: Input path required (--input)")
     printUsage()
     exit(1)
@@ -527,9 +527,11 @@ Task {
             try await runMossFormer2SS(inputPath: inputPath, outputPath: outputPath, variant: "whamr")
         case "sr48k", "sr", "mossformer2_sr":
             try await runMossFormer2SR(inputPath: inputPath, outputPath: outputPath)
+        case "kokoro", "tts":
+            try await runKokoroTest()
         default:
             print("Unknown model: \(model)")
-            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k")
+            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro")
             exit(1)
         }
         exit(0)
