@@ -160,4 +160,44 @@ final class BackgroundExtractionTests: XCTestCase {
         
         XCTAssertGreaterThan(result.vocals.samples.max() ?? 0, 0.001)
     }
+    
+    /// Test FRCRN SE with background extraction
+    func testFRCRNBackground() async throws {
+        print("\n=== FRCRN SE Background Extraction Test ===")
+        
+        // Load test audio at 16kHz (FRCRN native rate) - use same file as GAN SE test
+        let testPath = "/path/to/clear_voice_research/Models/mossformer_gan_se_coreml/test.wav"
+        let loader = AudioLoader(config: AudioLoader.Configuration(
+            targetSampleRate: 16000,
+            normalizationMode: .none
+        ))
+        let audio = try loader.loadMono(from: URL(fileURLWithPath: testPath))
+        eval(audio)
+        let samples = audio.asArray(Float.self)
+        
+        print("Input: \(samples.count) samples @ 16kHz (\(String(format: "%.1f", Double(samples.count) / 16000))s), max: \(String(format: "%.4f", samples.max() ?? 0))")
+        
+        // Load FRCRN
+        let weightsPath = "/path/to/clear_voice_research/Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
+        let frcrn = MLXProviders.frcrnSE16K(weightsPath: weightsPath)
+        try await frcrn.load()
+        
+        // Process with background extraction
+        let start = Date()
+        let input = AudioBuffer(samples: samples, sampleRate: 16000)
+        let result = try await frcrn.processWithBackground(input)
+        let elapsed = Date().timeIntervalSince(start)
+        
+        print("Enhancement: \(String(format: "%.2f", elapsed))s")
+        print("  Enhanced: \(result.enhanced.samples.count) samples, max: \(String(format: "%.4f", result.enhanced.samples.max() ?? 0))")
+        print("  Background: \(result.background.samples.count) samples, max: \(String(format: "%.4f", result.background.samples.max() ?? 0))")
+        
+        // Save outputs
+        try AudioSaver.saveWAV(MLXArray(result.enhanced.samples), to: "\(outputDir)/frcrn_enhanced.wav", sampleRate: 16000)
+        try AudioSaver.saveWAV(MLXArray(result.background.samples), to: "\(outputDir)/frcrn_background.wav", sampleRate: 16000)
+        print("✓ Saved: frcrn_enhanced.wav, frcrn_background.wav")
+        
+        XCTAssertGreaterThan(result.enhanced.samples.max() ?? 0, 0.01)
+        XCTAssertGreaterThan(result.background.samples.max() ?? 0, 0.001)
+    }
 }

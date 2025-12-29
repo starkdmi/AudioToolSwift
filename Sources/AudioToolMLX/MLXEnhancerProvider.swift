@@ -14,6 +14,17 @@ import AudioUtils  // SwiftAudio - used for audio I/O
 import Mossformer2MLXSwift
 import FRCRNMLXSwift
 
+/// Result type for background extraction (enhanced + background audio)
+public struct MLXEnhancedWithBackground: Sendable {
+    public let enhanced: AudioBuffer
+    public let background: AudioBuffer
+    
+    public init(enhanced: AudioBuffer, background: AudioBuffer) {
+        self.enhanced = enhanced
+        self.background = background
+    }
+}
+
 // MARK: - MossFormer2 SE 48K Provider
 
 /// MLX MossFormer2 Speech Enhancement (48kHz)
@@ -174,6 +185,31 @@ public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable
     }
     
     public func reset() async {}
+    
+    // MARK: - Background Extraction
+    
+    /// Process audio with background extraction using modelMaskThreshold method
+    /// Background is extracted where model's predicted mask < threshold (default 0.1)
+    /// This is more accurate than simple time-domain subtraction
+    /// - Parameters:
+    ///   - input: Input audio buffer
+    ///   - threshold: Mask threshold for background (default 0.1, range 0.08-0.12)
+    /// - Returns: Enhanced audio with background track
+    public func processWithBackground(_ input: AudioBuffer, threshold: Float = 0.1) async throws -> MLXEnhancedWithBackground {
+        guard let pipeline = pipeline else {
+            throw ClearVoiceError.modelNotLoaded("MossFormer2SE48K")
+        }
+        
+        // For short audio, use direct processing with background extraction
+        let inputMLX = MLXArray(input.samples)
+        let result = try pipeline.enhanceAudioWithBackground(inputMLX, threshold: threshold)
+        eval(result.enhanced, result.background)
+        
+        return MLXEnhancedWithBackground(
+            enhanced: AudioBuffer(samples: result.enhanced.asArray(Float.self), sampleRate: sampleRate, channels: 1),
+            background: AudioBuffer(samples: result.background.asArray(Float.self), sampleRate: sampleRate, channels: 1)
+        )
+    }
 }
 
 // MARK: - FRCRN SE 16K Provider
@@ -207,8 +243,8 @@ public final class FRCRNSE16KProvider: SpeechEnhancer, @unchecked Sendable {
         
         // Prewarm (JIT compilation)
         let dummy = MLXArray.zeros([1, sampleRate])
-        _ = model?(dummy)
-        eval(dummy)
+        let output = model?(dummy)
+        eval(output ?? dummy)
         GPU.clearCache()
     }
     
@@ -275,6 +311,41 @@ public final class FRCRNSE16KProvider: SpeechEnhancer, @unchecked Sendable {
     }
     
     public func reset() async {}
+    
+    // MARK: - Background Extraction
+    
+    /// Process audio with background extraction
+    /// Uses simple time-domain subtraction: background = input - enhanced
+    /// - Parameter input: Input audio buffer
+    /// - Returns: Enhanced audio with background track
+    public func processWithBackground(_ input: AudioBuffer) async throws -> MLXEnhancedWithBackground {
+        guard let model = model else {
+            throw ClearVoiceError.modelNotLoaded("FRCRN_SE_16K")
+        }
+        
+        let inputMLX = MLXArray(input.samples).reshaped([1, -1])
+        
+        // Get enhanced audio using the existing working forward pass
+        let enhanced = model(inputMLX)
+        eval(enhanced)
+        
+        // FRCRN output is slightly shorter due to STFT/iSTFT - truncate input to match
+        let enhancedLen = enhanced.shape[1]
+        let inputTruncated = inputMLX[0..., 0..<enhancedLen]
+        
+        // Background = input - enhanced (time-domain subtraction)
+        let background = inputTruncated - enhanced
+        eval(background)
+        
+        // Extract samples from batched output
+        let enhancedSamples = enhanced[0].asArray(Float.self)
+        let backgroundSamples = background[0].asArray(Float.self)
+        
+        return MLXEnhancedWithBackground(
+            enhanced: AudioBuffer(samples: enhancedSamples, sampleRate: sampleRate, channels: 1),
+            background: AudioBuffer(samples: backgroundSamples, sampleRate: sampleRate, channels: 1)
+        )
+    }
 }
 
 // Note: MossFormer GAN SE is now available via ClearVoiceCoreML (CoreML-based provider)

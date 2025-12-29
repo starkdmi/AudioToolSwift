@@ -288,4 +288,92 @@ public struct MLXOverlap {
             )
         }
     }
+    
+    // MARK: - Dual Output Processing (for background extraction)
+    
+    /// Process audio in chunks with dual output (enhanced + background)
+    /// - Parameters:
+    ///   - audio: Input audio as MLXArray [samples]
+    ///   - chunkSamples: Number of samples per chunk
+    ///   - overlapRatio: Overlap ratio (0.0 to 0.5)
+    ///   - strategy: Blending strategy
+    ///   - processChunk: Async function that returns (enhanced, background) for each chunk
+    /// - Returns: Tuple of (enhanced, background) reassembled audio
+    public static func processWithChunkingDual(
+        audio: MLXArray,
+        chunkSamples: Int,
+        overlapRatio: Float,
+        strategy: OverlapStrategy,
+        processChunk: (MLXArray) async throws -> (MLXArray, MLXArray)
+    ) async throws -> (MLXArray, MLXArray) {
+        eval(audio)
+        let totalLength = audio.shape[0]
+        let overlapSamples = Int(Float(chunkSamples) * overlapRatio)
+        let stride = chunkSamples - overlapSamples
+        
+        // Split into chunks
+        let inputChunks = split(
+            audio: audio,
+            chunkSamples: chunkSamples,
+            stride: stride,
+            forDiscardEdges: strategy == .discardEdges
+        )
+        
+        // Process each chunk - collect both outputs
+        var enhancedChunks: [(chunk: MLXArray, startIdx: Int)] = []
+        var backgroundChunks: [(chunk: MLXArray, startIdx: Int)] = []
+        
+        for (chunk, startIdx) in inputChunks {
+            let (enhanced, background) = try await processChunk(chunk)
+            eval(enhanced, background)
+            enhancedChunks.append((enhanced, startIdx))
+            backgroundChunks.append((background, startIdx))
+        }
+        
+        // Reassemble both using the same strategy
+        let reassembledEnhanced: MLXArray
+        let reassembledBackground: MLXArray
+        
+        switch strategy {
+        case .discardEdges:
+            let giveUp = overlapSamples / 2
+            reassembledEnhanced = reassembleDiscardEdges(
+                processedChunks: enhancedChunks,
+                chunkSamples: chunkSamples,
+                stride: stride,
+                giveUp: giveUp,
+                originalLength: totalLength
+            )
+            reassembledBackground = reassembleDiscardEdges(
+                processedChunks: backgroundChunks,
+                chunkSamples: chunkSamples,
+                stride: stride,
+                giveUp: giveUp,
+                originalLength: totalLength
+            )
+            
+        case .triangular:
+            let window = triangularWindow(length: chunkSamples)
+            reassembledEnhanced = reassembleOverlapAdd(
+                processedChunks: enhancedChunks,
+                chunkSamples: chunkSamples,
+                stride: stride,
+                window: window,
+                originalLength: totalLength
+            )
+            reassembledBackground = reassembleOverlapAdd(
+                processedChunks: backgroundChunks,
+                chunkSamples: chunkSamples,
+                stride: stride,
+                window: window,
+                originalLength: totalLength
+            )
+            
+        default:  // noOverlap, overlapAdd, hann
+            reassembledEnhanced = reassembleNoOverlap(processedChunks: enhancedChunks, originalLength: totalLength)
+            reassembledBackground = reassembleNoOverlap(processedChunks: backgroundChunks, originalLength: totalLength)
+        }
+        
+        return (reassembledEnhanced, reassembledBackground)
+    }
 }

@@ -141,6 +141,62 @@ func runFRCRN(inputPath: String, outputPath: String, weightsPath: String?) async
     print("✓ Saved: \(outputPath)")
 }
 
+// MARK: - FRCRN with Background Extraction
+
+func runFRCRNWithBackground(inputPath: String, outputPath: String, weightsPath: String?) async throws {
+    print("\n=== FRCRN SE 16K with Background Extraction ===")
+    
+    // Resolve weights path
+    let resolvedWeights = weightsPath ?? "../Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
+    guard FileManager.default.fileExists(atPath: resolvedWeights) else {
+        print("Error: Weights not found at: \(resolvedWeights)")
+        return
+    }
+    
+    // Create provider
+    let provider = FRCRNSE16KProvider(weightsPath: resolvedWeights)
+    
+    // Load model
+    print("Loading model from: \(resolvedWeights)")
+    try await provider.load()
+    print("Model ready")
+    
+    // Load audio
+    print("Loading audio from: \(inputPath)")
+    let loaderConfig = AudioLoader.Configuration(targetSampleRate: 16000)
+    let loader = AudioLoader(config: loaderConfig)
+    let audio = try loader.loadMono(from: URL(fileURLWithPath: inputPath))
+    eval(audio)
+    let samples = audio.asArray(Float.self)
+    
+    let input = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
+    print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
+    
+    // Process with background extraction (time-domain subtraction)
+    print("Processing with background extraction...")
+    let startTime = Date()
+    let result = try await provider.processWithBackground(input)
+    let processingTime = Date().timeIntervalSince(startTime)
+    
+    let rtf = input.duration / processingTime
+    print("Enhanced: \(result.enhanced.samples.count) samples, max: \(String(format: "%.4f", result.enhanced.samples.max() ?? 0))")
+    print("Background: \(result.background.samples.count) samples, max: \(String(format: "%.4f", result.background.samples.max() ?? 0))")
+    print("RTF: \(String(format: "%.2f", rtf))x")
+    
+    // Save both
+    let saverConfig = AudioSaver.Configuration(sampleRate: 16000)
+    let saver = AudioSaver(config: saverConfig)
+    
+    let basePath = (outputPath as NSString).deletingPathExtension
+    let enhancedPath = basePath + "_enhanced.wav"
+    let backgroundPath = basePath + "_background.wav"
+    
+    try saver.save(MLXArray(result.enhanced.samples), to: enhancedPath)
+    try saver.save(MLXArray(result.background.samples), to: backgroundPath)
+    print("✓ Saved: \(enhancedPath)")
+    print("✓ Saved: \(backgroundPath)")
+}
+
 // MARK: - MossFormer2 SE with Chunking
 
 func runMossFormer2SE(inputPath: String, outputPath: String) async throws {
@@ -181,6 +237,55 @@ func runMossFormer2SE(inputPath: String, outputPath: String) async throws {
     let saver = AudioSaver(config: saverConfig)
     try saver.save(MLXArray(output.samples), to: outputPath)
     print("✓ Saved: \(outputPath)")
+}
+
+// MARK: - MossFormer2 SE with Background Extraction
+
+func runMossFormer2SEWithBackground(inputPath: String, outputPath: String) async throws {
+    print("\n=== MossFormer2 SE 48K with Background Extraction ===")
+    
+    // Create provider (downloads from HuggingFace)
+    let provider = MLXProviders.mossformer2SE48K()
+    
+    // Load model
+    print("Loading model (may download from HuggingFace)...")
+    try await provider.load()
+    print("Model ready")
+    
+    // Load audio
+    print("Loading audio from: \(inputPath)")
+    let loaderConfig = AudioLoader.Configuration(targetSampleRate: 48000)
+    let loader = AudioLoader(config: loaderConfig)
+    let audio = try loader.loadMono(from: URL(fileURLWithPath: inputPath))
+    eval(audio)
+    let samples = audio.asArray(Float.self)
+    
+    let input = AudioBuffer(samples: samples, sampleRate: 48000, channels: 1)
+    print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
+    
+    // Process with background extraction
+    print("Processing with background extraction...")
+    let startTime = Date()
+    let result = try await provider.processWithBackground(input)
+    let processingTime = Date().timeIntervalSince(startTime)
+    
+    let rtf = input.duration / processingTime
+    print("Enhanced: \(result.enhanced.samples.count) samples, max: \(String(format: "%.4f", result.enhanced.samples.max() ?? 0))")
+    print("Background: \(result.background.samples.count) samples, max: \(String(format: "%.4f", result.background.samples.max() ?? 0))")
+    print("RTF: \(String(format: "%.2f", rtf))x")
+    
+    // Save both
+    let saverConfig = AudioSaver.Configuration(sampleRate: 48000)
+    let saver = AudioSaver(config: saverConfig)
+    
+    let basePath = (outputPath as NSString).deletingPathExtension
+    let enhancedPath = basePath + "_enhanced.wav"
+    let backgroundPath = basePath + "_background.wav"
+    
+    try saver.save(MLXArray(result.enhanced.samples), to: enhancedPath)
+    try saver.save(MLXArray(result.background.samples), to: backgroundPath)
+    print("✓ Saved: \(enhancedPath)")
+    print("✓ Saved: \(backgroundPath)")
 }
 
 // MARK: - Demucs with Chunking
@@ -406,8 +511,12 @@ Task {
         switch model.lowercased() {
         case "frcrn":
             try await runFRCRN(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
+        case "frcrn-bg", "frcrnbg", "frcrn_bg":
+            try await runFRCRNWithBackground(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "mossformer2_se", "mossformer2se", "se48k":
             try await runMossFormer2SE(inputPath: inputPath, outputPath: outputPath)
+        case "se48k-bg", "se48kbg", "mossformer2_se_bg":
+            try await runMossFormer2SEWithBackground(inputPath: inputPath, outputPath: outputPath)
         case "demucs", "vocals":
             try await runDemucs(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "ss_2spk", "ss2spk", "2spk":
@@ -420,7 +529,7 @@ Task {
             try await runMossFormer2SR(inputPath: inputPath, outputPath: outputPath)
         default:
             print("Unknown model: \(model)")
-            print("Available: frcrn, mossformer2_se, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k")
+            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k")
             exit(1)
         }
         exit(0)
