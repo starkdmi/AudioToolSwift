@@ -18,12 +18,17 @@ public struct MLXProviders {
     
     // MARK: - Speech Enhancement
     
-    /// Create MossFormer2 SE 48K enhancer
+    /// Create MossFormer2 SE 48K enhancer with precision selection
+    /// - Parameter precision: Model precision (.fp32 or .fp16)
     public static func mossformer2SE48K(
-        weightsPath: String? = nil,
-        precision: String = "fp32"
+        precision: ModelPrecision = .fp32
     ) -> MossFormer2SE48KProvider {
-        MossFormer2SE48KProvider(weightsPath: weightsPath, precision: precision)
+        MossFormer2SE48KProvider(precision: precision)
+    }
+    
+    /// Create MossFormer2 SE 48K enhancer with explicit weights path
+    public static func mossformer2SE48K(weightsPath: String) -> MossFormer2SE48KProvider {
+        MossFormer2SE48KProvider(weightsPath: weightsPath)
     }
     
     /// Create FRCRN SE 16K enhancer
@@ -36,10 +41,18 @@ public struct MLXProviders {
     
     // MARK: - Speaker Separation
     
-    /// Create MossFormer2 SS provider for speaker separation
+    /// Create MossFormer2 SS provider with precision selection
     /// - Parameters:
     ///   - model: Model variant (.twoSpeaker, .threeSpeaker, .twoSpeakerWHAMR)
-    ///   - weightsPath: Path to model weights
+    ///   - precision: Model precision (currently .fp32 only)
+    public static func mossformer2SS(
+        model: MossFormer2SSProvider.Model,
+        precision: ModelPrecision = .fp32
+    ) -> MossFormer2SSProvider {
+        MossFormer2SSProvider(model: model, precision: precision)
+    }
+    
+    /// Create MossFormer2 SS provider with explicit weights path
     public static func mossformer2SS(
         model: MossFormer2SSProvider.Model,
         weightsPath: String
@@ -56,7 +69,13 @@ public struct MLXProviders {
     
     // MARK: - Super Resolution
     
-    /// Create MossFormer2 SR 48K upsampler
+    /// Create MossFormer2 SR 48K upsampler with precision selection
+    /// - Parameter precision: Model precision (currently .fp32 only)
+    public static func mossformer2SR48K(precision: ModelPrecision = .fp32) -> MossFormer2SR48KProvider {
+        MossFormer2SR48KProvider(precision: precision)
+    }
+    
+    /// Create MossFormer2 SR 48K upsampler with explicit paths
     public static func mossformer2SR48K(weightsPath: String, configPath: String) -> MossFormer2SR48KProvider {
         MossFormer2SR48KProvider(weightsPath: weightsPath, configPath: configPath)
     }

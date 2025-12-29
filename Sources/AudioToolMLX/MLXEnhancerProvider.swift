@@ -31,6 +31,12 @@ public struct MLXEnhancedWithBackground: Sendable {
 /// Chunking: 4s chunks, 25% overlap, discard-edges (from benchmarks)
 public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable {
     
+    /// HuggingFace repository for model weights
+    public static let repo = "starkdmi/MossFormer2_SE_48K_MLX"
+    
+    /// Supported precisions for this model
+    public static let supportedPrecisions: [ModelPrecision] = [.fp32, .fp16]
+    
     public let sampleRate: Int = 48000
     public let inputChannels: Int = 1
     public let outputChannels: Int = 1
@@ -39,7 +45,7 @@ public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable
     
     private var pipeline: MossFormer2Pipeline?
     private let weightsPath: String?
-    private let precision: String
+    private let precision: ModelPrecision
     
     /// Chunking config: 4s chunks, 25% overlap, discard-edges
     private let chunkingConfig = ChunkingConfig.mossformer2SE48K()
@@ -47,16 +53,23 @@ public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable
     /// Max audio duration that can be processed without chunking (seconds)
     private let maxDirectDuration: Float = 4.0
     
-    public init(weightsPath: String? = nil, precision: String = "fp32") {
-        self.weightsPath = weightsPath
+    /// Initialize with precision (auto-downloads from HuggingFace)
+    public init(precision: ModelPrecision = .fp32) {
+        self.weightsPath = nil
         self.precision = precision
     }
     
-    /// Load model weights
+    /// Initialize with explicit weights path (no download)
+    public init(weightsPath: String) {
+        self.weightsPath = weightsPath
+        self.precision = .fp32
+    }
+    
+    /// Load model weights (downloads if not cached)
     public func load() async throws {
         // Disable normalization to match Python behavior - critical for clean background extraction
         let config = Mossformer2MLXSwift.PipelineConfiguration(
-            enableFloat16: false,
+            enableFloat16: precision == .fp16,
             normalizationMode: .disabled
         )
         pipeline = MossFormer2Pipeline(configuration: config)
@@ -65,21 +78,21 @@ public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable
         if let path = weightsPath {
             resolvedPath = path
         } else {
-            // Try to find weights in HuggingFace cache
-            let hfCache = NSHomeDirectory() + "/.cache/huggingface/hub/models--starkdmi--MossFormer2_SE_48K_MLX"
-            let snapshotsDir = hfCache + "/snapshots"
-            
-            // Find first snapshot directory and get model weights
-            if let snapshots = try? FileManager.default.contentsOfDirectory(atPath: snapshotsDir),
-               let firstSnapshot = snapshots.first(where: { !$0.hasPrefix(".") }) {
-                let modelPath = snapshotsDir + "/" + firstSnapshot + "/model_fp32.safetensors"
+            // Check if already downloaded
+            if let cached = ModelDownloader.shared.localPath(for: Self.repo) {
+                let modelPath = cached.appendingPathComponent(precision.weightsFilename).path
                 if FileManager.default.fileExists(atPath: modelPath) {
                     resolvedPath = modelPath
                 } else {
-                    throw ClearVoiceError.modelNotFound("MossFormer2SE48K weights not found in HuggingFace cache. Please provide --weights path.")
+                    throw ClearVoiceError.modelNotFound("Precision \(precision.rawValue) not available for MossFormer2SE48K")
                 }
             } else {
-                throw ClearVoiceError.modelNotFound("MossFormer2SE48K weights not found. Run: huggingface-cli download starkdmi/MossFormer2_SE_48K_MLX")
+                // Auto-download from HuggingFace
+                let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
+                    repo: Self.repo,
+                    matching: [precision.weightsFilename, "config.json"]
+                )
+                resolvedPath = modelDir.appendingPathComponent(precision.weightsFilename).path
             }
         }
         

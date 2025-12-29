@@ -16,11 +16,11 @@ import MLX
 
 func runKokoroTest() async throws {
     print("\n=== Kokoro TTS Test (bf16) ===")
-    print("Repo: mlx-community/Kokoro-82M-bf16")
+    print("Using precision: .bf16 → mlx-community/Kokoro-82M-bf16")
     
-    // Create provider with bf16 model
+    // Create provider with precision-based repo selection
     let tts = TTSProviders.kokoro(
-        repo: "mlx-community/Kokoro-82M-bf16",
+        precision: .bf16,
         language: .americanEnglish
     )
     

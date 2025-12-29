@@ -59,6 +59,9 @@ public final class MossFormer2SSProvider: SpeechSeparator, @unchecked Sendable {
             case .twoSpeakerWHAMR: return "starkdmi/MossFormer2_SS_2SPK_WHAMR_8K_MLX"
             }
         }
+        
+        /// Supported precisions (currently fp32 only)
+        public var supportedPrecisions: [ModelPrecision] { [.fp32] }
     }
     
     public let modelType: Model
@@ -70,18 +73,27 @@ public final class MossFormer2SSProvider: SpeechSeparator, @unchecked Sendable {
     public var recommendedChunkSize: Int { modelType.sampleRate * 4 }  // 4s (from benchmarks)
     
     private var model: MossFormer2_SS_16K?
-    private let weightsPath: String
+    private let weightsPath: String?
+    private let precision: ModelPrecision
     
     /// Max audio without chunking
     private let maxDirectDuration: Float = 4.0
     
-    /// Initialize with model type and weights path
+    /// Initialize with model type and precision (auto-downloads from HuggingFace)
+    public init(model: Model, precision: ModelPrecision = .fp32) {
+        self.modelType = model
+        self.weightsPath = nil
+        self.precision = precision
+    }
+    
+    /// Initialize with explicit weights path (no download)
     public init(model: Model, weightsPath: String) {
         self.modelType = model
         self.weightsPath = weightsPath
+        self.precision = .fp32
     }
     
-    /// Load model weights
+    /// Load model weights (downloads if not cached)
     public func load() async throws {
         let config = MossFormer2Config(
             encoder_embedding_dim: 512,
@@ -94,7 +106,29 @@ public final class MossFormer2SSProvider: SpeechSeparator, @unchecked Sendable {
         
         model = MossFormer2_SS_16K(config: config)
         
-        let weights = try loadArrays(url: URL(fileURLWithPath: weightsPath))
+        let resolvedPath: String
+        if let path = weightsPath {
+            resolvedPath = path
+        } else {
+            // Check if already downloaded
+            if let cached = ModelDownloader.shared.localPath(for: modelType.huggingFaceRepo) {
+                let modelPath = cached.appendingPathComponent(precision.weightsFilename).path
+                if FileManager.default.fileExists(atPath: modelPath) {
+                    resolvedPath = modelPath
+                } else {
+                    throw ClearVoiceError.modelNotFound("Precision \(precision.rawValue) not available for \(modelType.rawValue)")
+                }
+            } else {
+                // Auto-download from HuggingFace
+                let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
+                    repo: modelType.huggingFaceRepo,
+                    matching: [precision.weightsFilename, "config.json"]
+                )
+                resolvedPath = modelDir.appendingPathComponent(precision.weightsFilename).path
+            }
+        }
+        
+        let weights = try loadArrays(url: URL(fileURLWithPath: resolvedPath))
         let nestedWeights = NestedDictionary<String, MLXArray>.unflattened(weights)
         try model?.update(parameters: nestedWeights, verify: .all)
     }

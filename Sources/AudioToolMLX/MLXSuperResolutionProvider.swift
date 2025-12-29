@@ -19,6 +19,12 @@ import MossFormer2SR
 /// Chunking: 4s chunks, 50% overlap, Hann window (from benchmarks)
 public final class MossFormer2SR48KProvider: AudioUpscaler, @unchecked Sendable {
     
+    /// HuggingFace repository for model weights
+    public static let repo = "starkdmi/MossFormer2_SR_48K_MLX"
+    
+    /// Supported precisions (fp32 only)
+    public static let supportedPrecisions: [ModelPrecision] = [.fp32]
+    
     // AudioUpscaler conformance
     public var inputSampleRate: Int { 16000 }
     public var outputSampleRate: Int { 48000 }
@@ -30,20 +36,58 @@ public final class MossFormer2SR48KProvider: AudioUpscaler, @unchecked Sendable 
     
     private var model: MossFormer2_SR_48K?
     private var args: AttrDict = AttrDict()
-    private let weightsPath: String
-    private let configPath: String
+    private let weightsPath: String?
+    private let configPath: String?
+    private let precision: ModelPrecision
     
     /// Max audio without chunking (seconds at 48kHz)
     private let maxDirectDuration: Float = 4.0
     
+    /// Initialize with precision (auto-downloads from HuggingFace)
+    public init(precision: ModelPrecision = .fp32) {
+        self.weightsPath = nil
+        self.configPath = nil
+        self.precision = precision
+    }
+    
+    /// Initialize with explicit weights path (no download)
     public init(weightsPath: String, configPath: String) {
         self.weightsPath = weightsPath
         self.configPath = configPath
+        self.precision = .fp32
     }
     
-    /// Load model with config and weights
+    /// Load model with config and weights (downloads if not cached)
     public func load() async throws {
-        let configData = try Data(contentsOf: URL(fileURLWithPath: configPath))
+        let resolvedWeightsPath: String
+        let resolvedConfigPath: String
+        
+        if let wPath = weightsPath, let cPath = configPath {
+            resolvedWeightsPath = wPath
+            resolvedConfigPath = cPath
+        } else {
+            // Check if already downloaded
+            if let cached = ModelDownloader.shared.localPath(for: Self.repo) {
+                let modelPath = cached.appendingPathComponent(precision.weightsFilename).path
+                let configPathLocal = cached.appendingPathComponent("config.json").path
+                if FileManager.default.fileExists(atPath: modelPath) && FileManager.default.fileExists(atPath: configPathLocal) {
+                    resolvedWeightsPath = modelPath
+                    resolvedConfigPath = configPathLocal
+                } else {
+                    throw ClearVoiceError.modelNotFound("Precision \(precision.rawValue) weights or config not found for MossFormer2SR48K")
+                }
+            } else {
+                // Auto-download from HuggingFace
+                let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
+                    repo: Self.repo,
+                    matching: [precision.weightsFilename, "config.json"]
+                )
+                resolvedWeightsPath = modelDir.appendingPathComponent(precision.weightsFilename).path
+                resolvedConfigPath = modelDir.appendingPathComponent("config.json").path
+            }
+        }
+        
+        let configData = try Data(contentsOf: URL(fileURLWithPath: resolvedConfigPath))
         let modelConfig = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
         
         args = AttrDict(modelConfig)
@@ -52,7 +96,7 @@ public final class MossFormer2SR48KProvider: AudioUpscaler, @unchecked Sendable 
         
         model = MossFormer2_SR_48K(args: args)
         
-        let weights = try MLX.loadArrays(url: URL(fileURLWithPath: weightsPath))
+        let weights = try MLX.loadArrays(url: URL(fileURLWithPath: resolvedWeightsPath))
         let filteredWeights = weights.filter { !$0.key.contains("num_batches_tracked") }
         let parameters = ModuleParameters.unflattened(filteredWeights)
         model?.update(parameters: parameters)

@@ -18,13 +18,25 @@ public struct TTSProviders {
     
     // MARK: - Kokoro TTS
     
-    /// Create Kokoro TTS provider (downloads from HuggingFace if needed)
+    /// Create Kokoro TTS provider with precision-based repo selection
     /// - Parameters:
-    ///   - repo: HuggingFace repository ID (default: hexgrad/Kokoro-82M)
+    ///   - precision: Model precision (bf16, 4bit, 8bit, etc.)
     ///   - language: Target language (default: American English)
     /// - Returns: Configured KokoroTTSProvider
     public static func kokoro(
-        repo: String = KokoroTTSProvider.defaultRepo,
+        precision: ModelPrecision = .bf16,
+        language: KokoroLanguage = .americanEnglish
+    ) -> KokoroTTSProvider {
+        KokoroTTSProvider(precision: precision, language: language)
+    }
+    
+    /// Create Kokoro TTS provider with explicit repo (for custom repos)
+    /// - Parameters:
+    ///   - repo: Full HuggingFace repository ID
+    ///   - language: Target language (default: American English)
+    /// - Returns: Configured KokoroTTSProvider
+    public static func kokoro(
+        repo: String,
         language: KokoroLanguage = .americanEnglish
     ) -> KokoroTTSProvider {
         KokoroTTSProvider(repo: repo, language: language)

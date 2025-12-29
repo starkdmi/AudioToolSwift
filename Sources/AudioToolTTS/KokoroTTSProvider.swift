@@ -31,8 +31,11 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     
     // MARK: - Public Properties
     
-    /// Default HuggingFace repository
-    public static let defaultRepo = "hexgrad/Kokoro-82M"
+    /// Base HuggingFace repository (without precision suffix)
+    public static let baseRepo = "mlx-community/Kokoro-82M"
+    
+    /// Default precision
+    public static let defaultPrecision: ModelPrecision = .bf16
     
     /// Current loading state for UI binding
     public private(set) var state: ModelState = .notLoaded
@@ -58,6 +61,7 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     private var modelPath: URL?
     private let language: KokoroLanguage
     private let repo: String
+    private let precision: ModelPrecision
     
     /// Voice embeddings cache (voice name -> MLXArray)
     private var voiceEmbeddings: [String: MLXArray] = [:]
@@ -67,14 +71,28 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     
     // MARK: - Initialization
     
-    /// Initialize Kokoro TTS provider with auto-download support
+    /// Initialize Kokoro TTS provider with precision-based repo selection
     /// - Parameters:
-    ///   - repo: HuggingFace repository ID (default: hexgrad/Kokoro-82M)
+    ///   - precision: Model precision (determines repo: Kokoro-82M-bf16, Kokoro-82M-4bit, etc.)
     ///   - language: Target language for synthesis
     public init(
-        repo: String = KokoroTTSProvider.defaultRepo,
+        precision: ModelPrecision = KokoroTTSProvider.defaultPrecision,
         language: KokoroLanguage = .americanEnglish
     ) {
+        self.precision = precision
+        self.repo = precision.repo(base: KokoroTTSProvider.baseRepo)
+        self.language = language
+    }
+    
+    /// Initialize with explicit HuggingFace repo (for custom repos)
+    /// - Parameters:
+    ///   - repo: Full HuggingFace repository ID
+    ///   - language: Target language for synthesis
+    public init(
+        repo: String,
+        language: KokoroLanguage = .americanEnglish
+    ) {
+        self.precision = .bf16
         self.repo = repo
         self.language = language
     }
@@ -85,7 +103,8 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     ///   - language: Target language for synthesis
     public init(modelPath: URL, language: KokoroLanguage = .americanEnglish) {
         self.modelPath = modelPath
-        self.repo = KokoroTTSProvider.defaultRepo
+        self.precision = .bf16
+        self.repo = KokoroTTSProvider.baseRepo
         self.language = language
     }
     

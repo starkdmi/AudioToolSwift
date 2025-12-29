@@ -54,6 +54,70 @@ public struct ClearVoiceConfiguration: Sendable {
     }
 }
 
+// MARK: - Model Precision
+
+/// Model weight precision for loading
+///
+/// Supports two patterns:
+/// - **Single-repo**: Different weight files (e.g., model_fp32.safetensors, model_fp16.safetensors)
+/// - **Multi-repo**: Different HF repos per precision (e.g., Kokoro-82M-bf16, Kokoro-82M-4bit)
+///
+/// Usage:
+/// ```swift
+/// // Single-repo pattern (starkdmi models)
+/// let provider = MLXProviders.mossformerGANSE16K(precision: .fp16)
+///
+/// // Multi-repo pattern (Kokoro)
+/// let tts = TTSProviders.kokoro(precision: .int4)
+/// ```
+public enum ModelPrecision: String, Sendable, CaseIterable, Hashable {
+    /// Full precision (32-bit floating point)
+    case fp32 = "fp32"
+    
+    /// Half precision (16-bit floating point)
+    case fp16 = "fp16"
+    
+    /// Brain float 16 (bfloat16)
+    case bf16 = "bf16"
+    
+    /// 8-bit integer quantization
+    case int8 = "int8"
+    
+    /// 4-bit integer quantization
+    case int4 = "int4"
+    
+    /// 8-bit quantization (mlx-community style)
+    case bit8 = "8bit"
+    
+    /// 6-bit quantization (mlx-community style)
+    case bit6 = "6bit"
+    
+    /// 4-bit quantization (mlx-community style)
+    case bit4 = "4bit"
+    
+    // MARK: - Single-Repo Pattern (file-based)
+    
+    /// Weight filename for single-repo pattern
+    /// Example: "model_fp32.safetensors", "model_fp16.safetensors"
+    public var weightsFilename: String {
+        "model_\(rawValue).safetensors"
+    }
+    
+    // MARK: - Multi-Repo Pattern (suffix-based)
+    
+    /// Repo suffix for multi-repo pattern
+    /// Example: "-bf16", "-4bit"
+    public var repoSuffix: String {
+        "-\(rawValue)"
+    }
+    
+    /// Construct full repo name with precision suffix
+    /// Example: "mlx-community/Kokoro-82M" + .bf16 → "mlx-community/Kokoro-82M-bf16"
+    public func repo(base: String) -> String {
+        "\(base)\(repoSuffix)"
+    }
+}
+
 // MARK: - Model Enums
 
 /// Available VAD implementations
