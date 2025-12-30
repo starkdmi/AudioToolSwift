@@ -12,7 +12,9 @@ import Foundation
 import ClearVoice
 import ClearVoiceCore
 import ClearVoiceMLX
+#if canImport(ClearVoiceSpeech)
 import ClearVoiceSpeech
+#endif
 import MLX
 import AudioUtils
 
@@ -479,6 +481,7 @@ func runMossFormer2SR(inputPath: String, outputPath: String) async throws {
 
 // MARK: - Apple Speech Transcription
 
+#if canImport(ClearVoiceSpeech)
 @available(iOS 26.0, macOS 26.0, *)
 func runTranscribe(inputPath: String) async throws {
     print("\n=== Apple Speech Transcription ===")
@@ -543,6 +546,7 @@ func runTranscribe(inputPath: String) async throws {
     print("Time: \(String(format: "%.2f", elapsed))s")
     print("========================================\n")
 }
+#endif
 
 // MARK: - Main Execution
 
@@ -597,6 +601,7 @@ Task {
             try await runMossFormer2SR(inputPath: inputPath, outputPath: outputPath)
         case "kokoro", "tts":
             try await runKokoroTest()
+        #if canImport(ClearVoiceSpeech)
         case "transcribe", "speech", "stt":
             if #available(macOS 26.0, *) {
                 try await runTranscribe(inputPath: inputPath)
@@ -604,6 +609,7 @@ Task {
                 print("Error: Transcription requires macOS 26.0+")
                 exit(1)
             }
+        #endif
         default:
             print("Unknown model: \(model)")
             print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro, transcribe")

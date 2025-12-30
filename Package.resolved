@@ -1,5 +1,5 @@
 {
-  "originHash" : "793757e03ed0cd6fc51cd6216b06a300b4745ef86c85683a2e0a12fd8ff970b2",
+  "originHash" : "366de953b592058d66849fe948e123ecf6ae38777f7d13062c2377ddd98e62db",
   "pins" : [
     {
       "identity" : "fluidaudio",
@@ -8,15 +8,6 @@
       "state" : {
         "revision" : "47552dde26f79b880efff2f23ad4dab55aa914ca",
         "version" : "0.8.1"
-      }
-    },
-    {
-      "identity" : "kokoro-ios",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mlalma/kokoro-ios.git",
-      "state" : {
-        "revision" : "9a1e2614e5898106d00eec7fd21ff2fc89d805a6",
-        "version" : "1.0.10"
       }
     },
     {

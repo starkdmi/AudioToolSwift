@@ -18,15 +18,55 @@ public typealias TTSAudioBuffer = ClearVoiceCore.AudioBuffer
 
 /// Kokoro TTS provider using MisakiSwift for G2P (MIT license, no ESpeakNG)
 ///
-/// Performance: ~5.5-11.7x RTF on Apple Silicon
-/// Languages: en-US, en-GB
+/// ## Performance
+/// ~5.5-11.7x RTF on Apple Silicon
 ///
-/// Usage:
+/// ## Supported Languages
+/// All languages use misaki[en] except Japanese (misaki[ja]) and Chinese (misaki[zh]):
+///
+/// | Language | Code | Voices | Example |
+/// |----------|------|--------|---------|
+/// | 🇺🇸 American English | `a` | 20 (11F, 9M) | `af_heart`, `am_adam` |
+/// | 🇬🇧 British English | `b` | 8 (4F, 4M) | `bf_emma`, `bm_george` |
+/// | 🇯🇵 Japanese | `j` | 5 (4F, 1M) | `jf_alpha`, `jm_kumo` |
+/// | 🇨🇳 Mandarin Chinese | `z` | 8 (4F, 4M) | `zf_xiaoxiao`, `zm_yunxi` |
+/// | 🇪🇸 Spanish | `e` | 3 (1F, 2M) | `ef_dora`, `em_alex` |
+/// | 🇫🇷 French | `f` | 1 (1F) | `ff_siwis` |
+/// | 🇮🇳 Hindi | `h` | 4 (2F, 2M) | `hf_alpha`, `hm_omega` |
+/// | 🇮🇹 Italian | `i` | 2 (1F, 1M) | `if_sara`, `im_nicola` |
+/// | 🇧🇷 Brazilian Portuguese | `p` | 3 (1F, 2M) | `pf_dora`, `pm_alex` |
+///
+/// ## Voice Naming Convention
+/// - First letter: Language code
+/// - Second letter: Gender (f=female, m=male)
+/// - Rest: Voice name
+///
+/// ## Usage
 /// ```swift
-/// let tts = TTSProviders.kokoro()  // Auto-downloads from HuggingFace
-/// try await tts.load()  // Downloads if needed, shows progress
+/// // Basic usage with default voice
+/// let tts = TTSProviders.kokoro()
+/// try await tts.load()
 /// let audio = try await tts.synthesize("Hello world!", voice: "af_heart")
+///
+/// // Using KokoroVoice enum
+/// let voice = KokoroVoice.af_bella
+/// let audio = try await tts.synthesize("Hello!", voice: voice.rawValue)
+///
+/// // Get available voices for a language
+/// let italianVoices = KokoroLanguage.italian.availableVoices  // [.if_sara, .im_nicola]
+/// let defaultVoice = KokoroLanguage.french.defaultVoice  // .ff_siwis
+///
+/// // Multilingual synthesis
+/// let tts = KokoroTTSProvider(language: .italian)
+/// try await tts.load()
+/// let audio = try await tts.synthesize("Ciao mondo!", voice: "if_sara")
 /// ```
+///
+/// ## Quality Grades
+/// Voices are graded A-D based on training data quality and quantity.
+/// Best quality voices: `af_heart` (A), `af_bella` (A-), `bf_emma` (B-)
+///
+/// For full voice quality info: https://huggingface.co/mlx-community/Kokoro-82M-bf16/blob/main/VOICES.md
 public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     
     // MARK: - Public Properties
@@ -243,11 +283,17 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
         }
         
         // Map KokoroLanguage to KokoroSwift.Language
+        // All use misaki[en] except Japanese (misaki[ja]) and Chinese (misaki[zh])
         let kokoroLang: KokoroSwift.Language = switch language {
         case .americanEnglish: .enUS
         case .britishEnglish: .enGB
-        case .japanese: .enUS  // Fallback - Japanese not in current kokoro-ios
-        case .chinese: .enUS   // Fallback - Chinese not in current kokoro-ios
+        case .japanese: .japanese
+        case .chinese: .chinese
+        case .spanish: .spanish
+        case .french: .french
+        case .hindi: .hindi
+        case .italian: .italian
+        case .portuguese: .portuguese
         }
         
         // Generate audio using Kokoro with MisakiSwift G2P

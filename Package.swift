@@ -66,7 +66,8 @@ let package = Package(
         .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.7.8"),
         
         // Kokoro TTS with MisakiSwift G2P (MIT license, no ESpeakNG)
-        .package(url: "https://github.com/mlalma/kokoro-ios.git", from: "1.0.8"),
+        // Using local fork with extended misaki[en] language support
+        .package(name: "KokoroSwift", path: "../Models/kokoro-ios"),
         
         // HuggingFace Hub for model downloading
         .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.0.0"),
@@ -146,7 +147,7 @@ let package = Package(
             dependencies: [
                 "ClearVoice",
                 "ClearVoiceCore",
-                .product(name: "KokoroSwift", package: "kokoro-ios"),
+                .product(name: "KokoroSwift", package: "KokoroSwift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/ClearVoiceTTS"
@@ -228,16 +229,16 @@ let package = Package(
                 .copy("Fixtures/")
             ]
         ),
-        
         // CLI executable for testing MLX providers (use xcodebuild + run directly)
         // Build: xcodebuild build -scheme Generate -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
         // Run: .build/DerivedData/Build/Products/Release/Generate --model frcrn --input test.wav --output enhanced.wav
+        // Note: ClearVoiceSpeech (Apple SpeechAnalyzer) requires macOS 26+ and is only conditionally imported
         .executableTarget(
             name: "Generate",
             dependencies: [
                 "ClearVoiceMLX",
                 "ClearVoiceTTS",
-                "ClearVoiceSpeech",
+                // "ClearVoiceSpeech", // Requires macOS 26+, conditionally imported in main.swift
                 "ClearVoiceCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
