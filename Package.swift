@@ -161,7 +161,7 @@ let package = Package(
         // Unit tests with mocks (swift test compatible)
         .testTarget(
             name: "ClearVoiceTests",
-            dependencies: ["ClearVoice"],
+            dependencies: ["ClearVoice", "ClearVoiceTTS"],
             path: "Tests/ClearVoiceTests",
             resources: [
                 .copy("Fixtures/")

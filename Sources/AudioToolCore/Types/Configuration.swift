@@ -175,6 +175,7 @@ public enum KokoroLanguage: String, Sendable, Hashable, CaseIterable {
 /// Available TTS models
 public enum SynthesisModel: Sendable, Hashable {
     case kokoro(language: KokoroLanguage, voice: String)
+    case appleTTS(language: String)  // AVSpeechSynthesizer, 60+ languages
     case f5tts
     case cosyVoice        // Voice cloning
     case outeTTS          // Voice cloning
@@ -184,6 +185,7 @@ extension SynthesisModel: ModelIdentifier {
     public var modelName: String {
         switch self {
         case .kokoro: return "kokoro_tts"
+        case .appleTTS: return "apple_tts"
         case .f5tts: return "f5_tts"
         case .cosyVoice: return "cosy_voice"
         case .outeTTS: return "oute_tts"

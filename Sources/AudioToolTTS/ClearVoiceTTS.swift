@@ -53,6 +53,24 @@ public struct TTSProviders {
     ) -> KokoroTTSProvider {
         KokoroTTSProvider(modelPath: modelPath, language: language)
     }
+    
+    // MARK: - Apple TTS (AVSpeechSynthesizer)
+    
+    /// Create Apple TTS provider using AVSpeechSynthesizer
+    ///
+    /// Supports 60+ languages offline with system voices.
+    ///
+    /// - Parameter language: BCP-47 language code (e.g., "en-US", "fr-FR", "de-DE", "ru-RU")
+    /// - Returns: Configured AppleTTSProvider
+    ///
+    /// Example:
+    /// ```swift
+    /// let tts = TTSProviders.apple(language: "fr-FR")
+    /// let audio = try await tts.synthesize("Bonjour", voice: "Thomas")
+    /// ```
+    public static func apple(language: String = "en-US") -> AppleTTSProvider {
+        AppleTTSProvider(language: language)
+    }
 }
 
 /// ClearVoice extension for registering TTS providers
@@ -69,4 +87,23 @@ extension ClearVoice {
         try await synthesizer.load()
         self.register(synthesizer: synthesizer, for: model)
     }
+    
+    /// Configure with Apple TTS provider
+    /// - Parameters:
+    ///   - synthesizer: The AppleTTSProvider instance
+    ///   - model: The synthesis model type (default: appleTTS)
+    public func configure(
+        synthesizer: AppleTTSProvider,
+        for model: SynthesisModel = .appleTTS(language: "en-US")
+    ) {
+        self.register(synthesizer: synthesizer, for: model)
+    }
+    
+    /// Convenience: Configure Apple TTS for a specific language
+    /// - Parameter language: BCP-47 language code (e.g., "fr-FR", "de-DE")
+    public func configureAppleTTS(language: String = "en-US") {
+        let provider = TTSProviders.apple(language: language)
+        self.register(synthesizer: provider, for: .appleTTS(language: language))
+    }
 }
+
