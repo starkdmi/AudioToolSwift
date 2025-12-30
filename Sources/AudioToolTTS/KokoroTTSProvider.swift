@@ -266,6 +266,80 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
         }
     }
     
+    // MARK: - Voice Mixing
+    
+    /// Mix multiple voice embeddings with weighted interpolation
+    ///
+    /// Creates a blended voice by interpolating between multiple voice embeddings.
+    /// This allows creating custom voices with characteristics from multiple speakers.
+    ///
+    /// Example:
+    /// ```swift
+    /// // 70% Bella, 30% Sarah
+    /// let mixed = try tts.mixVoices([("af_bella", 0.7), ("af_sarah", 0.3)])
+    /// let audio = try await tts.synthesize("Hello!", voiceEmbedding: mixed)
+    /// ```
+    ///
+    /// - Parameter voices: Array of (voiceName, weight) tuples. Weights are normalized automatically.
+    /// - Returns: Blended MLXArray voice embedding
+    /// - Throws: `ClearVoiceError.resourceUnavailable` if any voice is not loaded
+    public func mixVoices(_ voices: [(name: String, weight: Float)]) throws -> MLXArray {
+        guard !voices.isEmpty else {
+            throw ClearVoiceError.resourceUnavailable("No voices provided for mixing")
+        }
+        
+        // Normalize weights to sum to 1.0
+        let totalWeight = voices.map(\.weight).reduce(0, +)
+        guard totalWeight > 0 else {
+            throw ClearVoiceError.resourceUnavailable("Total weight must be greater than 0")
+        }
+        
+        var mixed: MLXArray? = nil
+        for (name, weight) in voices {
+            guard let embedding = voiceEmbeddings[name] else {
+                throw ClearVoiceError.resourceUnavailable("Voice '\(name)' not loaded. Call loadVoice(from:) first.")
+            }
+            let normalizedWeight = weight / totalWeight
+            let weighted = embedding * MLXArray(normalizedWeight)
+            mixed = mixed.map { $0 + weighted } ?? weighted
+        }
+        
+        return mixed!
+    }
+    
+    /// Synthesize text using a raw voice embedding (for mixed voices)
+    /// - Parameters:
+    ///   - text: Text to synthesize
+    ///   - voiceEmbedding: Raw MLXArray voice embedding (from mixVoices or custom)
+    /// - Returns: Audio buffer with synthesized speech (24kHz mono)
+    public func synthesize(_ text: String, voiceEmbedding: MLXArray) async throws -> ClearVoiceCore.AudioBuffer {
+        guard let tts = tts else {
+            throw ClearVoiceError.modelNotLoaded("KokoroTTS")
+        }
+        
+        // Map KokoroLanguage to KokoroSwift.Language
+        let kokoroLang: KokoroSwift.Language = switch language {
+        case .americanEnglish: .enUS
+        case .britishEnglish: .enGB
+        case .japanese: .japanese
+        case .chinese: .chinese
+        case .spanish: .spanish
+        case .french: .french
+        case .hindi: .hindi
+        case .italian: .italian
+        case .portuguese: .portuguese
+        }
+        
+        // Generate audio using the raw embedding
+        let (samples, _) = try tts.generateAudio(
+            voice: voiceEmbedding,
+            language: kokoroLang,
+            text: text
+        )
+        
+        return ClearVoiceCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
+    }
+    
     // MARK: - SpeechSynthesizer Protocol
     
     /// Synthesize text to speech

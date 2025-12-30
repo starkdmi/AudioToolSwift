@@ -82,7 +82,8 @@ func printUsage() {
 }
 
 // Validate input (skip for TTS which doesn't need input audio)
-guard !inputPath.isEmpty || model.lowercased() == "kokoro" || model.lowercased() == "tts" else {
+let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix"]
+guard !inputPath.isEmpty || ttsModels.contains(model.lowercased()) else {
     print("Error: Input path required (--input)")
     printUsage()
     exit(1)
@@ -601,6 +602,8 @@ Task {
             try await runMossFormer2SR(inputPath: inputPath, outputPath: outputPath)
         case "kokoro", "tts":
             try await runKokoroTest()
+        case "voice_mix", "voicemix", "mix":
+            try await runVoiceMixingTest()
         #if canImport(ClearVoiceSpeech)
         case "transcribe", "speech", "stt":
             if #available(macOS 26.0, *) {
@@ -612,7 +615,7 @@ Task {
         #endif
         default:
             print("Unknown model: \(model)")
-            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro, transcribe")
+            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro, voice_mix, transcribe")
             exit(1)
         }
         exit(0)
