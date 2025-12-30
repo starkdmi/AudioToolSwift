@@ -202,3 +202,50 @@ public struct SoundClassification: Sendable, Hashable {
         self.timeRange = timeRange
     }
 }
+
+// MARK: - Translation
+
+/// Translation result
+public struct TranslationResult: Sendable {
+    /// Original source text
+    public let sourceText: String
+    
+    /// Translated text
+    public let translatedText: String
+    
+    /// Detected/specified source language (BCP-47)
+    public let sourceLanguage: String?
+    
+    /// Target language (BCP-47)
+    public let targetLanguage: String
+    
+    public init(
+        sourceText: String,
+        translatedText: String,
+        sourceLanguage: String?,
+        targetLanguage: String
+    ) {
+        self.sourceText = sourceText
+        self.translatedText = translatedText
+        self.sourceLanguage = sourceLanguage
+        self.targetLanguage = targetLanguage
+    }
+}
+
+/// Batch translation result (multiple strings)
+public struct BatchTranslationResult: Sendable {
+    /// Individual translation results
+    public let translations: [TranslationResult]
+    
+    /// Source language (auto-detected or specified)
+    public let sourceLanguage: String?
+    
+    /// Target language
+    public let targetLanguage: String
+    
+    public init(translations: [TranslationResult], sourceLanguage: String?, targetLanguage: String) {
+        self.translations = translations
+        self.sourceLanguage = sourceLanguage
+        self.targetLanguage = targetLanguage
+    }
+}

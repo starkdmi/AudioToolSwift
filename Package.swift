@@ -34,6 +34,10 @@ let package = Package(
             name: "ClearVoiceTTS",
             targets: ["ClearVoiceTTS"]
         ),
+        .library(
+            name: "ClearVoiceTranslation",
+            targets: ["ClearVoiceTranslation"]
+        ),
         .executable(
             name: "Generate",
             targets: ["Generate"]
@@ -142,6 +146,16 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/ClearVoiceTTS"
+        ),
+        
+        // Translation Backend (Apple Translation framework)
+        .target(
+            name: "ClearVoiceTranslation",
+            dependencies: [
+                "ClearVoice",
+                "ClearVoiceCore",
+            ],
+            path: "Sources/ClearVoiceTranslation"
         ),
         
         // Unit tests with mocks (swift test compatible)

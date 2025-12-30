@@ -158,6 +158,12 @@ public enum TranscriptionModel: Sendable, Hashable {
     case appleSpeech      // Native, iOS 26+
 }
 
+/// Available translation models
+public enum TranslationModel: Sendable, Hashable {
+    case appleTranslation  // Apple Translation framework (iOS 18+, macOS 15+)
+    // Future: .marian, .nllb, .seamless
+}
+
 /// Kokoro TTS supported languages
 public enum KokoroLanguage: String, Sendable, Hashable, CaseIterable {
     case americanEnglish = "a"  // 🇺🇸 en-US

@@ -114,6 +114,49 @@ public protocol SoundClassifier: AudioProcessor {
     func classify(_ audio: AudioBuffer) async throws -> [SoundClassification]
 }
 
+// MARK: - Text Translation
+
+/// Text translation provider
+/// Note: Translation is text-only (not AudioProcessor) but follows same patterns
+public protocol TextTranslator: Sendable {
+    /// Translate single text string
+    /// - Parameters:
+    ///   - text: Source text to translate
+    ///   - source: Source language code (BCP-47) or nil for auto-detect
+    ///   - target: Target language code (BCP-47)
+    /// - Returns: Translation result
+    func translate(
+        _ text: String,
+        from source: String?,
+        to target: String
+    ) async throws -> TranslationResult
+    
+    /// Translate batch of strings
+    /// - Parameters:
+    ///   - texts: Array of source texts
+    ///   - source: Source language code (BCP-47) or nil for auto-detect
+    ///   - target: Target language code (BCP-47)
+    /// - Returns: Batch translation result
+    func translateBatch(
+        _ texts: [String],
+        from source: String?,
+        to target: String
+    ) async throws -> BatchTranslationResult
+    
+    /// Check if language pair is available (models downloaded)
+    /// - Parameters:
+    ///   - source: Source language code (BCP-47)
+    ///   - target: Target language code (BCP-47)
+    /// - Returns: true if translation is available offline
+    func isAvailable(from source: String, to target: String) async -> Bool
+    
+    /// Prepare language pair (trigger download prompt if needed)
+    /// - Parameters:
+    ///   - source: Source language code
+    ///   - target: Target language code
+    func prepareLanguagePair(from source: String, to target: String) async throws
+}
+
 // MARK: - Model Identifier Protocol
 
 /// Protocol for identifying models (for preloading/caching)
@@ -162,6 +205,14 @@ extension TranscriptionModel: ModelIdentifier {
         case .whisperSmall: return "whisper_small"
         case .whisperLarge: return "whisper_large_v3"
         case .appleSpeech: return "apple_speech"
+        }
+    }
+}
+
+extension TranslationModel: ModelIdentifier {
+    public var modelName: String {
+        switch self {
+        case .appleTranslation: return "apple_translation"
         }
     }
 }

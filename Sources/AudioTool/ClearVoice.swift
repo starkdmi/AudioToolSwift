@@ -25,6 +25,7 @@ public actor ClearVoice {
     internal var upscalerProvider: (any AudioUpscaler)?
     internal var classifierProvider: (any SoundClassifier)?
     internal var synthesizerProviders: [String: any SpeechSynthesizer] = [:]
+    internal var translatorProviders: [TranslationModel: any TextTranslator] = [:]
     
     // MARK: - Initialization
     
@@ -80,6 +81,11 @@ public actor ClearVoice {
     /// Register a synthesizer provider
     public func register(synthesizer: any SpeechSynthesizer, for model: SynthesisModel) {
         self.synthesizerProviders[model.modelName] = synthesizer
+    }
+    
+    /// Register a translation provider
+    public func register(translator: any TextTranslator, for model: TranslationModel) {
+        self.translatorProviders[model] = translator
     }
     
     // MARK: - Audio I/O
@@ -255,6 +261,46 @@ public actor ClearVoice {
             }
         }
         return synthesizer.streamSynthesis(text, voice: voice)
+    }
+    
+    // MARK: - Translation
+    
+    /// Translate text
+    /// - Parameters:
+    ///   - text: Source text to translate
+    ///   - source: Source language code (BCP-47) or nil for auto-detect
+    ///   - target: Target language code (BCP-47)
+    ///   - model: Translation model to use
+    /// - Returns: Translation result
+    public func translate(
+        _ text: String,
+        from source: String? = nil,
+        to target: String,
+        model: TranslationModel = .appleTranslation
+    ) async throws -> TranslationResult {
+        guard let translator = translatorProviders[model] else {
+            throw ClearVoiceError.modelNotLoaded(model.modelName)
+        }
+        return try await translator.translate(text, from: source, to: target)
+    }
+    
+    /// Translate batch of texts
+    /// - Parameters:
+    ///   - texts: Array of source texts
+    ///   - source: Source language code (BCP-47) or nil for auto-detect
+    ///   - target: Target language code (BCP-47)
+    ///   - model: Translation model to use
+    /// - Returns: Batch translation result
+    public func translateBatch(
+        _ texts: [String],
+        from source: String? = nil,
+        to target: String,
+        model: TranslationModel = .appleTranslation
+    ) async throws -> BatchTranslationResult {
+        guard let translator = translatorProviders[model] else {
+            throw ClearVoiceError.modelNotLoaded(model.modelName)
+        }
+        return try await translator.translateBatch(texts, from: source, to: target)
     }
     
     // MARK: - Pipeline Builder
