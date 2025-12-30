@@ -12,6 +12,7 @@ import Foundation
 import ClearVoice
 import ClearVoiceCore
 import ClearVoiceMLX
+import ClearVoiceSpeech
 import MLX
 import AudioUtils
 
@@ -476,6 +477,73 @@ func runMossFormer2SR(inputPath: String, outputPath: String) async throws {
     print("✓ Saved: \(outputPath)")
 }
 
+// MARK: - Apple Speech Transcription
+
+@available(iOS 26.0, macOS 26.0, *)
+func runTranscribe(inputPath: String) async throws {
+    print("\n=== Apple Speech Transcription ===")
+    
+    // Check supported locales
+    let locales = await AppleSpeechTranscriber.supportedLocales()
+    print("Supported locales: \(locales.count)")
+    print("Available: \(locales.map { $0.identifier }.joined(separator: ", "))")
+    
+    // Prefer en_GB (UK) since that's what user has installed for Dictation
+    // Fall back to en_US, then any English, then first available
+    let localeToUse: Locale
+    
+    if let enGB = locales.first(where: { $0.identifier == "en_GB" || $0.identifier == "en-GB" }) {
+        localeToUse = enGB
+        print("Using UK English: \(enGB.identifier)")
+    } else if let enUS = locales.first(where: { $0.identifier == "en_US" || $0.identifier == "en-US" }) {
+        localeToUse = enUS
+        print("Using US English: \(enUS.identifier)")
+    } else if let enLocale = locales.first(where: { $0.identifier.starts(with: "en") }) {
+        localeToUse = enLocale
+        print("Using English locale: \(enLocale.identifier)")
+    } else if let firstLocale = locales.first {
+        localeToUse = firstLocale
+        print("No English locale, using: \(firstLocale.identifier)")
+    } else {
+        print("Error: No locales available")
+        return
+    }
+    
+    // Load audio at 16kHz
+    print("Loading audio from: \(inputPath)")
+    let loaderConfig = AudioLoader.Configuration(targetSampleRate: 16000, normalizationMode: .none)
+    let loader = AudioLoader(config: loaderConfig)
+    let audio = try loader.loadMono(from: URL(fileURLWithPath: inputPath))
+    eval(audio)
+    let samples = audio.asArray(Float.self)
+    
+    let audioBuffer = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
+    print("Audio: \(String(format: "%.2f", audioBuffer.duration))s at 16kHz")
+    
+    // Create and load transcriber
+    let transcriber = AppleSpeechTranscriber(locale: localeToUse)
+    print("Loading speech model...")
+    try await transcriber.load()
+    print("✓ Model loaded")
+    
+    // Transcribe with timeout
+    print("Transcribing...")
+    let startTime = Date()
+    
+    let result = try await transcriber.transcribe(audioBuffer)
+    
+    let elapsed = Date().timeIntervalSince(startTime)
+    
+    print("\n========================================")
+    print("TRANSCRIPTION RESULT")
+    print("========================================")
+    print("Text: \(result.text)")
+    print("Language: \(result.language ?? "unknown")")
+    print("Segments: \(result.segments.count)")
+    print("Time: \(String(format: "%.2f", elapsed))s")
+    print("========================================\n")
+}
+
 // MARK: - Main Execution
 
 func printUsageDetailed() {
@@ -529,9 +597,16 @@ Task {
             try await runMossFormer2SR(inputPath: inputPath, outputPath: outputPath)
         case "kokoro", "tts":
             try await runKokoroTest()
+        case "transcribe", "speech", "stt":
+            if #available(macOS 26.0, *) {
+                try await runTranscribe(inputPath: inputPath)
+            } else {
+                print("Error: Transcription requires macOS 26.0+")
+                exit(1)
+            }
         default:
             print("Unknown model: \(model)")
-            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro")
+            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro, transcribe")
             exit(1)
         }
         exit(0)

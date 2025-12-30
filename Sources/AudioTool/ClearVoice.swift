@@ -88,6 +88,11 @@ public actor ClearVoice {
         self.translatorProviders[model] = translator
     }
     
+    /// Register a transcriber provider
+    public func register(transcriber: any Transcriber, for model: TranscriptionModel) {
+        self.transcriberProviders[model] = transcriber
+    }
+    
     // MARK: - Audio I/O
     
     /// Load audio from file

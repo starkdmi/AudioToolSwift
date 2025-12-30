@@ -35,6 +35,10 @@ let package = Package(
             targets: ["ClearVoiceTTS"]
         ),
         .library(
+            name: "ClearVoiceSpeech",
+            targets: ["ClearVoiceSpeech"]
+        ),
+        .library(
             name: "ClearVoiceTranslation",
             targets: ["ClearVoiceTranslation"]
         ),
@@ -148,6 +152,16 @@ let package = Package(
             path: "Sources/ClearVoiceTTS"
         ),
         
+        // Speech-to-Text Backend (Apple SpeechAnalyzer, iOS 26+)
+        .target(
+            name: "ClearVoiceSpeech",
+            dependencies: [
+                "ClearVoice",
+                "ClearVoiceCore",
+            ],
+            path: "Sources/ClearVoiceSpeech"
+        ),
+        
         // Translation Backend (Apple Translation framework)
         .target(
             name: "ClearVoiceTranslation",
@@ -161,7 +175,7 @@ let package = Package(
         // Unit tests with mocks (swift test compatible)
         .testTarget(
             name: "ClearVoiceTests",
-            dependencies: ["ClearVoice", "ClearVoiceTTS"],
+            dependencies: ["ClearVoice", "ClearVoiceTTS", "ClearVoiceSpeech"],
             path: "Tests/ClearVoiceTests",
             resources: [
                 .copy("Fixtures/")
@@ -223,6 +237,7 @@ let package = Package(
             dependencies: [
                 "ClearVoiceMLX",
                 "ClearVoiceTTS",
+                "ClearVoiceSpeech",
                 "ClearVoiceCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
