@@ -188,7 +188,11 @@ let package = Package(
         .testTarget(
             name: "ClearVoiceMLXIntegrationTests",
             dependencies: [
+                "ClearVoice",
+                "ClearVoiceCore",
                 "ClearVoiceMLX",
+                "ClearVoiceTTS",
+                "ClearVoiceFluidAudio",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Tests/ClearVoiceMLXIntegrationTests",
@@ -238,7 +242,8 @@ let package = Package(
             dependencies: [
                 "ClearVoiceMLX",
                 "ClearVoiceTTS",
-                // "ClearVoiceSpeech", // Requires macOS 26+, conditionally imported in main.swift
+                "ClearVoiceFluidAudio",  // For voice matching
+                "ClearVoiceSpeech", // Required for linking even with conditional import
                 "ClearVoiceCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],

@@ -411,3 +411,51 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
         throw ClearVoiceError.pipelineConfigurationInvalid("KokoroTTS is a synthesizer, use synthesize() instead of process()")
     }
 }
+
+// MARK: - Voice Matching Extension
+
+extension KokoroTTSProvider {
+    
+    /// Create a blended voice from voice match results
+    ///
+    /// Convenience method to convert `VoiceMatchResult` weights directly
+    /// to a synthesizable voice embedding.
+    ///
+    /// Example:
+    /// ```swift
+    /// let matcher = KokoroVoiceMatcher()
+    /// let result = try await matcher.matchVoice(...)
+    /// let blended = try tts.blendedVoice(from: result)
+    /// let audio = try await tts.synthesize("Hello!", voiceEmbedding: blended)
+    /// ```
+    ///
+    /// - Parameter matchResult: Voice match result from `KokoroVoiceMatcher`
+    /// - Returns: Blended MLXArray voice embedding
+    /// - Throws: `ClearVoiceError.resourceUnavailable` if any voice is not loaded
+    public func blendedVoice(from matchResult: VoiceMatchResult) throws -> MLXArray {
+        try mixVoices(matchResult.weights)
+    }
+    
+    /// Get voice embedding for a single voice
+    ///
+    /// - Parameter voiceId: Voice identifier (e.g., "af_bella")
+    /// - Returns: Voice embedding if loaded, nil otherwise
+    public func voiceEmbedding(for voiceId: String) -> MLXArray? {
+        voiceEmbeddings[voiceId]
+    }
+    
+    /// Get all loaded voice embeddings as arrays for matching
+    ///
+    /// Converts MLXArray embeddings to Float arrays for use with
+    /// `KokoroVoiceMatcher`.
+    ///
+    /// - Note: Kokoro voice embeddings are different from speaker embeddings.
+    ///   Voice matching uses speaker embeddings from synthesized audio.
+    public var voiceEmbeddingsAsArrays: [String: [Float]] {
+        var result: [String: [Float]] = [:]
+        for (name, embedding) in voiceEmbeddings {
+            result[name] = embedding.asArray(Float.self)
+        }
+        return result
+    }
+}

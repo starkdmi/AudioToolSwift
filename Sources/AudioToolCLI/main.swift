@@ -12,6 +12,7 @@ import Foundation
 import ClearVoice
 import ClearVoiceCore
 import ClearVoiceMLX
+import ClearVoiceFluidAudio
 #if canImport(ClearVoiceSpeech)
 import ClearVoiceSpeech
 #endif
@@ -82,7 +83,7 @@ func printUsage() {
 }
 
 // Validate input (skip for TTS which doesn't need input audio)
-let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix"]
+let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix", "voice_match", "voicematch", "match"]
 guard !inputPath.isEmpty || ttsModels.contains(model.lowercased()) else {
     print("Error: Input path required (--input)")
     printUsage()
@@ -604,6 +605,8 @@ Task {
             try await runKokoroTest()
         case "voice_mix", "voicemix", "mix":
             try await runVoiceMixingTest()
+        case "voice_match", "voicematch", "match":
+            try await runVoiceMatchingTest()
         #if canImport(ClearVoiceSpeech)
         case "transcribe", "speech", "stt":
             if #available(macOS 26.0, *) {
@@ -615,7 +618,7 @@ Task {
         #endif
         default:
             print("Unknown model: \(model)")
-            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro, voice_mix, transcribe")
+            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro, voice_mix, voice_match, transcribe")
             exit(1)
         }
         exit(0)
