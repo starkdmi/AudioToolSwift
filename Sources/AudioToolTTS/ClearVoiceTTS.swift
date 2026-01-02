@@ -71,6 +71,36 @@ public struct TTSProviders {
     public static func apple(language: String = "en-US") -> AppleTTSProvider {
         AppleTTSProvider(language: language)
     }
+    
+    // MARK: - RUAccent (Russian Stress Marking)
+    
+    /// Create RUAccent text preprocessor for Russian stress marking
+    ///
+    /// Adds stress marks (+) to Russian text for proper TTS pronunciation.
+    /// Example: "привет мир" → "прив+ет м+ир"
+    ///
+    /// - Parameters:
+    ///   - profile: Pipeline profile (lightweight/balanced/max)
+    ///   - modelsDir: Directory containing *.mlpackage models
+    ///   - assetsDir: Directory containing dictionaries and configs
+    /// - Returns: Configured RUAccentProvider
+    ///
+    /// Example:
+    /// ```swift
+    /// let ruaccent = try TTSProviders.ruaccent(
+    ///     profile: .balanced,
+    ///     modelsDir: URL(fileURLWithPath: "path/to/models/balanced"),
+    ///     assetsDir: URL(fileURLWithPath: "path/to/assets/balanced")
+    /// )
+    /// let stressed = try ruaccent.process("привет мир")
+    /// ```
+    public static func ruaccent(
+        profile: RUAccentProfile = .balanced,
+        modelsDir: URL,
+        assetsDir: URL
+    ) throws -> RUAccentProvider {
+        try RUAccentProvider(profile: profile, modelsDir: modelsDir, assetsDir: assetsDir)
+    }
 }
 
 /// ClearVoice extension for registering TTS providers
@@ -104,6 +134,17 @@ extension ClearVoice {
     public func configureAppleTTS(language: String = "en-US") {
         let provider = TTSProviders.apple(language: language)
         self.register(synthesizer: provider, for: .appleTTS(language: language))
+    }
+    
+    /// Configure with RUAccent preprocessor
+    /// - Parameters:
+    ///   - preprocessor: The RUAccentProvider instance
+    ///   - model: The preprocessing model type (default: ruaccent balanced)
+    public func configure(
+        preprocessor: RUAccentProvider,
+        for model: TextPreprocessorModel = .ruaccent(profile: .balanced)
+    ) {
+        self.register(preprocessor: preprocessor, for: model)
     }
 }
 

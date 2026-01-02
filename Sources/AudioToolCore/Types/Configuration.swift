@@ -164,6 +164,35 @@ public enum TranslationModel: Sendable, Hashable {
     // Future: .marian, .nllb, .seamless
 }
 
+// MARK: - Text Preprocessing
+
+/// RUAccent pipeline profiles
+///
+/// Profiles trade off size/speed vs. quality:
+/// - **lightweight**: Smallest, no dictionary lookup
+/// - **balanced**: Good quality + size (recommended)
+/// - **max**: Full pipeline with rule engine
+public enum RUAccentProfile: String, Sendable, CaseIterable, Hashable {
+    case lightweight
+    case balanced
+    case max
+}
+
+/// Available text preprocessing models
+public enum TextPreprocessorModel: Sendable, Hashable {
+    /// Russian stress/accent marking (ruaccent)
+    case ruaccent(profile: RUAccentProfile)
+}
+
+extension TextPreprocessorModel: ModelIdentifier {
+    public var modelName: String {
+        switch self {
+        case .ruaccent(let profile):
+            return "ruaccent_\(profile.rawValue)"
+        }
+    }
+}
+
 /// Kokoro TTS supported languages
 ///
 /// All languages use misaki[en] except Japanese (misaki[ja]) and Chinese (misaki[zh])

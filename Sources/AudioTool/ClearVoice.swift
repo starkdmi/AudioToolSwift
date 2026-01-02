@@ -28,6 +28,7 @@ public actor ClearVoice {
     internal var classifierProvider: (any SoundClassifier)?
     internal var synthesizerProviders: [String: any SpeechSynthesizer] = [:]
     internal var translatorProviders: [TranslationModel: any TextTranslator] = [:]
+    internal var textPreprocessorProviders: [String: any TextPreprocessor] = [:]
     
     // MARK: - Initialization
     
@@ -93,6 +94,11 @@ public actor ClearVoice {
     /// Register a transcriber provider
     public func register(transcriber: any Transcriber, for model: TranscriptionModel) {
         self.transcriberProviders[model] = transcriber
+    }
+    
+    /// Register a text preprocessor provider (e.g., RUAccent for Russian stress marking)
+    public func register(preprocessor: any TextPreprocessor, for model: TextPreprocessorModel) {
+        self.textPreprocessorProviders[model.modelName] = preprocessor
     }
     
     // MARK: - Audio I/O
@@ -457,6 +463,33 @@ public actor ClearVoice {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
         return try await translator.translateBatch(texts, from: source, to: target)
+    }
+    
+    // MARK: - Text Preprocessing
+    
+    /// Preprocess text (e.g., add stress marks for Russian TTS)
+    ///
+    /// Text preprocessing transforms input text before TTS synthesis.
+    /// For example, RUAccent adds stress marks to Russian text.
+    ///
+    /// - Parameters:
+    ///   - text: Input text to preprocess
+    ///   - model: Preprocessing model to use
+    /// - Returns: Preprocessed text
+    ///
+    /// Example:
+    /// ```swift
+    /// let stressed = try await voice.preprocess("привет мир", model: .ruaccent(profile: .balanced))
+    /// // stressed = "прив+ет м+ир"
+    /// ```
+    public func preprocess(
+        _ text: String,
+        model: TextPreprocessorModel
+    ) throws -> String {
+        guard let preprocessor = textPreprocessorProviders[model.modelName] else {
+            throw ClearVoiceError.modelNotLoaded(model.modelName)
+        }
+        return try preprocessor.process(text)
     }
     
     // MARK: - Pipeline Builder
