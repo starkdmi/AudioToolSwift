@@ -437,10 +437,115 @@ extension KokoroLanguage {
     }
 }
 
+// MARK: - ChatterBox Language Support
+
+/// ChatterBox language support levels
+public enum ChatterboxSupportLevel: String, Sendable, Hashable, CaseIterable {
+    /// Full support - works out of the box
+    case full
+    /// Requires text preprocessing (e.g., RUAccent for Russian)
+    case preprocessed
+    /// Experimental - missing text preprocessing, may have issues
+    case experimental
+}
+
+/// ChatterBox TTS supported languages (23 languages)
+///
+/// ChatterBox Multilingual supports: Arabic, Danish, German, Greek, English, Spanish,
+/// Finnish, French, Hebrew, Hindi, Italian, Japanese, Korean, Malay, Dutch, Norwegian,
+/// Polish, Portuguese, Russian, Swedish, Swahili, Turkish, Chinese.
+///
+/// Language support levels:
+/// - **Full (18)**: Works by default
+/// - **Preprocessed (1)**: Russian - uses RUAccent for stress marks
+/// - **Experimental (4)**: zh, ja, ko, he - missing text preprocessing
+public enum ChatterboxLanguage: String, Sendable, Hashable, CaseIterable {
+    // Full support (18 languages)
+    case english = "en"        // 🇬🇧 English
+    case french = "fr"         // 🇫🇷 French
+    case german = "de"         // 🇩🇪 German
+    case spanish = "es"        // 🇪🇸 Spanish
+    case italian = "it"        // 🇮🇹 Italian
+    case portuguese = "pt"     // 🇧🇷 Portuguese
+    case dutch = "nl"          // 🇳🇱 Dutch
+    case polish = "pl"         // 🇵🇱 Polish
+    case turkish = "tr"        // 🇹🇷 Turkish
+    case arabic = "ar"         // 🇸🇦 Arabic
+    case hindi = "hi"          // 🇮🇳 Hindi
+    case malay = "ms"          // 🇲🇾 Malay
+    case swedish = "sv"        // 🇸🇪 Swedish
+    case danish = "da"         // 🇩🇰 Danish
+    case norwegian = "no"      // 🇳🇴 Norwegian
+    case finnish = "fi"        // 🇫🇮 Finnish
+    case greek = "el"          // 🇬🇷 Greek
+    case swahili = "sw"        // 🇰🇪 Swahili
+    
+    // Preprocessed support (requires RUAccent)
+    case russian = "ru"        // 🇷🇺 Russian (uses RUAccent for stress marks)
+    
+    // Experimental (missing text preprocessing)
+    case chinese = "zh"        // 🇨🇳 Chinese (experimental)
+    case japanese = "ja"       // 🇯🇵 Japanese (experimental)
+    case korean = "ko"         // 🇰🇷 Korean (experimental)
+    case hebrew = "he"         // 🇮🇱 Hebrew (experimental)
+    
+    /// Human-readable language name
+    public var displayName: String {
+        switch self {
+        case .english: return "English"
+        case .french: return "French"
+        case .german: return "German"
+        case .spanish: return "Spanish"
+        case .italian: return "Italian"
+        case .portuguese: return "Portuguese"
+        case .dutch: return "Dutch"
+        case .polish: return "Polish"
+        case .turkish: return "Turkish"
+        case .arabic: return "Arabic"
+        case .hindi: return "Hindi"
+        case .malay: return "Malay"
+        case .swedish: return "Swedish"
+        case .danish: return "Danish"
+        case .norwegian: return "Norwegian"
+        case .finnish: return "Finnish"
+        case .greek: return "Greek"
+        case .swahili: return "Swahili"
+        case .russian: return "Russian"
+        case .chinese: return "Chinese"
+        case .japanese: return "Japanese"
+        case .korean: return "Korean"
+        case .hebrew: return "Hebrew"
+        }
+    }
+    
+    /// Support level for this language
+    public var supportLevel: ChatterboxSupportLevel {
+        switch self {
+        case .russian:
+            return .preprocessed
+        case .chinese, .japanese, .korean, .hebrew:
+            return .experimental
+        default:
+            return .full
+        }
+    }
+    
+    /// Whether language requires text preprocessing (like RUAccent)
+    public var requiresPreprocessing: Bool {
+        supportLevel == .preprocessed
+    }
+    
+    /// Whether language is experimental (missing preprocessing)
+    public var isExperimental: Bool {
+        supportLevel == .experimental
+    }
+}
+
 /// Available TTS models
 public enum SynthesisModel: Sendable, Hashable {
     case kokoro(language: KokoroLanguage, voice: String)
     case appleTTS(language: String)  // AVSpeechSynthesizer, 60+ languages
+    case chatterbox(language: ChatterboxLanguage)  // Multilingual TTS (23 languages)
     case f5tts
     case cosyVoice        // Voice cloning
     case outeTTS          // Voice cloning
@@ -451,6 +556,7 @@ extension SynthesisModel: ModelIdentifier {
         switch self {
         case .kokoro: return "kokoro_tts"
         case .appleTTS: return "apple_tts"
+        case .chatterbox: return "chatterbox_tts"
         case .f5tts: return "f5_tts"
         case .cosyVoice: return "cosy_voice"
         case .outeTTS: return "oute_tts"

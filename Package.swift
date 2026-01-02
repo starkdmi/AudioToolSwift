@@ -69,6 +69,9 @@ let package = Package(
         // Using local fork with extended misaki[en] language support
         .package(name: "KokoroSwift", path: "../Models/kokoro-ios"),
         
+        // ChatterBox Multilingual TTS (MLX, 25 languages)
+        .package(name: "ChatterboxMLXSwift", path: "../Models/chatterbox_swift"),
+        
         // HuggingFace Hub for model downloading
         .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.0.0"),
     ],
@@ -148,6 +151,7 @@ let package = Package(
                 "ClearVoice",
                 "ClearVoiceCore",
                 .product(name: "KokoroSwift", package: "KokoroSwift"),
+                .product(name: "ChatterboxMLXSwift", package: "ChatterboxMLXSwift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/ClearVoiceTTS"

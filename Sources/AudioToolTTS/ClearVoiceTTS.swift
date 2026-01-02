@@ -101,6 +101,83 @@ public struct TTSProviders {
     ) throws -> RUAccentProvider {
         try RUAccentProvider(profile: profile, modelsDir: modelsDir, assetsDir: assetsDir)
     }
+    
+    // MARK: - ChatterBox TTS (Multilingual Voice Cloning)
+    
+    /// Create ChatterBox TTS provider with precision-based repo selection
+    ///
+    /// ChatterBox is a multilingual TTS model supporting 25 languages with voice cloning.
+    /// Reference audio is required for synthesis.
+    ///
+    /// - Parameters:
+    ///   - precision: Model precision (fp32, fp16, 8bit, 6bit, 4bit)
+    ///   - language: Target language (default: English)
+    ///   - useRuAccent: Enable automatic RUAccent for Russian (default: true)
+    ///   - convertToStressMarks: Convert + to Unicode stress marks for Russian (default: true)
+    /// - Returns: Configured ChatterboxTTSProvider
+    ///
+    /// Example:
+    /// ```swift
+    /// let tts = TTSProviders.chatterbox(precision: .fp16, language: .english)
+    /// try await tts.load()
+    /// try await tts.setReferenceAudio(from: referenceURL)
+    /// let audio = try await tts.synthesize("Hello world!", voice: "")
+    /// ```
+    public static func chatterbox(
+        precision: ModelPrecision = .fp32,
+        language: ChatterboxLanguage = .english,
+        useRuAccent: Bool = true,
+        convertToStressMarks: Bool = true
+    ) -> ChatterboxTTSProvider {
+        ChatterboxTTSProvider(
+            precision: precision,
+            language: language,
+            useRuAccent: useRuAccent,
+            convertToStressMarks: convertToStressMarks
+        )
+    }
+    
+    /// Create ChatterBox TTS provider with explicit repo (for custom repos)
+    /// - Parameters:
+    ///   - repo: Full HuggingFace repository ID
+    ///   - language: Target language (default: English)
+    ///   - useRuAccent: Enable automatic RUAccent for Russian (default: true)
+    ///   - convertToStressMarks: Convert + to Unicode stress marks (default: true)
+    /// - Returns: Configured ChatterboxTTSProvider
+    public static func chatterbox(
+        repo: String,
+        language: ChatterboxLanguage = .english,
+        useRuAccent: Bool = true,
+        convertToStressMarks: Bool = true
+    ) -> ChatterboxTTSProvider {
+        ChatterboxTTSProvider(
+            repo: repo,
+            language: language,
+            useRuAccent: useRuAccent,
+            convertToStressMarks: convertToStressMarks
+        )
+    }
+    
+    /// Create ChatterBox TTS provider with local model path (no download)
+    /// - Parameters:
+    ///   - modelPath: Path to ChatterBox model weights directory
+    ///   - language: Target language (default: English)
+    ///   - useRuAccent: Enable automatic RUAccent for Russian (default: true)
+    ///   - convertToStressMarks: Convert + to Unicode stress marks (default: true)
+    /// - Returns: Configured ChatterboxTTSProvider
+    public static func chatterbox(
+        modelPath: URL,
+        language: ChatterboxLanguage = .english,
+        useRuAccent: Bool = true,
+        convertToStressMarks: Bool = true
+    ) -> ChatterboxTTSProvider {
+        ChatterboxTTSProvider(
+            modelPath: modelPath,
+            language: language,
+            useRuAccent: useRuAccent,
+            convertToStressMarks: convertToStressMarks
+        )
+    }
 }
 
 /// ClearVoice extension for registering TTS providers
@@ -145,6 +222,37 @@ extension ClearVoice {
         for model: TextPreprocessorModel = .ruaccent(profile: .balanced)
     ) {
         self.register(preprocessor: preprocessor, for: model)
+    }
+    
+    /// Configure with ChatterBox TTS provider
+    /// - Parameters:
+    ///   - synthesizer: The ChatterboxTTSProvider instance
+    ///   - model: The synthesis model type (default: chatterbox english)
+    public func configure(
+        synthesizer: ChatterboxTTSProvider,
+        for model: SynthesisModel = .chatterbox(language: .english)
+    ) async throws {
+        try await synthesizer.load()
+        self.register(synthesizer: synthesizer, for: model)
+    }
+    
+    /// Convenience: Configure ChatterBox TTS for a specific language
+    /// - Parameters:
+    ///   - language: Target language
+    ///   - precision: Model precision (default: fp32)
+    ///   - useRuAccent: Enable RUAccent for Russian (default: true)
+    public func configureChatterbox(
+        language: ChatterboxLanguage = .english,
+        precision: ModelPrecision = .fp32,
+        useRuAccent: Bool = true
+    ) async throws {
+        let provider = TTSProviders.chatterbox(
+            precision: precision,
+            language: language,
+            useRuAccent: useRuAccent
+        )
+        try await provider.load()
+        self.register(synthesizer: provider, for: .chatterbox(language: language))
     }
 }
 

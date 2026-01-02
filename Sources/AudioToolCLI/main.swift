@@ -83,7 +83,7 @@ func printUsage() {
 }
 
 // Validate input (skip for TTS which doesn't need input audio)
-let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix", "voice_match", "voicematch", "match"]
+let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix", "voice_match", "voicematch", "match", "chatterbox", "chatterbox_expressive"]
 guard !inputPath.isEmpty || ttsModels.contains(model.lowercased()) else {
     print("Error: Input path required (--input)")
     printUsage()
@@ -607,6 +607,10 @@ Task {
             try await runVoiceMixingTest()
         case "voice_match", "voicematch", "match":
             try await runVoiceMatchingTest()
+        case "chatterbox", "cb":
+            try await runChatterboxTest()
+        case "chatterbox_expressive", "cb_expressive":
+            try await runChatterboxExpressiveTest()
         #if canImport(ClearVoiceSpeech)
         case "transcribe", "speech", "stt":
             if #available(macOS 26.0, *) {
@@ -618,7 +622,7 @@ Task {
         #endif
         default:
             print("Unknown model: \(model)")
-            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro, voice_mix, voice_match, transcribe")
+            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro, voice_mix, voice_match, chatterbox, chatterbox_expressive, transcribe")
             exit(1)
         }
         exit(0)
