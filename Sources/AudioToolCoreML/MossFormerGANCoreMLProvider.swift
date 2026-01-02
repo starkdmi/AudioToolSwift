@@ -7,7 +7,7 @@
 //
 
 import Foundation
-import CoreML
+@preconcurrency import CoreML
 import Accelerate
 import ClearVoice
 import ClearVoiceCore
@@ -18,13 +18,13 @@ import MLXNN
 
 /// CoreML MossFormer GAN Speech Enhancement (16kHz)
 /// Uses Accelerate for STFT/ISTFT and CoreML for model inference
-public final class MossFormerGANCoreMLProvider: SpeechEnhancer, @unchecked Sendable {
+public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     
-    public let sampleRate: Int = 16000
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
-    public let minChunkSize: Int = 3200   // 0.2s at 16kHz
-    public let recommendedChunkSize: Int = 25500  // 1.594s at 16kHz (256 frames)
+    public nonisolated let sampleRate: Int = 16000
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
+    public nonisolated let minChunkSize: Int = 3200   // 0.2s at 16kHz
+    public nonisolated let recommendedChunkSize: Int = 25500  // 1.594s at 16kHz (256 frames)
     
     // Audio parameters (must match model training)
     private let nFFT: Int = 400
@@ -467,7 +467,7 @@ public final class MossFormerGANCoreMLProvider: SpeechEnhancer, @unchecked Senda
     
     // MARK: - Streaming
     
-    public func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
+    public nonisolated func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 for await chunk in input {

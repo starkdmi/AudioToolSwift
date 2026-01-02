@@ -8,7 +8,7 @@
 import Foundation
 import ClearVoice
 import ClearVoiceCore
-import USSMLXSwift
+@preconcurrency import USSMLXSwift
 import AudioUtils
 import MLX
 
@@ -16,13 +16,13 @@ import MLX
 
 /// Universal Speech Separation provider using ResUNet30 with FiLM conditioning
 /// Separates audio by sound type (speech, music, noise, etc.)
-public final class USSMLXProvider: AudioProcessor, @unchecked Sendable {
+public actor USSMLXProvider: AudioProcessor {
     
     // MARK: - AudioProcessor Conformance
     
-    public let sampleRate: Int = 32000
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
+    public nonisolated let sampleRate: Int = 32000
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
     
     // MARK: - Private Properties
     

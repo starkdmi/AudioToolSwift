@@ -6,20 +6,20 @@
 //
 
 import Foundation
-import FluidAudio
+@preconcurrency import FluidAudio
 import ClearVoiceCore
 
 // MARK: - FluidAudio Diarization Provider
 
 /// Pyannote speaker diarization provider using FluidAudio's OfflineDiarizerManager
 /// Uses pyannote community-1 pipeline with VBx clustering for offline diarization
-public final class FluidAudioDiarizationProvider: DiarizationProvider, @unchecked Sendable {
+public actor FluidAudioDiarizationProvider: DiarizationProvider {
     
     // MARK: - AudioProcessor Conformance
     
-    public let sampleRate: Int = 16000
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
+    public nonisolated let sampleRate: Int = 16000
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
     
     // MARK: - Private Properties
     

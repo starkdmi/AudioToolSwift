@@ -247,7 +247,7 @@ public struct VoiceMatchResult: Sendable {
 /// // Use matched weights with mixVoices
 /// let blended = try tts.mixVoices(result.weights)
 /// ```
-public final class KokoroVoiceMatcher: @unchecked Sendable {
+public actor KokoroVoiceMatcher {
     
     /// Protocol for embedding extraction (allows dependency injection)
     public protocol EmbeddingProvider: Sendable {
@@ -300,7 +300,7 @@ public final class KokoroVoiceMatcher: @unchecked Sendable {
     /// - Returns: Voice embedding table
     public func precomputeEmbeddings(
         tts: KokoroTTSProvider,
-        extractEmbedding: @escaping ([Float]) async throws -> [Float]
+        extractEmbedding: @Sendable @escaping ([Float]) async throws -> [Float]
     ) async throws -> VoiceEmbeddingTable {
         let voices = tts.availableVoices
         guard !voices.isEmpty else {
@@ -342,7 +342,7 @@ public final class KokoroVoiceMatcher: @unchecked Sendable {
     public func matchVoice(
         referenceAudio: [Float],
         embeddingTable: VoiceEmbeddingTable,
-        extractEmbedding: @escaping ([Float]) async throws -> [Float],
+        extractEmbedding: @Sendable @escaping ([Float]) async throws -> [Float],
         topK: Int? = nil
     ) async throws -> VoiceMatchResult {
         let startTime = Date()
@@ -417,7 +417,7 @@ public final class KokoroVoiceMatcher: @unchecked Sendable {
     public func matchVoice(
         url: URL,
         embeddingTable: VoiceEmbeddingTable,
-        extractEmbedding: @escaping (URL) async throws -> [Float],
+        extractEmbedding: @Sendable @escaping (URL) async throws -> [Float],
         topK: Int? = nil
     ) async throws -> VoiceMatchResult {
         let startTime = Date()

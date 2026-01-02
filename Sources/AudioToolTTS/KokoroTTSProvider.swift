@@ -67,7 +67,7 @@ public typealias TTSAudioBuffer = ClearVoiceCore.AudioBuffer
 /// Best quality voices: `af_heart` (A), `af_bella` (A-), `bf_emma` (B-)
 ///
 /// For full voice quality info: https://huggingface.co/mlx-community/Kokoro-82M-bf16/blob/main/VOICES.md
-public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
+public actor KokoroTTSProvider: SpeechSynthesizer {
     
     // MARK: - Public Properties
     
@@ -81,27 +81,32 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     public private(set) var state: ModelState = .notLoaded
     
     /// Observable state stream for UI
-    public var stateStream: AsyncStream<ModelState> {
+    public nonisolated var stateStream: AsyncStream<ModelState> {
         AsyncStream { continuation in
-            stateContinuations.append(continuation)
+            Task { await addStateContinuation(continuation) }
         }
+    }
+    
+    private func addStateContinuation(_ continuation: AsyncStream<ModelState>.Continuation) {
+        stateContinuations.append(continuation)
     }
     
     // MARK: - SpeechSynthesizer Conformance
     
-    public let sampleRate: Int = 24000
+    public nonisolated let sampleRate: Int = 24000
     
-    public var availableVoices: [String] {
-        Array(voiceEmbeddings.keys)
+    /// Available voices for this language (uses default list since embeddings are loaded lazily)
+    public nonisolated var availableVoices: [String] {
+        language.availableVoices.map { $0.rawValue }
     }
     
     // MARK: - Private Properties
     
     private var tts: KokoroTTS?
     private var modelPath: URL?
-    private let language: KokoroLanguage
-    private let repo: String
-    private let precision: ModelPrecision
+    private nonisolated let language: KokoroLanguage
+    private nonisolated let repo: String
+    private nonisolated let precision: ModelPrecision
     
     /// Voice embeddings cache (voice name -> MLXArray)
     private var voiceEmbeddings: [String: MLXArray] = [:]
@@ -172,7 +177,9 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
                 repo: repo,
                 matching: ["*.safetensors", "voices/*.npy", "config.json"]
             ) { [weak self] progress in
-                self?.updateState(.downloading(progress: progress.fractionCompleted))
+                Task { @MainActor in
+                    await self?.updateState(.downloading(progress: progress.fractionCompleted))
+                }
             }
             
             try await loadFromPath(path)
@@ -386,7 +393,7 @@ public final class KokoroTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     ///   - text: Text to synthesize
     ///   - voice: Voice name
     /// - Returns: Async stream of audio chunks
-    public func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<ClearVoiceCore.AudioBuffer, Error> {
+    public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<ClearVoiceCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {

@@ -40,9 +40,9 @@ struct AppleTTSTests {
     }
     
     @Test("AppleTTSProvider getVoicesForLanguage")
-    func testGetVoicesForLanguage() {
+    func testGetVoicesForLanguage() async {
         let provider = AppleTTSProvider(language: "fr-FR")
-        let voices = provider.getVoicesForLanguage()
+        let voices = await provider.getVoicesForLanguage()
         
         print("French voices:")
         for voice in voices.prefix(3) {

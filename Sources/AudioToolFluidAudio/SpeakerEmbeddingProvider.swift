@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import FluidAudio
+@preconcurrency import FluidAudio
 import ClearVoiceCore
 import AVFoundation
 
@@ -36,8 +36,8 @@ import AVFoundation
 /// ```
 ///
 /// ## Thread Safety
-/// This class is thread-safe and can be called from multiple async contexts.
-public final class SpeakerEmbeddingProvider: @unchecked Sendable {
+/// This actor provides thread-safe access to embedding extraction.
+public actor SpeakerEmbeddingProvider {
     
     // MARK: - Configuration
     
@@ -90,13 +90,13 @@ public final class SpeakerEmbeddingProvider: @unchecked Sendable {
     // MARK: - Public Properties
     
     /// Expected sample rate for input audio
-    public let sampleRate: Int = 16000
+    public nonisolated let sampleRate: Int = 16000
     
     /// Embedding dimension (WeSpeaker produces 256-dim embeddings)
-    public let embeddingDimension: Int = 256
+    public nonisolated let embeddingDimension: Int = 256
     
     /// Configuration for embedding extraction
-    public let config: Config
+    public nonisolated let config: Config
     
     /// Whether the provider is loaded and ready
     public var isReady: Bool { embeddingExtractor != nil }

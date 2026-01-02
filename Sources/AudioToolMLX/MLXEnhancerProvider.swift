@@ -8,11 +8,11 @@
 import Foundation
 import ClearVoice
 import ClearVoiceCore
-import MLX
-import MLXNN
-import AudioUtils  // SwiftAudio - used for audio I/O
-import Mossformer2MLXSwift
-import FRCRNMLXSwift
+@preconcurrency import MLX
+@preconcurrency import MLXNN
+@preconcurrency import AudioUtils  // SwiftAudio - used for audio I/O
+@preconcurrency import Mossformer2MLXSwift
+@preconcurrency import FRCRNMLXSwift
 
 /// Result type for background extraction (enhanced + background audio)
 public struct MLXEnhancedWithBackground: Sendable {
@@ -29,7 +29,7 @@ public struct MLXEnhancedWithBackground: Sendable {
 
 /// MLX MossFormer2 Speech Enhancement (48kHz)
 /// Chunking: 4s chunks, 25% overlap, discard-edges (from benchmarks)
-public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable {
+public actor MossFormer2SE48KProvider: SpeechEnhancer {
     
     /// HuggingFace repository for model weights
     public static let repo = "starkdmi/MossFormer2_SE_48K_MLX"
@@ -37,11 +37,11 @@ public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable
     /// Supported precisions for this model
     public static let supportedPrecisions: [ModelPrecision] = [.fp32, .fp16]
     
-    public let sampleRate: Int = 48000
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
-    public let minChunkSize: Int = 9600   // 0.2s at 48kHz
-    public let recommendedChunkSize: Int = 192000  // 4s at 48kHz (optimal from benchmarks)
+    public nonisolated let sampleRate: Int = 48000
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
+    public nonisolated let minChunkSize: Int = 9600   // 0.2s at 48kHz
+    public nonisolated let recommendedChunkSize: Int = 192000  // 4s at 48kHz (optimal from benchmarks)
     
     private var pipeline: MossFormer2Pipeline?
     private let weightsPath: String?
@@ -184,7 +184,7 @@ public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable
         return AudioBuffer(samples: enhanced.asArray(Float.self), sampleRate: sampleRate, channels: 1)
     }
     
-    public func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
+    public nonisolated func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 for await chunk in input {
@@ -235,13 +235,13 @@ public final class MossFormer2SE48KProvider: SpeechEnhancer, @unchecked Sendable
 
 /// MLX FRCRN Speech Enhancement (16kHz)
 /// Chunking: 4s chunks, 25% overlap, discard-edges (auto-enabled by default)
-public final class FRCRNSE16KProvider: SpeechEnhancer, @unchecked Sendable {
+public actor FRCRNSE16KProvider: SpeechEnhancer {
     
-    public let sampleRate: Int = 16000
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
-    public let minChunkSize: Int = 3200   // 0.2s at 16kHz
-    public let recommendedChunkSize: Int = 64000  // 4s at 16kHz
+    public nonisolated let sampleRate: Int = 16000
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
+    public nonisolated let minChunkSize: Int = 3200   // 0.2s at 16kHz
+    public nonisolated let recommendedChunkSize: Int = 64000  // 4s at 16kHz
     
     private var model: FRCRN_SE_16K?
     private let weightsPath: String
@@ -251,7 +251,7 @@ public final class FRCRNSE16KProvider: SpeechEnhancer, @unchecked Sendable {
     
     public init(weightsPath: String) {
         self.weightsPath = weightsPath
-        self.chunkingConfig = ChunkingConfig.frcrnSE16K(sampleRate: sampleRate)
+        self.chunkingConfig = ChunkingConfig.frcrnSE16K(sampleRate: 16000)
     }
     
     /// Load model weights
@@ -312,7 +312,7 @@ public final class FRCRNSE16KProvider: SpeechEnhancer, @unchecked Sendable {
         return AudioBuffer(samples: outputSamples, sampleRate: sampleRate, channels: 1)
     }
     
-    public func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
+    public nonisolated func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 for await chunk in input {

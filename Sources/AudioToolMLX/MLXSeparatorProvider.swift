@@ -8,20 +8,20 @@
 import Foundation
 import ClearVoice
 import ClearVoiceCore
-import MLX
-import MLXNN
-import AudioUtils
-import MossFormer2SS
-import DemucsMLXSwift
+@preconcurrency import MLX
+@preconcurrency import MLXNN
+@preconcurrency import AudioUtils
+@preconcurrency import MossFormer2SS
+@preconcurrency import DemucsMLXSwift
 
 // MARK: - MossFormer2 Speaker Separation Provider
 
 /// MLX MossFormer2 Speaker Separation - supports 2spk, 3spk, and WHAMR models
 /// Chunking: 4s chunks, 25% overlap, triangular blending
-public final class MossFormer2SSProvider: SpeechSeparator, @unchecked Sendable {
+public actor MossFormer2SSProvider: SpeechSeparator {
     
     // SpeechSeparator conformance
-    public var supportedSpeakerCounts: [Int] { [modelType.numSpeakers] }
+    public nonisolated var supportedSpeakerCounts: [Int] { [modelType.numSpeakers] }
     
     /// Available speaker separation models
     public enum Model: String, CaseIterable, Sendable {
@@ -65,12 +65,12 @@ public final class MossFormer2SSProvider: SpeechSeparator, @unchecked Sendable {
     }
     
     public let modelType: Model
-    public var sampleRate: Int { modelType.sampleRate }
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
+    public nonisolated var sampleRate: Int { modelType.sampleRate }
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
     
-    public var minChunkSize: Int { modelType.sampleRate / 5 }  // 0.2s
-    public var recommendedChunkSize: Int { modelType.sampleRate * 4 }  // 4s (from benchmarks)
+    public nonisolated var minChunkSize: Int { modelType.sampleRate / 5 }  // 0.2s
+    public nonisolated var recommendedChunkSize: Int { modelType.sampleRate * 4 }  // 4s (from benchmarks)
     
     private var model: MossFormer2_SS_16K?
     private let weightsPath: String?
@@ -255,7 +255,7 @@ public final class MossFormer2SSProvider: SpeechSeparator, @unchecked Sendable {
 
 /// Demucs source separation - separates audio into drums, bass, vocals, other
 /// Chunking: 7.8s chunks, 25% overlap, triangular blending (from benchmarks)
-public final class DemucsProvider: SpeechSeparator, @unchecked Sendable {
+public actor DemucsProvider: SpeechSeparator {
     
     public enum Source: String, CaseIterable, Sendable {
         case drums = "drums"
@@ -264,11 +264,11 @@ public final class DemucsProvider: SpeechSeparator, @unchecked Sendable {
         case other = "other"
     }
     
-    public let sampleRate: Int = 44100
-    public let inputChannels: Int = 2
-    public let outputChannels: Int = 1
+    public nonisolated let sampleRate: Int = 44100
+    public nonisolated let inputChannels: Int = 2
+    public nonisolated let outputChannels: Int = 1
     
-    public var supportedSpeakerCounts: [Int] { [4] }
+    public nonisolated var supportedSpeakerCounts: [Int] { [4] }
     
     private var models: [Source: HTDemucs] = [:]
     private let weightsDirectory: String

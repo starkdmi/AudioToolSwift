@@ -17,13 +17,13 @@ public typealias SpeechAudioBuffer = ClearVoiceCore.AudioBuffer
 
 /// On-device speech transcription using Apple's SpeechAnalyzer API (iOS 26+)
 @available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
-public final class AppleSpeechTranscriber: Transcriber, @unchecked Sendable {
+public actor AppleSpeechTranscriber: Transcriber {
     
     // MARK: - AudioProcessor Conformance
     
-    public let sampleRate: Int = 16000
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
+    public nonisolated let sampleRate: Int = 16000
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
     
     // MARK: - Properties
     
@@ -171,10 +171,10 @@ public final class AppleSpeechTranscriber: Transcriber, @unchecked Sendable {
         )
     }
     
-    public func streamTranscription(_ audio: AsyncStream<ClearVoiceCore.AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
+    public nonisolated func streamTranscription(_ audio: AsyncStream<ClearVoiceCore.AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
         AsyncThrowingStream { continuation in
             Task {
-                guard self.isModelAvailable else {
+                guard await self.isModelAvailable else {
                     continuation.finish(throwing: ClearVoiceError.modelNotLoaded("Apple Speech"))
                     return
                 }

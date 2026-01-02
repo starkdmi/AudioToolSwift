@@ -20,13 +20,13 @@ import ClearVoiceCore
 /// let tts = TTSProviders.apple(language: "fr-FR")
 /// let audio = try await tts.synthesize("Bonjour le monde", voice: "Thomas")
 /// ```
-public final class AppleTTSProvider: SpeechSynthesizer, @unchecked Sendable {
+public actor AppleTTSProvider: SpeechSynthesizer {
     
     // MARK: - SpeechSynthesizer Conformance
     
-    public let sampleRate: Int = 22050  // AVSpeechSynthesizer default
+    public nonisolated let sampleRate: Int = 22050  // AVSpeechSynthesizer default
     
-    public var availableVoices: [String] {
+    public nonisolated var availableVoices: [String] {
         AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language.hasPrefix(languageCode) || $0.language == language }
             .map { $0.identifier }
@@ -34,8 +34,8 @@ public final class AppleTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     
     // MARK: - Properties
     
-    private let language: String
-    private let languageCode: String
+    private nonisolated let language: String
+    private nonisolated let languageCode: String
     
     // MARK: - Initialization
     
@@ -115,7 +115,7 @@ public final class AppleTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     }
     
     /// Stream synthesized audio chunks
-    public func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<ClearVoiceCore.AudioBuffer, Error> {
+    public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<ClearVoiceCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let synthesizer = AVSpeechSynthesizer()
@@ -180,7 +180,7 @@ public final class AppleTTSProvider: SpeechSynthesizer, @unchecked Sendable {
     
     // MARK: - Private Methods
     
-    private func findVoice(_ voiceSpec: String) -> AVSpeechSynthesisVoice? {
+    private nonisolated func findVoice(_ voiceSpec: String) -> AVSpeechSynthesisVoice? {
         guard !voiceSpec.isEmpty else { return nil }
         
         // Try exact identifier match
@@ -204,7 +204,7 @@ public final class AppleTTSProvider: SpeechSynthesizer, @unchecked Sendable {
         return nil
     }
     
-    private func extractSamples(from buffer: AVAudioPCMBuffer) -> [Float] {
+    private nonisolated func extractSamples(from buffer: AVAudioPCMBuffer) -> [Float] {
         guard let channelData = buffer.floatChannelData else { return [] }
         
         let frameCount = Int(buffer.frameLength)

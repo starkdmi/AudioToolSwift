@@ -6,25 +6,25 @@
 //
 
 import Foundation
-import FluidAudio
+@preconcurrency import FluidAudio
 import ClearVoiceCore
 
 // MARK: - FluidAudio VAD Provider
 
 /// Silero VAD provider using FluidAudio's VadManager
 /// Implements VADProvider protocol for integration with ClearVoice pipeline
-public final class FluidAudioVADProvider: VADProvider, @unchecked Sendable {
+public actor FluidAudioVADProvider: VADProvider {
     
     // MARK: - AudioProcessor Conformance
     
-    public let sampleRate: Int = 16000
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
+    public nonisolated let sampleRate: Int = 16000
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
     
     // MARK: - StreamableProcessor Conformance
     
-    public var minChunkSize: Int { 512 }  // 32ms at 16kHz
-    public var recommendedChunkSize: Int { 4096 }  // 256ms at 16kHz (FluidAudio default)
+    public nonisolated var minChunkSize: Int { 512 }  // 32ms at 16kHz
+    public nonisolated var recommendedChunkSize: Int { 4096 }  // 256ms at 16kHz (FluidAudio default)
     
     // MARK: - Private Properties
     
@@ -89,10 +89,10 @@ public final class FluidAudioVADProvider: VADProvider, @unchecked Sendable {
     }
     
     /// Stream VAD segments as detected
-    public func streamDetection(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<VADSegment, Error> {
+    public nonisolated func streamDetection(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<VADSegment, Error> {
         AsyncThrowingStream { continuation in
             Task {
-                guard let manager = self.manager else {
+                guard let manager = await self.manager else {
                     continuation.finish(throwing: ClearVoiceError.modelNotLoaded("FluidAudio VAD"))
                     return
                 }
@@ -137,7 +137,7 @@ public final class FluidAudioVADProvider: VADProvider, @unchecked Sendable {
     // MARK: - StreamableProcessor Conformance
     
     /// Stream processing (passthrough with VAD overlay)
-    public func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
+    public nonisolated func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
         // For VAD, we just pass through the audio (VAD is metadata, not audio modification)
         AsyncThrowingStream { continuation in
             Task {

@@ -8,10 +8,10 @@
 import Foundation
 import ClearVoice
 import ClearVoiceCore
-import ClearVoiceTTS
+@preconcurrency import ClearVoiceTTS
 import ClearVoiceFluidAudio
-import AudioUtils
-import MLX
+@preconcurrency import AudioUtils
+@preconcurrency import MLX
 
 // MARK: - Kokoro TTS Test
 
@@ -78,7 +78,7 @@ func runKokoroTest() async throws {
         // Create provider for this language (using local path to avoid re-download)
         let provider = KokoroTTSProvider(modelPath: modelPath, language: language)
         try await provider.load()
-        try provider.loadVoices(from: voicesDir)
+        try await provider.loadVoices(from: voicesDir)
         
         // Run tests for this language
         for (voice, text) in tests {
@@ -157,7 +157,7 @@ func runVoiceMixingTest() async throws {
     // Create provider
     let provider = KokoroTTSProvider(modelPath: modelPath, language: .americanEnglish)
     try await provider.load()
-    try provider.loadVoices(from: voicesDir)
+    try await provider.loadVoices(from: voicesDir)
     
     print("\nLoaded voices: \(provider.availableVoices.sorted().joined(separator: ", "))")
     
@@ -192,7 +192,7 @@ func runVoiceMixingTest() async throws {
     // Now test mixed voice
     print("\n--- Mixed Voice (50% Bella + 50% Sarah) ---")
     
-    let mixedVoice = try provider.mixVoices([
+    let mixedVoice = try await provider.mixVoices([
         (name: "af_bella", weight: 0.5),
         (name: "af_sarah", weight: 0.5)
     ])
@@ -211,7 +211,7 @@ func runVoiceMixingTest() async throws {
     print("\n--- Bonus Mixes ---")
     
     // 70/30 Bella/Sarah
-    let mix70_30 = try provider.mixVoices([
+    let mix70_30 = try await provider.mixVoices([
         (name: "af_bella", weight: 0.7),
         (name: "af_sarah", weight: 0.3)
     ])
@@ -220,7 +220,7 @@ func runVoiceMixingTest() async throws {
     print("[70/30] ✓ Saved: kokoro_bella70_sarah30.wav")
     
     // 30/70 Bella/Sarah
-    let mix30_70 = try provider.mixVoices([
+    let mix30_70 = try await provider.mixVoices([
         (name: "af_bella", weight: 0.3),
         (name: "af_sarah", weight: 0.7)
     ])
@@ -292,7 +292,7 @@ func runVoiceMatchingTest() async throws {
     // Create TTS provider
     let tts = KokoroTTSProvider(modelPath: modelPath, language: .americanEnglish)
     try await tts.load()
-    try tts.loadVoices(from: voicesDir)
+    try await tts.loadVoices(from: voicesDir)
     print("✓ Loaded \(tts.availableVoices.count) voices: \(tts.availableVoices.sorted().joined(separator: ", "))\n")
     
     // Create speaker embedding provider
@@ -359,7 +359,7 @@ func runVoiceMatchingTest() async throws {
         // Generate audio with matched voice
         print("\nSynthesizing with matched blend...")
         let synthStart = Date()
-        let blendedVoice = try tts.blendedVoice(from: result)
+        let blendedVoice = try await tts.blendedVoice(from: result)
         let audio = try await tts.synthesize(testText, voiceEmbedding: blendedVoice)
         let synthTime = Date().timeIntervalSince(synthStart)
         print("Synthesis: \(String(format: "%.2f", audio.duration))s audio in \(String(format: "%.2f", synthTime))s (RTF: \(String(format: "%.1fx", audio.duration / synthTime)))")
@@ -400,7 +400,7 @@ func runVoiceMatchingTest() async throws {
     // Generate audio with female-filtered blend
     print("\nSynthesizing with female voice blend...")
     let synthStart = Date()
-    let femaleBlend = try tts.blendedVoice(from: femaleResult)
+    let femaleBlend = try await tts.blendedVoice(from: femaleResult)
     let femaleAudio = try await tts.synthesize(testText, voiceEmbedding: femaleBlend)
     let synthTime = Date().timeIntervalSince(synthStart)
     print("Synthesis: \(String(format: "%.2f", femaleAudio.duration))s audio in \(String(format: "%.2f", synthTime))s (RTF: \(String(format: "%.1fx", femaleAudio.duration / synthTime)))")
@@ -455,7 +455,7 @@ func runVoiceMatchingTest() async throws {
         
         // Generate and save audio
         print("\nSynthesizing...")
-        let blend = try tts.blendedVoice(from: result)
+        let blend = try await tts.blendedVoice(from: result)
         let audio = try await tts.synthesize(testText, voiceEmbedding: blend)
         
         let savePath = "\(outputDir)/matched_\(testCase.name).wav"

@@ -6,13 +6,13 @@
 //
 
 import Foundation
-import FluidAudio
+@preconcurrency import FluidAudio
 import ClearVoiceCore
 
 // MARK: - Model Version Enum
 
 /// Parakeet model version selection
-public enum ParakeetVersion {
+public enum ParakeetVersion: Sendable {
     case v2  // English-only, faster
     case v3  // Multilingual (English + others)
     
@@ -28,13 +28,13 @@ public enum ParakeetVersion {
 
 /// Parakeet v3 transcription provider using FluidAudio's ASR
 /// Implements Transcriber protocol for integration with ClearVoice pipeline
-public final class FluidAudioTranscriber: Transcriber, @unchecked Sendable {
+public actor FluidAudioTranscriber: Transcriber {
     
     // MARK: - AudioProcessor Conformance
     
-    public let sampleRate: Int = 16000
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
+    public nonisolated let sampleRate: Int = 16000
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
     
     // MARK: - Private Properties
     
@@ -79,10 +79,10 @@ public final class FluidAudioTranscriber: Transcriber, @unchecked Sendable {
     }
     
     /// Stream transcription segments as recognized
-    public func streamTranscription(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
+    public nonisolated func streamTranscription(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
         AsyncThrowingStream { continuation in
             Task {
-                guard let manager = self.asrManager else {
+                guard let manager = await self.asrManager else {
                     continuation.finish(throwing: ClearVoiceError.modelNotLoaded("FluidAudio ASR"))
                     return
                 }

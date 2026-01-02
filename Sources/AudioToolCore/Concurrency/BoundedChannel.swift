@@ -26,10 +26,20 @@ public actor BoundedChannel<T: Sendable> {
     public func send(_ value: T) async {
         guard !isClosed else { return }
         
-        // Wait if buffer is full
+        // Wait if buffer is full - re-check after each wake
         while buffer.count >= capacity && !isClosed {
-            await withCheckedContinuation { continuation in
-                sendWaiters.append(continuation)
+            // Use a flag to track if we actually need to wait
+            // This prevents the race where space frees up before continuation is stored
+            let shouldWait = buffer.count >= capacity && !isClosed
+            if shouldWait {
+                await withCheckedContinuation { continuation in
+                    // Double-check after entering continuation - if space freed, resume immediately
+                    if buffer.count < capacity || isClosed {
+                        continuation.resume()
+                    } else {
+                        sendWaiters.append(continuation)
+                    }
+                }
             }
         }
         

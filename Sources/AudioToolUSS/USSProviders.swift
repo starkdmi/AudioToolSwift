@@ -7,7 +7,7 @@
 
 import Foundation
 import ClearVoiceCore
-import USSMLXSwift
+@preconcurrency import USSMLXSwift
 
 // MARK: - USS Providers Factory
 

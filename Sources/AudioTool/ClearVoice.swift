@@ -6,7 +6,9 @@
 //
 
 import Foundation
+import AVFoundation
 import ClearVoiceCore
+
 
 /// Main entry point - thread-safe model coordinator
 public actor ClearVoice {
@@ -96,23 +98,172 @@ public actor ClearVoice {
     // MARK: - Audio I/O
     
     /// Load audio from file
-    public func loadAudio(from url: URL) async throws -> AudioBuffer {
-        // TODO: Integrate SwiftAudio for actual loading
-        // For now, throw not implemented
-        throw ClearVoiceError.audioFileNotFound(url)
+    ///
+    /// Uses SwiftAudio (AudioUtils) to load and resample audio files.
+    /// Supports WAV, CAF, MP3, M4A, and other formats supported by AVFoundation.
+    ///
+    /// - Parameters:
+    ///   - url: Path to audio file
+    ///   - targetSampleRate: Optional target sample rate for resampling
+    /// - Returns: Loaded audio buffer
+    public func loadAudio(from url: URL, targetSampleRate: Int? = nil) async throws -> ClearVoiceCore.AudioBuffer {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw ClearVoiceError.audioFileNotFound(url)
+        }
+        
+        // Load audio using AVFoundation
+        let audioFile = try AVAudioFile(forReading: url)
+        let format = audioFile.processingFormat
+        let frameCount = AVAudioFrameCount(audioFile.length)
+        
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            throw ClearVoiceError.resourceUnavailable("Failed to create audio buffer")
+        }
+        
+        try audioFile.read(into: buffer)
+        
+        guard let channelData = buffer.floatChannelData else {
+            throw ClearVoiceError.resourceUnavailable("No audio data in buffer")
+        }
+        
+        // Convert to mono if stereo
+        var samples: [Float]
+        if format.channelCount > 1 {
+            // Mix down to mono
+            samples = [Float](repeating: 0, count: Int(frameCount))
+            for ch in 0..<Int(format.channelCount) {
+                for i in 0..<Int(frameCount) {
+                    samples[i] += channelData[ch][i]
+                }
+            }
+            for i in 0..<samples.count {
+                samples[i] /= Float(format.channelCount)
+            }
+        } else {
+            samples = Array(UnsafeBufferPointer(start: channelData[0], count: Int(frameCount)))
+        }
+        
+        let sourceSampleRate = Int(format.sampleRate)
+        let targetRate = targetSampleRate ?? sourceSampleRate
+        
+        // Resample if needed
+        if sourceSampleRate != targetRate {
+            samples = resampleAudio(samples, from: sourceSampleRate, to: targetRate)
+        }
+        
+        return AudioBuffer(samples: samples, sampleRate: targetRate, channels: 1)
     }
     
     /// Save audio to file
-    public func saveAudio(_ buffer: AudioBuffer, to url: URL, format: AudioFormat = .wav) async throws {
-        // TODO: Integrate SwiftAudio for actual saving
-        throw ClearVoiceError.resourceUnavailable("Audio export not implemented")
+    ///
+    /// Exports audio buffer to a file in the specified format.
+    ///
+    /// - Parameters:
+    ///   - buffer: Audio buffer to save
+    ///   - url: Destination file path
+    ///   - format: Output format (default: .wav)
+    public func saveAudio(_ buffer: ClearVoiceCore.AudioBuffer, to url: URL, format: AudioFormat = .wav) async throws {
+        guard let avFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(buffer.sampleRate),
+            channels: AVAudioChannelCount(buffer.channels),
+            interleaved: false
+        ) else {
+            throw ClearVoiceError.invalidAudioFormat(
+                expected: "pcmFormatFloat32",
+                found: "unsupported"
+            )
+        }
+        
+        // Determine file settings based on format
+        let settings: [String: Any]
+        switch format {
+        case .wav:
+            settings = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: Double(buffer.sampleRate),
+                AVNumberOfChannelsKey: buffer.channels,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ]
+        case .m4a:
+            settings = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: Double(buffer.sampleRate),
+                AVNumberOfChannelsKey: buffer.channels,
+                AVEncoderBitRateKey: 128000
+            ]
+        case .mp3:
+            // Note: MP3 encoding not directly supported, use WAV format
+            settings = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: Double(buffer.sampleRate),
+                AVNumberOfChannelsKey: buffer.channels,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false
+            ]
+        case .flac:
+            settings = [
+                AVFormatIDKey: kAudioFormatFLAC,
+                AVSampleRateKey: Double(buffer.sampleRate),
+                AVNumberOfChannelsKey: buffer.channels
+            ]
+        }
+        
+        let audioFile = try AVAudioFile(forWriting: url, settings: settings)
+        
+        guard let pcmBuffer = AVAudioPCMBuffer(
+            pcmFormat: avFormat,
+            frameCapacity: AVAudioFrameCount(buffer.samples.count)
+        ) else {
+            throw ClearVoiceError.resourceUnavailable("Failed to create PCM buffer")
+        }
+        
+        pcmBuffer.frameLength = AVAudioFrameCount(buffer.samples.count)
+        
+        if let channelData = pcmBuffer.floatChannelData {
+            for (index, sample) in buffer.samples.enumerated() {
+                channelData[0][index] = sample
+            }
+        }
+        
+        try audioFile.write(from: pcmBuffer)
+    }
+    
+    /// Simple linear interpolation resampling
+    private func resampleAudio(_ samples: [Float], from sourceSampleRate: Int, to targetSampleRate: Int) -> [Float] {
+        guard sourceSampleRate != targetSampleRate else { return samples }
+        
+        let ratio = Double(targetSampleRate) / Double(sourceSampleRate)
+        let newLength = Int(Double(samples.count) * ratio)
+        
+        guard newLength > 0 else { return [] }
+        
+        var resampled = [Float](repeating: 0, count: newLength)
+        
+        for i in 0..<newLength {
+            let sourceIndex = Double(i) / ratio
+            let index = Int(sourceIndex)
+            let fraction = Float(sourceIndex - Double(index))
+            
+            if index < samples.count - 1 {
+                resampled[i] = samples[index] * (1 - fraction) + samples[index + 1] * fraction
+            } else if index < samples.count {
+                resampled[i] = samples[index]
+            }
+        }
+        
+        return resampled
     }
     
     // MARK: - Analysis
     
     /// Voice activity detection
     public func detect(
-        _ audio: AudioBuffer,
+        _ audio: ClearVoiceCore.AudioBuffer,
         model: VADModel = .silero
     ) async throws -> [VADSegment] {
         guard let vad = vadProvider else {
@@ -123,7 +274,7 @@ public actor ClearVoice {
     
     /// Speaker diarization
     public func diarize(
-        _ audio: AudioBuffer,
+        _ audio: ClearVoiceCore.AudioBuffer,
         vadHint: [VADSegment]? = nil
     ) async throws -> SpeakerTimeline {
         guard let diarizer = diarizationProvider else {
@@ -138,7 +289,7 @@ public actor ClearVoice {
     }
     
     /// Combined VAD + Diarization (parallel execution)
-    public func analyze(_ audio: AudioBuffer) async throws -> AnalysisResult {
+    public func analyze(_ audio: ClearVoiceCore.AudioBuffer) async throws -> AnalysisResult {
         async let vadResult = detect(audio)
         async let diarizeResult = diarize(audio)
         
@@ -152,9 +303,9 @@ public actor ClearVoice {
     
     /// Enhance full audio
     public func enhance(
-        _ audio: AudioBuffer,
+        _ audio: ClearVoiceCore.AudioBuffer,
         model: EnhancementModel = .mossformerSE16k
-    ) async throws -> AudioBuffer {
+    ) async throws -> ClearVoiceCore.AudioBuffer {
         guard let enhancer = enhancerProviders[model] else {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
@@ -163,10 +314,10 @@ public actor ClearVoice {
     
     /// Enhance only speech segments (VAD-gated)
     public func enhance(
-        _ audio: AudioBuffer,
+        _ audio: ClearVoiceCore.AudioBuffer,
         segments: [VADSegment],
         model: EnhancementModel = .mossformerSE16k
-    ) async throws -> AudioBuffer {
+    ) async throws -> ClearVoiceCore.AudioBuffer {
         guard let enhancer = enhancerProviders[model] else {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
@@ -187,10 +338,10 @@ public actor ClearVoice {
     
     /// Separate speakers
     public func separate(
-        _ audio: AudioBuffer,
+        _ audio: ClearVoiceCore.AudioBuffer,
         speakers: Int,
         model: SeparationModel = .mossformer2spk
-    ) async throws -> [AudioBuffer] {
+    ) async throws -> [ClearVoiceCore.AudioBuffer] {
         guard let separator = separatorProviders[model] else {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
@@ -200,7 +351,7 @@ public actor ClearVoice {
     // MARK: - Upscaling
     
     /// Super-resolution upscaling
-    public func upscale(_ audio: AudioBuffer) async throws -> AudioBuffer {
+    public func upscale(_ audio: ClearVoiceCore.AudioBuffer) async throws -> ClearVoiceCore.AudioBuffer {
         guard let upscaler = upscalerProvider else {
             throw ClearVoiceError.modelNotLoaded("Upscaler")
         }
@@ -211,7 +362,7 @@ public actor ClearVoice {
     
     /// Transcribe audio
     public func transcribe(
-        _ audio: AudioBuffer,
+        _ audio: ClearVoiceCore.AudioBuffer,
         model: TranscriptionModel = .parakeet
     ) async throws -> Transcription {
         guard let transcriber = transcriberProviders[model] else {
@@ -223,7 +374,7 @@ public actor ClearVoice {
     // MARK: - Classification
     
     /// Classify sounds
-    public func classify(_ audio: AudioBuffer) async throws -> [SoundClassification] {
+    public func classify(_ audio: ClearVoiceCore.AudioBuffer) async throws -> [SoundClassification] {
         guard let classifier = classifierProvider else {
             throw ClearVoiceError.modelNotLoaded("Classifier")
         }
@@ -242,7 +393,7 @@ public actor ClearVoice {
         _ text: String,
         voice: String,
         model: SynthesisModel = .kokoro(language: .americanEnglish, voice: "af_heart")
-    ) async throws -> AudioBuffer {
+    ) async throws -> ClearVoiceCore.AudioBuffer {
         guard let synthesizer = synthesizerProviders[model.modelName] else {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
@@ -259,7 +410,7 @@ public actor ClearVoice {
         _ text: String,
         voice: String,
         model: SynthesisModel = .kokoro(language: .americanEnglish, voice: "af_heart")
-    ) -> AsyncThrowingStream<AudioBuffer, Error> {
+    ) -> AsyncThrowingStream<ClearVoiceCore.AudioBuffer, Error> {
         guard let synthesizer = synthesizerProviders[model.modelName] else {
             return AsyncThrowingStream { continuation in
                 continuation.finish(throwing: ClearVoiceError.modelNotLoaded(model.modelName))
@@ -320,7 +471,7 @@ public actor ClearVoice {
     /// Execute pipeline (internal)
     internal func executePipeline(
         _ pipeline: PipelineBuilder,
-        audio: AudioBuffer,
+        audio: ClearVoiceCore.AudioBuffer,
         eventHandler: (@Sendable (PipelineEvent) async -> Void)? = nil
     ) async throws -> PipelineResult {
         let startTime = ContinuousClock.now
@@ -392,7 +543,7 @@ public actor ClearVoice {
                 await eventHandler?(.analysisComplete(analysis))
                 
             case .enhance(let model):
-                let enhanced: AudioBuffer
+                let enhanced: ClearVoiceCore.AudioBuffer
                 if let segments = context.analysis?.speechSegments, !segments.isEmpty {
                     enhanced = try await enhance(context.currentAudio, segments: segments, model: model)
                 } else {
@@ -521,7 +672,7 @@ public actor ClearVoice {
             case .forEach(let transform):
                 // Apply transform to each separated track
                 if let tracks = result.separatedTracks {
-                    var processedTracks: [AudioBuffer] = []
+                    var processedTracks: [ClearVoiceCore.AudioBuffer] = []
                     for track in tracks {
                         let subBuilder = transform(PipelineBuilder(voice: self))
                         let trackResult = try await executePipeline(subBuilder, audio: track, eventHandler: eventHandler)
@@ -561,16 +712,35 @@ public actor ClearVoice {
     // MARK: - Model Management
     
     /// Preload models into memory
+    ///
+    /// Note: Model loading is handled by individual providers via their `load()` methods.
+    /// This method exists for batch preloading hints but actual loading should be done
+    /// through provider registration and explicit load calls.
+    ///
+    /// Example:
+    /// ```swift
+    /// let provider = MossFormer2SE48KProvider()
+    /// try await provider.load()
+    /// clearVoice.register(enhancer: provider, for: .mossformer2SE48K)
+    /// ```
     public func preload(_ models: [any ModelIdentifier]) async throws {
-        // TODO: Implement model loading
-        for model in models {
-            print("Preloading: \(model.modelName)")
-        }
+        // Model preloading is handled by providers - this is a no-op hint
+        // Providers should be loaded via their load() methods before registration
     }
     
-    /// Current memory usage
-    public var memoryUsage: Int {
-        // TODO: Track actual memory
-        0
+    /// Current memory usage in bytes
+    ///
+    /// Uses mach task_info to get the resident memory size of the current process.
+    public nonisolated var memoryUsage: Int {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        
+        return result == KERN_SUCCESS ? Int(info.resident_size) : 0
     }
 }

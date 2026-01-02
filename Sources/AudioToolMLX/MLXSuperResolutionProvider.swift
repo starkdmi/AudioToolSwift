@@ -17,7 +17,7 @@ import MossFormer2SR
 
 /// MLX MossFormer2 Super Resolution - upsamples audio to 48kHz
 /// Chunking: 4s chunks, 50% overlap, Hann window (from benchmarks)
-public final class MossFormer2SR48KProvider: AudioUpscaler, @unchecked Sendable {
+public actor MossFormer2SR48KProvider: AudioUpscaler {
     
     /// HuggingFace repository for model weights
     public static let repo = "starkdmi/MossFormer2_SR_48K_MLX"
@@ -26,13 +26,13 @@ public final class MossFormer2SR48KProvider: AudioUpscaler, @unchecked Sendable 
     public static let supportedPrecisions: [ModelPrecision] = [.fp32]
     
     // AudioUpscaler conformance
-    public var inputSampleRate: Int { 16000 }
-    public var outputSampleRate: Int { 48000 }
+    public nonisolated var inputSampleRate: Int { 16000 }
+    public nonisolated var outputSampleRate: Int { 48000 }
     
     // AudioProcessor conformance
-    public var sampleRate: Int { outputSampleRate }
-    public let inputChannels: Int = 1
-    public let outputChannels: Int = 1
+    public nonisolated var sampleRate: Int { 48000 }
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
     
     private var model: MossFormer2_SR_48K?
     private var args: AttrDict = AttrDict()

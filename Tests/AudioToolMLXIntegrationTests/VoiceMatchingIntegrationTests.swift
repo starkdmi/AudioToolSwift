@@ -8,10 +8,10 @@
 import XCTest
 import ClearVoice
 import ClearVoiceCore
-import ClearVoiceTTS
-import ClearVoiceFluidAudio
-import MLX
-import AudioUtils
+@preconcurrency import ClearVoiceTTS
+@preconcurrency import ClearVoiceFluidAudio
+@preconcurrency import MLX
+@preconcurrency import AudioUtils
 
 final class VoiceMatchingIntegrationTests: XCTestCase {
     
@@ -72,7 +72,7 @@ final class VoiceMatchingIntegrationTests: XCTestCase {
         let voicesDir = modelURL.appendingPathComponent("voices")
         let tts = KokoroTTSProvider(modelPath: modelURL, language: .americanEnglish)
         try await tts.load()
-        try tts.loadVoices(from: voicesDir)
+        try await tts.loadVoices(from: voicesDir)
         print("✓ Loaded \(tts.availableVoices.count) voices\n")
         
         // Load speaker embedding provider
@@ -90,7 +90,7 @@ final class VoiceMatchingIntegrationTests: XCTestCase {
         let embeddingTable = try await matcher.precomputeEmbeddings(
             tts: tts,
             extractEmbedding: { audio in
-                let audio16k = self.resampleTo16kHz(audio, from: 24000)
+                let audio16k = resampleTo16kHz(audio, from: 24000)
                 return try await embeddingProvider.extractEmbedding(audio16k)
             }
         )
@@ -146,7 +146,7 @@ final class VoiceMatchingIntegrationTests: XCTestCase {
             // Generate output audio
             print("\nSynthesizing...")
             let synthStart = Date()
-            let blendedVoice = try tts.blendedVoice(from: result)
+            let blendedVoice = try await tts.blendedVoice(from: result)
             let audio = try await tts.synthesize(testText, voiceEmbedding: blendedVoice)
             let synthTime = Date().timeIntervalSince(synthStart)
             print("Synthesis: \(String(format: "%.2f", audio.duration))s audio in \(String(format: "%.2f", synthTime))s")
@@ -170,28 +170,28 @@ final class VoiceMatchingIntegrationTests: XCTestCase {
         
         GPU.clearCache()
     }
+}
+
+// Helper: Resample to 16kHz (global to avoid capturing non-Sendable self)
+private func resampleTo16kHz(_ samples: [Float], from sourceRate: Int) -> [Float] {
+    guard sourceRate != 16000 else { return samples }
     
-    // Helper: Resample to 16kHz
-    private func resampleTo16kHz(_ samples: [Float], from sourceRate: Int) -> [Float] {
-        guard sourceRate != 16000 else { return samples }
+    let ratio = Float(16000) / Float(sourceRate)
+    let outputLength = Int(Float(samples.count) * ratio)
+    guard outputLength > 0 else { return [] }
+    
+    var output = [Float](repeating: 0, count: outputLength)
+    
+    for i in 0..<outputLength {
+        let srcPos = Float(i) / ratio
+        let srcIdx = Int(srcPos)
+        let frac = srcPos - Float(srcIdx)
         
-        let ratio = Float(16000) / Float(sourceRate)
-        let outputLength = Int(Float(samples.count) * ratio)
-        guard outputLength > 0 else { return [] }
+        let idx0 = min(srcIdx, samples.count - 1)
+        let idx1 = min(srcIdx + 1, samples.count - 1)
         
-        var output = [Float](repeating: 0, count: outputLength)
-        
-        for i in 0..<outputLength {
-            let srcPos = Float(i) / ratio
-            let srcIdx = Int(srcPos)
-            let frac = srcPos - Float(srcIdx)
-            
-            let idx0 = min(srcIdx, samples.count - 1)
-            let idx1 = min(srcIdx + 1, samples.count - 1)
-            
-            output[i] = samples[idx0] * (1 - frac) + samples[idx1] * frac
-        }
-        
-        return output
+        output[i] = samples[idx0] * (1 - frac) + samples[idx1] * frac
     }
+    
+    return output
 }

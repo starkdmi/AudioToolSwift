@@ -6,7 +6,7 @@
 //
 
 import XCTest
-@testable import ClearVoiceTTS
+@preconcurrency @testable import ClearVoiceTTS
 @testable import ClearVoiceCore
 
 final class KokoroVoiceMatcherTests: XCTestCase {
@@ -172,10 +172,11 @@ final class KokoroVoiceMatcherTests: XCTestCase {
         )
         
         // Reference is 70% voice1 + 30% voice2
-        var referenceEmbedding = [Float](repeating: 0, count: 256)
+        var refEmbedding = [Float](repeating: 0, count: 256)
         for i in 0..<256 {
-            referenceEmbedding[i] = 0.7 * v1[i] + 0.3 * v2[i]
+            refEmbedding[i] = 0.7 * v1[i] + 0.3 * v2[i]
         }
+        let referenceEmbedding = refEmbedding
         
         let result = try await matcher.matchVoice(
             referenceAudio: [Float](repeating: 0, count: 16000),
@@ -212,10 +213,11 @@ final class KokoroVoiceMatcherTests: XCTestCase {
             calibrationText: "Test"
         )
         
-        var referenceEmbedding = [Float](repeating: 0, count: 256)
+        var refEmb = [Float](repeating: 0, count: 256)
         for j in 0..<256 {
-            referenceEmbedding[j] = Float.random(in: -1...1)
+            refEmb[j] = Float.random(in: -1...1)
         }
+        let referenceEmbedding = refEmb
         
         // Measure performance
         let start = Date()

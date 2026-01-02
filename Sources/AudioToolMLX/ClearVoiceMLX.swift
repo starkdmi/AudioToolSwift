@@ -107,7 +107,7 @@ extension ClearVoice {
     /// Configure with Demucs source separator
     public func configure(separator: DemucsProvider, for model: SeparationModel = .demucs, sources: [DemucsProvider.Source] = DemucsProvider.Source.allCases) async throws {
         for source in sources {
-            try separator.loadSync(source: source)
+            try await separator.load(source: source)
         }
         self.register(separator: separator, for: model)
     }

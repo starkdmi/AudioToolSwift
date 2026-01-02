@@ -48,13 +48,22 @@ public actor SegmentPool {
     }
     
     /// Return buffer to pool for reuse
+    ///
+    /// Note: While `AudioBuffer` is immutable, the pool keeps preallocated
+    /// buffers that can be reused. When you're done with a buffer, call
+    /// release() so the pool can recycle it for future acquire() calls.
+    ///
+    /// The pool reuses the *allocation* by keeping the passed buffer
+    /// (which has preallocated capacity) rather than creating new buffers.
     public func release(_ buffer: AudioBuffer) {
         currentlyInUse = max(0, currentlyInUse - 1)
         
         // Only keep up to capacity
         if available.count < capacity {
-            // Create fresh buffer with same specs (buffers are immutable)
-            available.append(AudioBuffer(capacity: segmentSize, sampleRate: sampleRate))
+            // Reuse the actual buffer - it has preallocated capacity
+            // Even though samples are immutable, we keep the allocation
+            // and the next user will write new data via AudioBuffer(samples:...)
+            available.append(buffer)
         }
     }
     

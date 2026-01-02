@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import Translation
+@preconcurrency import Translation
 import ClearVoiceCore
 
 /// Apple on-device translation provider
@@ -25,7 +25,7 @@ import ClearVoiceCore
 /// > Language models are managed by the system and may be downloaded on first use.
 /// > For iOS 18/macOS 15, use SwiftUI's `.translationTask` modifier instead.
 @available(iOS 26.0, macOS 26.0, *)
-public final class AppleTranslationProvider: TextTranslator, @unchecked Sendable {
+public actor AppleTranslationProvider: TextTranslator {
     
     // MARK: - Properties
     
