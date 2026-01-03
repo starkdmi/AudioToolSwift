@@ -183,7 +183,7 @@ public final class RUAccentProvider: TextPreprocessor, @unchecked Sendable {
             options: .regularExpression
         )
         
-        let sentences = Self.splitBySentences(normalized)
+        let (sentences, separators) = Self.splitBySentences(normalized)
         var outputs: [String] = []
         
         for sentence in sentences {
@@ -226,7 +226,15 @@ public final class RUAccentProvider: TextPreprocessor, @unchecked Sendable {
             outputs.append(deleteSpacesBeforePunc(sentenceOut))
         }
         
-        return outputs.joined()
+        // Join sentences with their original separators
+        if outputs.isEmpty {
+            return ""
+        }
+        var result = outputs[0]
+        for (sep, out) in zip(separators.dropFirst(), outputs.dropFirst()) {
+            result += sep + out
+        }
+        return result
     }
     
     // MARK: - Stress Mark Conversion
@@ -832,10 +840,46 @@ public final class RUAccentProvider: TextPreprocessor, @unchecked Sendable {
     
     // MARK: - Text Splitting
     
-    private static func splitBySentences(_ text: String) -> [String] {
-        let pattern = "(?<=[.!?])\\s+"
-        let parts = text.split(regex: pattern)
-        return parts.filter { !$0.isEmpty }
+    /// Splits text into sentences, preserving inter-sentence separators.
+    /// - Returns: Tuple of (sentences, separators) where separators[i] is the whitespace
+    ///            between sentences[i-1] and sentences[i]. separators[0] is empty string.
+    private static func splitBySentences(_ text: String) -> ([String], [String]) {
+        let pattern = "(?<=[.!?])(\\s+)"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return ([text], [""])
+        }
+        
+        let nsRange = NSRange(text.startIndex..., in: text)
+        let matches = regex.matches(in: text, options: [], range: nsRange)
+        
+        if matches.isEmpty {
+            return text.isEmpty ? ([], []) : ([text], [""])
+        }
+        
+        var sentences: [String] = []
+        var separators: [String] = [""]
+        var lastEnd = text.startIndex
+        
+        for match in matches {
+            // match.range(at: 1) is the captured separator (whitespace)
+            guard let separatorRange = Range(match.range(at: 1), in: text) else { continue }
+            
+            // Sentence ends at the start of the separator
+            let sentenceEnd = separatorRange.lowerBound
+            if lastEnd < sentenceEnd {
+                sentences.append(String(text[lastEnd..<sentenceEnd]))
+            }
+            
+            separators.append(String(text[separatorRange]))
+            lastEnd = separatorRange.upperBound
+        }
+        
+        // Add final sentence
+        if lastEnd < text.endIndex {
+            sentences.append(String(text[lastEnd...]))
+        }
+        
+        return (sentences, separators)
     }
     
     private static func splitByWords(_ text: String) -> ([String], [String]) {
