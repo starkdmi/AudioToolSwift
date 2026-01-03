@@ -346,11 +346,15 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             }
             
             // Load VAD provider for trimming start/end artifacts (enabled by default)
+            // Parameters tuned for TTS output based on Silero VAD best practices:
+            // - threshold 0.7: Higher to catch breathing/noise artifacts at end
+            // - minSpeechDuration 0.25: Filter brief artifacts (<250ms)
+            // - minSilenceDuration 0.1: Responsive to silence detection
             if vadTrimEnabled {
                 let vad = FluidAudioVADProvider(
-                    threshold: 0.5,  // Standard threshold - detects clear speech vs silence
-                    minSpeechDuration: 0.1,
-                    minSilenceDuration: 0.1  // Detect short silences in TTS output
+                    threshold: 0.7,
+                    minSpeechDuration: 0.25,
+                    minSilenceDuration: 0.1
                 )
                 try await vad.load()
                 self.vadProvider = vad
@@ -737,20 +741,16 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     
     /// Trim audio using VAD to remove non-speech segments at start and end
     private func trimAudioWithVAD(_ audio: ClearVoiceCore.AudioBuffer, using vad: FluidAudioVADProvider) async throws -> ClearVoiceCore.AudioBuffer {
-        // Resample to 16kHz for VAD (if needed)
+        // Resample to 16kHz for VAD using proper polyphase filter (same as Python)
         let vadSampleRate = 16000
         let resampledAudio: ClearVoiceCore.AudioBuffer
         
         if audio.sampleRate != vadSampleRate {
-            // Simple nearest-neighbor resampling for VAD detection
-            let ratio = Double(vadSampleRate) / Double(audio.sampleRate)
-            let newLength = Int(Double(audio.samples.count) * ratio)
-            var resampled = [Float](repeating: 0, count: newLength)
-            for i in 0..<newLength {
-                let srcIndex = min(Int(Double(i) / ratio), audio.samples.count - 1)
-                resampled[i] = audio.samples[srcIndex]
-            }
-            resampledAudio = ClearVoiceCore.AudioBuffer(samples: resampled, sampleRate: vadSampleRate, channels: 1)
+            // Use polyphase resampling (anti-aliasing filter) like Python's torchaudio
+            let inputArray = MLXArray(audio.samples)
+            let resampled = resampleAudioPolyphase(inputArray, origSR: audio.sampleRate, targetSR: vadSampleRate)
+            let resampledSamples = resampled.asArray(Float.self)
+            resampledAudio = ClearVoiceCore.AudioBuffer(samples: resampledSamples, sampleRate: vadSampleRate, channels: 1)
         } else {
             resampledAudio = audio
         }
@@ -789,9 +789,9 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         let startSample = max(0, Int(firstSpeechStart * Double(audio.sampleRate)))
         let endSample = min(audio.samples.count, Int(lastSpeechEnd * Double(audio.sampleRate)))
         
-        // Add small padding (50ms) to avoid cutting speech too tight
-        let paddingSamples = Int(0.05 * Double(audio.sampleRate))
-        let paddedStart = max(0, startSample - paddingSamples)
+        // Add 150ms padding after last speech segment (like Python VAD)
+        let paddingSamples = Int(0.15 * Double(audio.sampleRate))
+        let paddedStart = max(0, startSample)  // No padding at start
         let paddedEnd = min(audio.samples.count, endSample + paddingSamples)
         
         // Calculate what we're trimming
@@ -820,6 +820,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         
         return ClearVoiceCore.AudioBuffer(samples: trimmedSamples, sampleRate: audio.sampleRate, channels: 1)
     }
+    
     
     /// Stream synthesized audio chunks
     /// - Parameters:

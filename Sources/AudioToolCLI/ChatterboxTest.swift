@@ -2,7 +2,7 @@
 //  ChatterboxTest.swift
 //  ClearVoice  
 //
-//  Test with RUAccent + VAD trimming
+//  Full pipeline test with all fixes
 //
 
 import Foundation
@@ -16,8 +16,9 @@ import ClearVoiceCore
 
 func runChatterboxTest() async throws {
     print("\n=== ChatterBox Full Pipeline Test ===")
+    print("S3Tokenizer: ✅ HuggingFace cache (fixed)")
     print("RUAccent: ✅ Enabled")
-    print("VAD Trim: ✅ Enabled\n")
+    print("VAD Trim: ✅ Enabled (threshold 0.7, tuned for TTS)\n")
     
     GPU.set(memoryLimit: 6 * 1024 * 1024 * 1024)
     
@@ -25,21 +26,19 @@ func runChatterboxTest() async throws {
     let burunowPath = "/path/to/clear_voice_research/Docs/burunow_short.wav"
     let model8bitPath = "~/.cache/huggingface/hub/models--starkdmi--chatterbox-8bit/snapshots/ac3a8166d56e6510ac23a10854a4bee1afb535c8"
     
-    // Text with homograph "замок" - RUAccent should mark stress correctly
     let text = "мы закрыли замок и прошли мимо замка"
     print("Text: \"\(text)\"\n")
     
     let saver = AudioSaver(config: .init(sampleRate: 24000))
     
-    // Create provider WITH RUAccent enabled
     let provider = ChatterboxTTSProvider(
         modelPath: URL(fileURLWithPath: model8bitPath),
         language: .russian,
-        useRuAccent: true,  // Enable RUAccent
-        convertToStressMarks: true  // Convert + to ́
+        useRuAccent: true,
+        convertToStressMarks: true
     )
     
-    print("Loading model + RUAccent pipeline...")
+    print("Loading model...")
     try await provider.load()
     print("✓ Model loaded")
     
@@ -47,24 +46,14 @@ func runChatterboxTest() async throws {
     
     print("Setting reference audio...")
     try await provider.setReferenceAudio(from: URL(fileURLWithPath: burunowPath))
-    print("✓ Reference set")
+    print("✓ Reference set\n")
     
-    // VAD trimming is enabled by default, but let's make sure
-    // (it's already enabled by default in the provider)
-    print("✓ VAD trimming enabled\n")
-    
-    print("Synthesizing with RUAccent stress marks...")
+    print("Synthesizing...")
     let audio = try await provider.synthesize(text, voice: "")
     print("✓ Done: \(String(format: "%.2f", audio.duration))s\n")
     
-    try saver.save(MLXArray(audio.samples), to: "\(outputDir)/full_pipeline.wav")
-    print("✓ Saved: full_pipeline.wav")
-    
-    print("\n=== Test Complete ===")
-    print("Features used:")
-    print("  • S3Tokenizer from HuggingFace cache (fix applied)")
-    print("  • RUAccent stress marking")
-    print("  • VAD trimming for artifact removal")
+    try saver.save(MLXArray(audio.samples), to: "\(outputDir)/final_trimmed.wav")
+    print("✓ Saved: final_trimmed.wav")
     
     GPU.clearCache()
 }
