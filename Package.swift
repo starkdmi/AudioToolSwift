@@ -150,6 +150,7 @@ let package = Package(
             dependencies: [
                 "ClearVoice",
                 "ClearVoiceCore",
+                "ClearVoiceFluidAudio",  // For VAD-based audio trimming
                 .product(name: "KokoroSwift", package: "KokoroSwift"),
                 .product(name: "ChatterboxMLXSwift", package: "ChatterboxMLXSwift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),

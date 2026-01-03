@@ -8,6 +8,7 @@
 import Foundation
 import ClearVoice
 import ClearVoiceCore
+import ClearVoiceFluidAudio
 import ChatterboxMLXSwift
 import MLX
 import MLXNN
@@ -131,6 +132,10 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     private var defaultT3Cond: T3Cond?
     private var defaultRefDict: [String: MLXArray]?
     private var hasDefaultVoice: Bool = false
+    
+    /// VAD trimmer for removing start/end artifacts (breathing/noise)
+    private var vadProvider: FluidAudioVADProvider?
+    private var vadTrimEnabled: Bool = true  // Enabled by default - ChatterBox produces start/end artifacts
     
     /// State stream continuations
     private var stateContinuations: [AsyncStream<ModelState>.Continuation] = []
@@ -319,11 +324,11 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             ]
             try updateModule(s3Gen!, name: "s3gen", weights: sanitizedS3Gen, quantization: quantizationConfig, expectedMissing: expectedMissing)
             
-            // Load S3Tokenizer weights
-            let s3TokenizerWeights = stripWeightsPrefix(allWeights, prefixes: ["s3_tokenizer.", "s3tokenizer.", "s3Tokenizer."])
+            // Load S3Tokenizer weights - check bundled first, then HF cache
+            let s3TokenizerWeights = try resolveS3TokenizerWeights(allWeights: allWeights, baseDir: weightsPath.deletingLastPathComponent())
             let sanitizedS3Tok = s3Tokenizer!.sanitize(weights: s3TokenizerWeights)
             let expectedTokMissing: Set<String> = ["encoder.freqs.0", "encoder.freqs.1"]
-            try updateModule(s3Tokenizer!, name: "s3tokenizer", weights: sanitizedS3Tok, quantization: quantizationConfig, expectedMissing: expectedTokMissing)
+            try updateModule(s3Tokenizer!, name: "s3tokenizer", weights: sanitizedS3Tok, quantization: nil, expectedMissing: expectedTokMissing)
             
             // Load text tokenizer
             let baseDir = weightsPath.deletingLastPathComponent()
@@ -338,6 +343,17 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             let condsPath = baseDir.appendingPathComponent("conds.safetensors")
             if FileManager.default.fileExists(atPath: condsPath.path) {
                 try loadDefaultConds(from: condsPath)
+            }
+            
+            // Load VAD provider for trimming start/end artifacts (enabled by default)
+            if vadTrimEnabled {
+                let vad = FluidAudioVADProvider(
+                    threshold: 0.5,  // Standard threshold - detects clear speech vs silence
+                    minSpeechDuration: 0.1,
+                    minSilenceDuration: 0.1  // Detect short silences in TTS output
+                )
+                try await vad.load()
+                self.vadProvider = vad
             }
             
             modelPath = path
@@ -381,8 +397,9 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         referenceWav = wav
         referenceSampleRate = Int(info.sampleRate)
         
-        // Compute speaker embedding
-        speakerEmbedding = voiceEncoder.embedsFromWavs([wav], sampleRate: Int(info.sampleRate))
+        // Compute speaker embedding - MUST resample to 16kHz first (VoiceEncoder expects 16kHz)
+        let refWav16kForVE = resampleAudioPolyphase(wav, origSR: Int(info.sampleRate), targetSR: S3_SR)
+        speakerEmbedding = voiceEncoder.embedsFromWavs([refWav16kForVE], sampleRate: S3_SR)
         
         // Precompute reference dictionary if s3Gen is loaded
         if let s3Gen = s3Gen, let s3Tokenizer = s3Tokenizer {
@@ -505,6 +522,38 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     /// - Parameter provider: Configured RUAccentProvider instance
     public func configureRuAccent(_ provider: RUAccentProvider) {
         self.ruAccentProvider = provider
+    }
+    
+    // MARK: - VAD Trimmer Configuration
+    
+    /// Configure VAD-based audio trimming to remove start/end artifacts
+    ///
+    /// ChatterBox may produce breathing sounds or noise at the start/end of generated audio.
+    /// VAD trimming detects speech boundaries and trims non-speech segments.
+    ///
+    /// - Parameters:
+    ///   - enabled: Enable VAD trimming (default: true)
+    ///   - provider: Optional custom VAD provider (default: auto-created SileroVAD)
+    public func configureVadTrimmer(enabled: Bool = true, provider: FluidAudioVADProvider? = nil) async throws {
+        self.vadTrimEnabled = enabled
+        
+        if enabled && provider == nil && self.vadProvider == nil {
+            // Create and load default VAD provider
+            let vad = FluidAudioVADProvider(
+                threshold: 0.5,  // Standard threshold for clear speech/silence boundary
+                minSpeechDuration: 0.1,  // Shorter min duration for TTS output
+                minSilenceDuration: 0.1  // Detect short silences
+            )
+            try await vad.load()
+            self.vadProvider = vad
+        } else if let provider = provider {
+            self.vadProvider = provider
+        }
+    }
+    
+    /// Disable VAD trimming
+    public func disableVadTrimmer() {
+        self.vadTrimEnabled = false
     }
     
     // MARK: - Synthesis Parameters
@@ -676,8 +725,100 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         
         // Convert to samples
         let samples = wavMono.asArray(Float.self)
+        var audioBuffer = ClearVoiceCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
         
-        return ClearVoiceCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
+        // Apply VAD trimming if enabled (removes start/end artifacts like breathing/noise)
+        if vadTrimEnabled, let vad = vadProvider {
+            audioBuffer = try await trimAudioWithVAD(audioBuffer, using: vad)
+        }
+        
+        return audioBuffer
+    }
+    
+    /// Trim audio using VAD to remove non-speech segments at start and end
+    private func trimAudioWithVAD(_ audio: ClearVoiceCore.AudioBuffer, using vad: FluidAudioVADProvider) async throws -> ClearVoiceCore.AudioBuffer {
+        // Resample to 16kHz for VAD (if needed)
+        let vadSampleRate = 16000
+        let resampledAudio: ClearVoiceCore.AudioBuffer
+        
+        if audio.sampleRate != vadSampleRate {
+            // Simple nearest-neighbor resampling for VAD detection
+            let ratio = Double(vadSampleRate) / Double(audio.sampleRate)
+            let newLength = Int(Double(audio.samples.count) * ratio)
+            var resampled = [Float](repeating: 0, count: newLength)
+            for i in 0..<newLength {
+                let srcIndex = min(Int(Double(i) / ratio), audio.samples.count - 1)
+                resampled[i] = audio.samples[srcIndex]
+            }
+            resampledAudio = ClearVoiceCore.AudioBuffer(samples: resampled, sampleRate: vadSampleRate, channels: 1)
+        } else {
+            resampledAudio = audio
+        }
+        
+        // Detect speech segments
+        let segments = try await vad.detect(resampledAudio)
+        
+        // Debug: print segment info
+        #if DEBUG
+        print("[VAD] Detected \(segments.count) speech segments:")
+        for (i, seg) in segments.enumerated() {
+            print("  [\(i)] \(String(format: "%.3f", seg.timeRange.start))s - \(String(format: "%.3f", seg.timeRange.end))s")
+        }
+        #endif
+        
+        // If no speech detected, return original (avoid trimming everything)
+        guard !segments.isEmpty else {
+            #if DEBUG
+            print("[VAD] No speech detected, returning original audio")
+            #endif
+            return audio
+        }
+        
+        // Find first and last speech boundaries
+        let firstSpeechStart = segments.first!.timeRange.start
+        let lastSpeechEnd = segments.last!.timeRange.end
+        let audioDuration = audio.duration
+        
+        // Debug: print trimming info
+        #if DEBUG
+        print("[VAD] Audio duration: \(String(format: "%.3f", audioDuration))s")
+        print("[VAD] First speech: \(String(format: "%.3f", firstSpeechStart))s, Last speech end: \(String(format: "%.3f", lastSpeechEnd))s")
+        #endif
+        
+        // Convert times to sample indices in original audio
+        let startSample = max(0, Int(firstSpeechStart * Double(audio.sampleRate)))
+        let endSample = min(audio.samples.count, Int(lastSpeechEnd * Double(audio.sampleRate)))
+        
+        // Add small padding (50ms) to avoid cutting speech too tight
+        let paddingSamples = Int(0.05 * Double(audio.sampleRate))
+        let paddedStart = max(0, startSample - paddingSamples)
+        let paddedEnd = min(audio.samples.count, endSample + paddingSamples)
+        
+        // Calculate what we're trimming
+        let trimmedFromStart = paddedStart
+        let trimmedFromEnd = audio.samples.count - paddedEnd
+        
+        #if DEBUG
+        print("[VAD] Trimming: \(trimmedFromStart) samples from start, \(trimmedFromEnd) samples from end")
+        #endif
+        
+        // Only trim if there's something to trim
+        if paddedStart == 0 && paddedEnd == audio.samples.count {
+            #if DEBUG
+            print("[VAD] Nothing to trim, speech spans entire audio")
+            #endif
+            return audio
+        }
+        
+        // Extract trimmed audio
+        let trimmedSamples = Array(audio.samples[paddedStart..<paddedEnd])
+        
+        #if DEBUG
+        let trimmedDuration = Double(trimmedSamples.count) / Double(audio.sampleRate)
+        print("[VAD] Trimmed: \(String(format: "%.3f", audioDuration - trimmedDuration))s removed")
+        #endif
+        
+        return ClearVoiceCore.AudioBuffer(samples: trimmedSamples, sampleRate: audio.sampleRate, channels: 1)
     }
     
     /// Stream synthesized audio chunks
@@ -840,6 +981,75 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
                 return path
             }
         }
+        return nil
+    }
+    
+    /// Resolve S3Tokenizer weights - bundled in model.safetensors or from HuggingFace cache
+    private func resolveS3TokenizerWeights(allWeights: [String: MLXArray], baseDir: URL) throws -> [String: MLXArray] {
+        let prefixes = ["s3_tokenizer.", "s3tokenizer.", "s3Tokenizer."]
+        
+        // Check if bundled in model.safetensors
+        let hasBundled = allWeights.keys.contains { key in
+            prefixes.contains { key.hasPrefix($0) }
+        }
+        if hasBundled {
+            return stripWeightsPrefix(allWeights, prefixes: prefixes)
+        }
+        
+        // Check for separate file in model directory
+        let candidates = [
+            "s3tokenizer.safetensors",
+            "s3_tokenizer.safetensors",
+            "s3tokenizer/model.safetensors",
+            "s3_tokenizer/model.safetensors",
+        ]
+        for name in candidates {
+            let path = baseDir.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: path.path) {
+                let data = try Data(contentsOf: path)
+                return try MLX.loadArrays(data: data)
+            }
+        }
+        
+        // Fall back to HuggingFace cache (mlx-community/S3TokenizerV2)
+        if let hfPath = resolveHFS3TokenizerPath() {
+            let data = try Data(contentsOf: URL(fileURLWithPath: hfPath))
+            return try MLX.loadArrays(data: data)
+        }
+        
+        throw ClearVoiceError.modelNotFound("S3Tokenizer weights not found in model bundle or HuggingFace cache")
+    }
+    
+    /// Find S3TokenizerV2 in HuggingFace cache
+    private func resolveHFS3TokenizerPath() -> String? {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let hubBase = home.appendingPathComponent(".cache/huggingface/hub")
+        let modelDir = hubBase.appendingPathComponent("models--mlx-community--S3TokenizerV2")
+        let snapshotsDir = modelDir.appendingPathComponent("snapshots")
+        
+        guard let entries = try? fm.contentsOfDirectory(
+            at: snapshotsDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+        
+        // Sort by modification date, use most recent
+        let sorted = entries.sorted { lhs, rhs in
+            let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return lhsDate < rhsDate
+        }
+        
+        for entry in sorted.reversed() {
+            let candidate = entry.appendingPathComponent("model.safetensors").path
+            if fm.fileExists(atPath: candidate) {
+                return candidate
+            }
+        }
+        
         return nil
     }
 }
