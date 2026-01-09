@@ -161,4 +161,91 @@ public actor ModelDownloader {
         
         return snapshotsDir.appendingPathComponent(firstSnapshot)
     }
+    
+    // MARK: - Deletion
+    
+    /// Delete cached model files for a repository
+    /// - Parameter repo: Repository ID to delete
+    /// - Throws: FileManager errors if deletion fails
+    public func delete(repo: String) throws {
+        guard let localPath = localPath(for: repo) else {
+            return // Not downloaded
+        }
+        
+        // Remove snapshot directory
+        try FileManager.default.removeItem(at: localPath)
+        
+        // Clean up empty parent directories
+        let repoName = repo.replacingOccurrences(of: "/", with: "--")
+        let hfCache = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub/models--\(repoName)")
+        
+        // Check if snapshots directory is empty
+        let snapshotsDir = hfCache.appendingPathComponent("snapshots")
+        if let contents = try? FileManager.default.contentsOfDirectory(atPath: snapshotsDir.path) {
+            let visibleContents = contents.filter { !$0.hasPrefix(".") }
+            if visibleContents.isEmpty {
+                // Remove entire model cache
+                try? FileManager.default.removeItem(at: hfCache)
+            }
+        }
+    }
+    
+    /// Get size of cached model on disk
+    /// - Parameter repo: Repository ID
+    /// - Returns: Size in bytes, or 0 if not cached
+    public nonisolated func cacheSize(for repo: String) -> Int64 {
+        guard let localPath = localPath(for: repo) else {
+            return 0
+        }
+        return FileManager.default.directorySize(at: localPath)
+    }
+    
+    /// Get total size of all cached models
+    /// - Returns: Total size in bytes
+    public nonisolated func totalCacheSize() -> Int64 {
+        let hfCache = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub")
+        
+        guard FileManager.default.fileExists(atPath: hfCache.path) else {
+            return 0
+        }
+        
+        return FileManager.default.directorySize(at: hfCache)
+    }
+    
+    /// Clear all cached models
+    /// - Throws: FileManager errors if deletion fails
+    public func clearCache() throws {
+        let hfCache = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub")
+        
+        guard FileManager.default.fileExists(atPath: hfCache.path) else {
+            return
+        }
+        
+        // List all model directories
+        let contents = try FileManager.default.contentsOfDirectory(atPath: hfCache.path)
+        for item in contents where item.hasPrefix("models--") {
+            let itemPath = hfCache.appendingPathComponent(item)
+            try FileManager.default.removeItem(at: itemPath)
+        }
+    }
+    
+    /// List all cached repository IDs
+    /// - Returns: Array of repository IDs
+    public nonisolated func cachedRepositories() -> [String] {
+        let hfCache = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub")
+        
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: hfCache.path) else {
+            return []
+        }
+        
+        return contents
+            .filter { $0.hasPrefix("models--") }
+            .map { $0.replacingOccurrences(of: "models--", with: "")
+                     .replacingOccurrences(of: "--", with: "/") }
+    }
 }
+
