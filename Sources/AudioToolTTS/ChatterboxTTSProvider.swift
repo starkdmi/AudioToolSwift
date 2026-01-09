@@ -347,13 +347,14 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             
             // Load VAD provider for trimming start/end artifacts (enabled by default)
             // Parameters tuned for TTS output based on Silero VAD best practices:
-            // - threshold 0.7: Higher to catch breathing/noise artifacts at end
-            // - minSpeechDuration 0.25: Filter brief artifacts (<250ms)
-            // - minSilenceDuration 0.1: Responsive to silence detection
+            // Optimized for ChatterBox TTS artifact trimming (tested 2024-01):
+            // - threshold 0.9: Required to detect low-level breathing/whisper artifacts
+            // - minSpeechDuration 0.1: Catch brief intonations at speech boundaries
+            // - minSilenceDuration 0.1: Standard silence detection
             if vadTrimEnabled {
                 let vad = FluidAudioVADProvider(
-                    threshold: 0.7,
-                    minSpeechDuration: 0.25,
+                    threshold: 0.9,
+                    minSpeechDuration: 0.1,
                     minSilenceDuration: 0.1
                 )
                 try await vad.load()
@@ -741,16 +742,29 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     
     /// Trim audio using VAD to remove non-speech segments at start and end
     private func trimAudioWithVAD(_ audio: ClearVoiceCore.AudioBuffer, using vad: FluidAudioVADProvider) async throws -> ClearVoiceCore.AudioBuffer {
-        // Resample to 16kHz for VAD using proper polyphase filter (same as Python)
+        // Resample to 16kHz for VAD using simple linear interpolation
+        // (polyphase resampling preserves high frequencies which causes VAD to over-detect speech)
         let vadSampleRate = 16000
         let resampledAudio: ClearVoiceCore.AudioBuffer
         
         if audio.sampleRate != vadSampleRate {
-            // Use polyphase resampling (anti-aliasing filter) like Python's torchaudio
-            let inputArray = MLXArray(audio.samples)
-            let resampled = resampleAudioPolyphase(inputArray, origSR: audio.sampleRate, targetSR: vadSampleRate)
-            let resampledSamples = resampled.asArray(Float.self)
-            resampledAudio = ClearVoiceCore.AudioBuffer(samples: resampledSamples, sampleRate: vadSampleRate, channels: 1)
+            // Use simple linear interpolation resampling
+            let ratio = Double(vadSampleRate) / Double(audio.sampleRate)
+            let newCount = Int(Double(audio.samples.count) * ratio)
+            var resampled = [Float](repeating: 0, count: newCount)
+            
+            for i in 0..<newCount {
+                let srcPos = Double(i) / ratio
+                let srcIdx = Int(srcPos)
+                let frac = Float(srcPos - Double(srcIdx))
+                
+                if srcIdx + 1 < audio.samples.count {
+                    resampled[i] = audio.samples[srcIdx] * (1 - frac) + audio.samples[srcIdx + 1] * frac
+                } else if srcIdx < audio.samples.count {
+                    resampled[i] = audio.samples[srcIdx]
+                }
+            }
+            resampledAudio = ClearVoiceCore.AudioBuffer(samples: resampled, sampleRate: vadSampleRate, channels: 1)
         } else {
             resampledAudio = audio
         }
@@ -758,12 +772,8 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         // Detect speech segments
         let segments = try await vad.detect(resampledAudio)
         
-        // Debug: print segment info
         #if DEBUG
-        print("[VAD] Detected \(segments.count) speech segments:")
-        for (i, seg) in segments.enumerated() {
-            print("  [\(i)] \(String(format: "%.3f", seg.timeRange.start))s - \(String(format: "%.3f", seg.timeRange.end))s")
-        }
+        print("[VAD] Detected \(segments.count) speech segments")
         #endif
         
         // If no speech detected, return original (avoid trimming everything)
@@ -779,18 +789,16 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         let lastSpeechEnd = segments.last!.timeRange.end
         let audioDuration = audio.duration
         
-        // Debug: print trimming info
         #if DEBUG
-        print("[VAD] Audio duration: \(String(format: "%.3f", audioDuration))s")
-        print("[VAD] First speech: \(String(format: "%.3f", firstSpeechStart))s, Last speech end: \(String(format: "%.3f", lastSpeechEnd))s")
+        print("[VAD] Trimming: \(String(format: "%.3f", audioDuration))s -> \(String(format: "%.3f", lastSpeechEnd + 0.01))s")
         #endif
         
         // Convert times to sample indices in original audio
         let startSample = max(0, Int(firstSpeechStart * Double(audio.sampleRate)))
         let endSample = min(audio.samples.count, Int(lastSpeechEnd * Double(audio.sampleRate)))
         
-        // Add 150ms padding after last speech segment (like Python VAD)
-        let paddingSamples = Int(0.15 * Double(audio.sampleRate))
+        // Add 10ms padding after last speech segment (tighter than Python's 30ms for cleaner TTS output)
+        let paddingSamples = Int(0.01 * Double(audio.sampleRate))
         let paddedStart = max(0, startSample)  // No padding at start
         let paddedEnd = min(audio.samples.count, endSample + paddingSamples)
         

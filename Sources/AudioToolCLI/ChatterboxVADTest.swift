@@ -24,7 +24,7 @@ func runChatterboxVADTest() async throws {
     GPU.set(memoryLimit: 6 * 1024 * 1024 * 1024)
     
     // Output directory
-    let outputDir = FileManager.default.currentDirectoryPath + "/chatterbox_output"
+    let outputDir = "/path/to/clear_voice_research/ClearVoice/chatterbox_output"
     try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
     
     // Reference audio file
@@ -34,10 +34,11 @@ func runChatterboxVADTest() async throws {
         return
     }
     
-    // Create provider with VAD enabled (default)
-    print("Loading ChatterBox model (fp32, English, VAD enabled)...")
-    let provider = TTSProviders.chatterbox(
-        precision: .fp32,
+    // Create provider with VAD enabled (default) - use local model path
+    print("Loading ChatterBox model (fp16, English, VAD enabled)...")
+    let modelPath = "~/.cache/huggingface/hub/models--starkdmi--chatterbox-fp16/snapshots/e68aaba8ef36cb9a8a8c9a5807c1b1004b113c70"
+    let provider = ChatterboxTTSProvider(
+        modelPath: URL(fileURLWithPath: modelPath),
         language: .english,
         useRuAccent: false
     )

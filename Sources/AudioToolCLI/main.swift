@@ -83,7 +83,7 @@ func printUsage() {
 }
 
 // Validate input (skip for TTS which doesn't need input audio)
-let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix", "voice_match", "voicematch", "match", "chatterbox", "chatterbox_expressive"]
+let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix", "voice_match", "voicematch", "match", "chatterbox", "chatterbox_expressive", "chatterbox_vad", "cb_vad", "vad_test"]
 guard !inputPath.isEmpty || ttsModels.contains(model.lowercased()) else {
     print("Error: Input path required (--input)")
     printUsage()
@@ -611,6 +611,10 @@ Task {
             try await runChatterboxTest()
         case "chatterbox_expressive", "cb_expressive":
             try await runChatterboxExpressiveTest()
+        case "chatterbox_vad", "cb_vad":
+            try await runChatterboxVADTest()
+        case "vad_test":
+            try await runVADOnlyTest()
         #if canImport(ClearVoiceSpeech)
         case "transcribe", "speech", "stt":
             if #available(macOS 26.0, *) {

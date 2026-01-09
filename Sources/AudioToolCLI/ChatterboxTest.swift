@@ -24,7 +24,7 @@ func runChatterboxTest() async throws {
     
     let outputDir = "/path/to/clear_voice_research/ClearVoice/chatterbox_output"
     let burunowPath = "/path/to/clear_voice_research/Docs/burunow_short.wav"
-    let model8bitPath = "~/.cache/huggingface/hub/models--starkdmi--chatterbox-8bit/snapshots/ac3a8166d56e6510ac23a10854a4bee1afb535c8"
+    let model8bitPath = "~/.cache/huggingface/hub/models--starkdmi--chatterbox-fp16/snapshots/e68aaba8ef36cb9a8a8c9a5807c1b1004b113c70"
     
     let text = "мы закрыли замок и прошли мимо замка"
     print("Text: \"\(text)\"\n")
