@@ -2,7 +2,7 @@
 //  VADOnlyTest.swift
 //  ClearVoice
 //
-//  VAD parameter tuning test
+//  VAD test on harry_potter.wav
 //
 
 import Foundation
@@ -10,20 +10,19 @@ import AVFoundation
 import ClearVoiceCore
 @preconcurrency import ClearVoiceFluidAudio
 
-// MARK: - VAD Parameter Tuning Test
+// MARK: - VAD Test
 
 func runVADOnlyTest() async throws {
-    print("\n=== VAD Parameter Tuning Test ===")
-    print("Testing minSilenceDuration and padding on chatterbox_vad_disabled.wav\n")
+    print("\n=== VAD Test on Harry Potter Audio ===\n")
     
-    let testFile = "/path/to/clear_voice_research/ClearVoice/chatterbox_output/chatterbox_vad_disabled.wav"
+    let testFile = "/path/to/clear_voice_research/Docs/harry_potter.wav"
     
     guard FileManager.default.fileExists(atPath: testFile) else {
-        print("❌ File not found")
+        print("❌ File not found: \(testFile)")
         return
     }
     
-    // Load audio using AVFoundation at 16kHz for VAD
+    // Load audio using AVFoundation
     let url = URL(fileURLWithPath: testFile)
     guard let audioFile = try? AVAudioFile(forReading: url) else {
         print("❌ Could not load audio file")
@@ -48,8 +47,8 @@ func runVADOnlyTest() async throws {
     let originalSampleRate = Int(format.sampleRate)
     let duration = Double(originalSamples.count) / Double(originalSampleRate)
     
-    print("File: chatterbox_vad_disabled.wav")
-    print("Duration: \(duration)s")
+    print("File: harry_potter.wav")
+    print("Duration: \(String(format: "%.2f", duration))s")
     print("Original sample rate: \(originalSampleRate)Hz")
     
     // Resample to 16kHz for VAD
@@ -58,38 +57,46 @@ func runVADOnlyTest() async throws {
     let audio = AudioBuffer(samples: samples, sampleRate: vadSampleRate, channels: 1)
     print("Resampled to: \(vadSampleRate)Hz (\(samples.count) samples)\n")
     
-    // Test grid: thresholds x minSilence x padding
-    let thresholds: [Float] = [0.5, 0.7, 0.9, 0.95]
-    let minSilences: [Double] = [0.1, 0.05, 0.03]  // Python default is 0.1
-    let paddings: [Double] = [0.03, 0.01, 0.0]
-    
-    print("Threshold | MinSilence | Padding | SpeechEnd | TrimAmount")
-    print("----------|------------|---------|-----------|----------")
+    // Test with 0.5 and 0.7 thresholds
+    let thresholds: [Float] = [0.5, 0.7]
     
     for threshold in thresholds {
-        for minSilence in minSilences {
-            let vad = FluidAudioVADProvider(
-                threshold: threshold,
-                minSpeechDuration: 0.1,
-                minSilenceDuration: minSilence
-            )
-            try await vad.load()
-            
-            let segments = try await vad.detect(audio)
-            
-            if let last = segments.last {
-                for padding in paddings {
-                    let endWithPad = min(last.timeRange.end + padding, audio.duration)
-                    let trimAmount = audio.duration - endWithPad
-                    print("\(threshold)       | \(minSilence)       | \(padding)    | \(String(format: "%.2f", endWithPad))s     | \(String(format: "%.2f", trimAmount))s")
-                }
-            } else {
-                print("\(threshold)       | \(minSilence)       | *       | NO SPEECH | -")
-            }
+        print("=== Threshold: \(threshold) ===")
+        
+        let vad = FluidAudioVADProvider(
+            threshold: threshold,
+            minSpeechDuration: 0.25,
+            minSilenceDuration: 0.1
+        )
+        try await vad.load()
+        
+        let segments = try await vad.detect(audio)
+        
+        print("Detected \(segments.count) speech segments:")
+        
+        var totalSpeech: Double = 0
+        for (i, seg) in segments.enumerated() {
+            let start = seg.timeRange.start
+            let end = seg.timeRange.end
+            let segDuration = end - start
+            totalSpeech += segDuration
+            print("  [\(i+1)] \(String(format: "%.2f", start))s - \(String(format: "%.2f", end))s  (\(String(format: "%.2f", segDuration))s)")
         }
+        
+        let speechPercent = (totalSpeech / audio.duration) * 100
+        print("\nTotal speech: \(String(format: "%.2f", totalSpeech))s / \(String(format: "%.2f", audio.duration))s (\(String(format: "%.0f", speechPercent))%)")
+        
+        if let first = segments.first {
+            print("First speech starts at: \(String(format: "%.2f", first.timeRange.start))s")
+        }
+        if let last = segments.last {
+            print("Last speech ends at: \(String(format: "%.2f", last.timeRange.end))s")
+            print("Would trim from end: \(String(format: "%.2f", audio.duration - last.timeRange.end))s")
+        }
+        print("")
     }
     
-    print("\n=== Test Complete ===")
+    print("=== Test Complete ===")
 }
 
 /// Linear interpolation resampling
