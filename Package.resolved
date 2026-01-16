@@ -1,13 +1,13 @@
 {
-  "originHash" : "cd0c976ee02e808ae2087416b74365de251325fe1cad8239ff2c6be0ffc2285a",
+  "originHash" : "2970553ddd3e4ccb0a0454f8eade7792b2ba613074c5956b77166f02871eec04",
   "pins" : [
     {
       "identity" : "fluidaudio",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/FluidInference/FluidAudio",
       "state" : {
-        "revision" : "47552dde26f79b880efff2f23ad4dab55aa914ca",
-        "version" : "0.8.1"
+        "revision" : "a1582f0c476864b6609f75459312037390089044",
+        "version" : "0.10.0"
       }
     },
     {
@@ -26,6 +26,15 @@
       "state" : {
         "revision" : "072b684acaae80b6a463abab3a103732f33774bf",
         "version" : "0.29.1"
+      }
+    },
+    {
+      "identity" : "mlx-swift-lm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ml-explore/mlx-swift-lm",
+      "state" : {
+        "revision" : "5064b8c5d8ed3b0bbb71385c4124f0fc102e74a2",
+        "version" : "2.29.3"
       }
     },
     {
@@ -78,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-transformers",
       "state" : {
-        "revision" : "a2e184dddb4757bc943e77fbe99ac6786c53f0b2",
-        "version" : "1.0.0"
+        "revision" : "573e5c9036c2f136b3a8a071da8e8907322403d0",
+        "version" : "1.1.6"
       }
     },
     {

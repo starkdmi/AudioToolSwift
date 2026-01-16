@@ -213,6 +213,7 @@ extension TranslationModel: ModelIdentifier {
     public var modelName: String {
         switch self {
         case .appleTranslation: return "apple_translation"
+        case .translateGemma: return "translate_gemma"
         }
     }
 }

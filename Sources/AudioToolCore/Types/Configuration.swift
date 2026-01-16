@@ -161,6 +161,7 @@ public enum TranscriptionModel: Sendable, Hashable {
 /// Available translation models
 public enum TranslationModel: Sendable, Hashable {
     case appleTranslation  // Apple Translation framework (iOS 18+, macOS 15+)
+    case translateGemma    // TranslateGemma via MLX (55+ languages)
     // Future: .marian, .nllb, .seamless
 }
 

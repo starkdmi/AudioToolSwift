@@ -42,6 +42,10 @@ let package = Package(
             name: "ClearVoiceTranslation",
             targets: ["ClearVoiceTranslation"]
         ),
+        .library(
+            name: "ClearVoiceMLXTranslation",
+            targets: ["ClearVoiceMLXTranslation"]
+        ),
         .executable(
             name: "Generate",
             targets: ["Generate"]
@@ -62,8 +66,8 @@ let package = Package(
         // MLX for neural engine operations
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.2"),
         
-        // FluidAudio for VAD, transcription, diarization
-        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.7.8"),
+        // FluidAudio for VAD, transcription, diarization (v0.10.0+ for Sortformer)
+        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.10.0"),
         
         // Kokoro TTS with MisakiSwift G2P (MIT license, no ESpeakNG)
         // Using local fork with extended misaki[en] language support
@@ -72,8 +76,11 @@ let package = Package(
         // ChatterBox Multilingual TTS (MLX, 25 languages)
         .package(name: "ChatterboxMLXSwift", path: "../Models/chatterbox_swift"),
         
-        // HuggingFace Hub for model downloading
-        .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.0.0"),
+        // HuggingFace Hub for model downloading (1.1.6+ required by mlx-swift-lm)
+        .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.1.6"),
+        
+        // MLX LLM for TranslateGemma translation
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "2.29.3"),
     ],
     targets: [
         // Core shared infrastructure
@@ -178,6 +185,18 @@ let package = Package(
             path: "Sources/ClearVoiceTranslation"
         ),
         
+        // MLX Translation Backend (TranslateGemma, 55+ languages)
+        .target(
+            name: "ClearVoiceMLXTranslation",
+            dependencies: [
+                "ClearVoice",
+                "ClearVoiceCore",
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+            ],
+            path: "Sources/ClearVoiceMLXTranslation"
+        ),
+        
         // Unit tests with mocks (swift test compatible)
         .testTarget(
             name: "ClearVoiceTests",
@@ -237,6 +256,18 @@ let package = Package(
             resources: [
                 .copy("Fixtures/")
             ]
+        ),
+        
+        // MLX Translation Integration tests (TranslateGemma)
+        // Run with: xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' -only-testing:ClearVoiceMLXTranslationTests
+        .testTarget(
+            name: "ClearVoiceMLXTranslationTests",
+            dependencies: [
+                "ClearVoiceMLXTranslation",
+                "ClearVoice",
+                "ClearVoiceCore",
+            ],
+            path: "Tests/ClearVoiceMLXTranslationTests"
         ),
         // CLI executable for testing MLX providers (use xcodebuild + run directly)
         // Build: xcodebuild build -scheme Generate -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet

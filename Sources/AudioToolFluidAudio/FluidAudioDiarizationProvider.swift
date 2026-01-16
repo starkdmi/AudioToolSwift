@@ -3,16 +3,28 @@
 //  ClearVoiceFluidAudio
 //
 //  Pyannote speaker diarization provider using FluidAudio
+//  Multi-stage pipeline: segmentation → WeSpeaker embeddings → VBx clustering
 //
 
 import Foundation
 @preconcurrency import FluidAudio
 import ClearVoiceCore
 
-// MARK: - FluidAudio Diarization Provider
+// MARK: - FluidAudio Diarization Provider (Pyannote)
 
 /// Pyannote speaker diarization provider using FluidAudio's OfflineDiarizerManager
 /// Uses pyannote community-1 pipeline with VBx clustering for offline diarization
+///
+/// **Best for:**
+/// - Scenarios with >4 speakers
+/// - Non-English audio (language-agnostic embeddings)
+/// - When you need fine-tuned clustering control
+///
+/// **Consider `FluidAudioSortformerProvider` for:**
+/// - Real-time/streaming use cases
+/// - ≤4 speakers scenarios
+/// - Better overlapping speech handling
+/// - Maximum speed (~120x RTF vs ~5-10x RTF for Pyannote)
 public actor FluidAudioDiarizationProvider: DiarizationProvider {
     
     // MARK: - AudioProcessor Conformance
