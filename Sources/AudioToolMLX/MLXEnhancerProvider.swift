@@ -231,6 +231,28 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     }
 }
 
+// MARK: - ManagedModel Conformance
+
+extension MossFormer2SE48KProvider: ManagedModel {
+    /// Unique identifier for this model instance
+    public nonisolated var modelId: String { "mossformer2_se_48k" }
+    
+    /// Estimated memory footprint in bytes (VRAM + RAM)
+    /// ~200MB for FP16, ~400MB for FP32
+    public nonisolated var estimatedMemoryBytes: Int {
+        precision == .fp16 ? 200_000_000 : 400_000_000
+    }
+    
+    /// Check if the model is currently loaded
+    public func checkIfLoaded() async -> Bool { pipeline != nil }
+    
+    /// Unload model from memory
+    public func unload() async {
+        pipeline = nil
+        GPU.clearCache()
+    }
+}
+
 // MARK: - FRCRN SE 16K Provider
 
 /// MLX FRCRN Speech Enhancement (16kHz)

@@ -17,6 +17,11 @@ public actor ClearVoice {
     
     private let configuration: ClearVoiceConfiguration
     
+    // MARK: - Model Lifecycle Management
+    
+    /// Model lifecycle manager for memory tracking and LRU eviction
+    public let modelManager: ModelLifecycleManager
+    
     // MARK: - Model Providers (injectable for testing)
     
     internal var vadProvider: (any VADProvider)?
@@ -33,8 +38,14 @@ public actor ClearVoice {
     // MARK: - Initialization
     
     /// Production initializer
-    public init(configuration: ClearVoiceConfiguration = .default) {
+    public init(
+        configuration: ClearVoiceConfiguration = .default,
+        modelManager: ModelLifecycleManager? = nil
+    ) {
         self.configuration = configuration
+        self.modelManager = modelManager ?? ModelLifecycleManager(
+            memoryLimitBytes: configuration.modelMemoryLimit
+        )
     }
     
     /// Testing initializer with injectable providers
@@ -49,6 +60,9 @@ public actor ClearVoice {
         classifier: (any SoundClassifier)? = nil
     ) {
         self.configuration = configuration
+        self.modelManager = ModelLifecycleManager(
+            memoryLimitBytes: configuration.modelMemoryLimit
+        )
         self.vadProvider = vad
         self.diarizationProvider = diarization
         if let (model, provider) = enhancer {
@@ -759,6 +773,33 @@ public actor ClearVoice {
     public func preload(_ models: [any ModelIdentifier]) async throws {
         // Model preloading is handled by providers - this is a no-op hint
         // Providers should be loaded via their load() methods before registration
+    }
+    
+    // MARK: - Model Lifecycle Convenience
+    
+    /// Unload a specific model by ID
+    ///
+    /// Calls the model's `unload()` method and removes it from tracking.
+    /// Use this to free GPU/memory when a model is no longer needed.
+    ///
+    /// - Parameter modelId: The model identifier (e.g., "mossformer2_se_48k")
+    public func unloadModel(_ modelId: String) async {
+        await modelManager.unload(modelId: modelId)
+    }
+    
+    /// Unload all models
+    ///
+    /// Calls `unload()` on all tracked models and clears the registry.
+    /// Useful for memory cleanup before app termination or switching contexts.
+    public func unloadAllModels() async {
+        await modelManager.unloadAll()
+    }
+    
+    /// Get model lifecycle statistics
+    ///
+    /// Returns current memory usage, loaded model count, and eviction stats.
+    public var modelStats: ModelLifecycleManager.Stats {
+        get async { await modelManager.stats }
     }
     
     /// Current memory usage in bytes
