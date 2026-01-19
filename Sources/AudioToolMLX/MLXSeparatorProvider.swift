@@ -204,6 +204,9 @@ public actor MossFormer2SSProvider: SpeechSeparator {
                 let squeezed = source.squeezed(axis: 0)
                 speakerChunks[spkIdx].append((squeezed, startIdx))
             }
+            
+            // Clear GPU cache between chunks to reduce peak memory
+            GPU.clearCache()
         }
         
         // Reassemble each speaker's audio using triangular blending

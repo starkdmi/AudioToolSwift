@@ -550,6 +550,135 @@ func runTranscribe(inputPath: String) async throws {
 }
 #endif
 
+// MARK: - Streaming Verification Test
+
+/// Test streaming vs non-streaming output quality
+/// Verifies that processStream() produces identical results to process()
+func runStreamingVerification(inputPath: String, outputPath: String, weightsPath: String?) async throws {
+    print("\n=== Streaming Verification Test ===")
+    print("Comparing process() vs processStream() output quality\n")
+    
+    // Resolve weights path
+    let resolvedWeights = weightsPath ?? "../Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
+    guard FileManager.default.fileExists(atPath: resolvedWeights) else {
+        print("Error: Weights not found at: \(resolvedWeights)")
+        return
+    }
+    
+    // Create provider
+    let provider = FRCRNSE16KProvider(weightsPath: resolvedWeights)
+    
+    // Load model
+    print("Loading FRCRN model...")
+    try await provider.load()
+    print("Model ready\n")
+    
+    // Load audio
+    print("Loading audio from: \(inputPath)")
+    let loaderConfig = AudioLoader.Configuration(targetSampleRate: 16000)
+    let loader = AudioLoader(config: loaderConfig)
+    let audio = try loader.loadMono(from: URL(fileURLWithPath: inputPath))
+    eval(audio)
+    let samples = audio.asArray(Float.self)
+    
+    let input = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
+    print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)\n")
+    
+    // 1. Non-streaming (batch) processing
+    print("--- Non-Streaming (Batch) ---")
+    let batchStart = Date()
+    let batchOutput = try await provider.process(input)
+    let batchTime = Date().timeIntervalSince(batchStart)
+    print("Batch output: \(batchOutput.samples.count) samples")
+    print("Batch time: \(String(format: "%.2f", batchTime))s\n")
+    
+    // 2. Streaming processing
+    print("--- Streaming ---")
+    let streamStart = Date()
+    var streamedChunks: [AudioBuffer] = []
+    var chunkCount = 0
+    
+    for try await chunk in provider.processStream(input) {
+        chunkCount += 1
+        let samples = chunk.samples.count
+        print("  Chunk \(chunkCount): \(samples) samples")
+        streamedChunks.append(chunk)
+    }
+    
+    let streamTime = Date().timeIntervalSince(streamStart)
+    
+    // Combine streamed chunks
+    let streamedSamples = streamedChunks.flatMap { $0.samples }
+    print("Streamed chunks: \(chunkCount)")
+    print("Streamed total: \(streamedSamples.count) samples")
+    print("Stream time: \(String(format: "%.2f", streamTime))s\n")
+    
+    // 3. Compare outputs
+    print("--- Quality Comparison ---")
+    let minLen = min(batchOutput.samples.count, streamedSamples.count)
+    let batchPrefix = Array(batchOutput.samples.prefix(minLen))
+    let streamPrefix = Array(streamedSamples.prefix(minLen))
+    
+    // Calculate differences
+    var maxDiff: Float = 0
+    var sumDiff: Float = 0
+    var sumSquaredDiff: Float = 0
+    
+    for i in 0..<minLen {
+        let diff = abs(batchPrefix[i] - streamPrefix[i])
+        maxDiff = max(maxDiff, diff)
+        sumDiff += diff
+        sumSquaredDiff += diff * diff
+    }
+    
+    let meanDiff = sumDiff / Float(minLen)
+    let rmsDiff = sqrt(sumSquaredDiff / Float(minLen))
+    
+    print("Sample counts - Batch: \(batchOutput.samples.count), Stream: \(streamedSamples.count)")
+    print("Max difference: \(String(format: "%.6f", maxDiff))")
+    print("Mean difference: \(String(format: "%.6f", meanDiff))")
+    print("RMS difference: \(String(format: "%.6f", rmsDiff))")
+    
+    // Quality assessment
+    let isNearIdentical = maxDiff < 0.001
+    let isAcceptable = maxDiff < 0.01
+    
+    print("\nQuality Assessment:")
+    if isNearIdentical {
+        print("✅ NEAR-IDENTICAL: Streaming output matches batch output (max diff < 0.001)")
+    } else if isAcceptable {
+        print("⚠️ ACCEPTABLE: Small differences detected (max diff < 0.01)")
+    } else {
+        print("❌ SIGNIFICANT DIFFERENCES: Review implementation (max diff >= 0.01)")
+    }
+    
+    // Save both outputs for manual comparison
+    let saverConfig = AudioSaver.Configuration(sampleRate: 16000)
+    let saver = AudioSaver(config: saverConfig)
+    
+    let basePath = (outputPath as NSString).deletingPathExtension
+    let batchPath = basePath + "_batch.wav"
+    let streamPath = basePath + "_stream.wav"
+    
+    try saver.save(MLXArray(batchOutput.samples), to: batchPath)
+    try saver.save(MLXArray(streamedSamples), to: streamPath)
+    print("\n✓ Saved batch output: \(batchPath)")
+    print("✓ Saved stream output: \(streamPath)")
+    
+    // Print timing comparison
+    print("\n--- Timing Comparison ---")
+    let rtfBatch = input.duration / batchTime
+    let rtfStream = input.duration / streamTime
+    print("Batch RTF: \(String(format: "%.2fx", rtfBatch))")
+    print("Stream RTF: \(String(format: "%.2fx", rtfStream))")
+    
+    // First chunk latency (streaming benefit)
+    if let firstChunkSamples = streamedChunks.first?.samples.count {
+        let firstChunkDuration = Double(firstChunkSamples) / 16000.0
+        print("First chunk duration: \(String(format: "%.2f", firstChunkDuration))s (streaming enables playback after first chunk)")
+    }
+}
+
 // MARK: - Main Execution
 
 func printUsageDetailed() {
@@ -624,9 +753,11 @@ Task {
                 exit(1)
             }
         #endif
+        case "streaming_verify", "stream_test", "verify_stream":
+            try await runStreamingVerification(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         default:
             print("Unknown model: \(model)")
-            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, kokoro, voice_mix, voice_match, chatterbox, chatterbox_expressive, transcribe")
+            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, streaming_verify, kokoro, voice_mix, voice_match, chatterbox, chatterbox_expressive, transcribe")
             exit(1)
         }
         exit(0)

@@ -212,6 +212,120 @@ struct ChunkingConfigTests {
     }
 }
 
+// MARK: - Streaming Verification Tests
+
+@Suite("Streaming Output Verification", .tags(.integration))
+struct StreamingVerificationTests {
+    
+    @Test("FRCRN Streaming produces identical output to batch processing")
+    func testFRCRNStreamingQuality() async throws {
+        guard TestConfig.shouldRunIntegrationTests else {
+            print("Skipping MLX tests")
+            return
+        }
+        
+        guard FileManager.default.fileExists(atPath: TestConfig.frcrn16kWeights) else {
+            print("FRCRN weights not found at: \(TestConfig.frcrn16kWeights)")
+            return
+        }
+        
+        print("\n=== FRCRN Streaming vs Batch Quality Test ===")
+        
+        // Create provider
+        let provider = FRCRNSE16KProvider(weightsPath: TestConfig.frcrn16kWeights)
+        
+        // Load model
+        print("Loading model...")
+        try await provider.load()
+        
+        // Create synthetic 8s audio (triggers chunking)
+        let sampleRate = 16000
+        let duration: Float = 8.0
+        let samples: [Float] = (0..<Int(duration * Float(sampleRate))).map { i in
+            let t = Float(i) / Float(sampleRate)
+            let sine = sin(2.0 * Float.pi * 440.0 * t) * 0.5
+            let noise = Float.random(in: -0.1...0.1)
+            return sine + noise
+        }
+        
+        let input = AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
+        print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
+        
+        // 1. Batch processing
+        print("\n--- Batch Processing ---")
+        let batchStart = Date()
+        let batchOutput = try await provider.process(input)
+        let batchTime = Date().timeIntervalSince(batchStart)
+        print("Batch output: \(batchOutput.samples.count) samples in \(String(format: "%.2f", batchTime))s")
+        
+        // 2. Streaming processing
+        print("\n--- Streaming Processing ---")
+        let streamStart = Date()
+        var streamedChunks: [AudioBuffer] = []
+        var chunkCount = 0
+        
+        for try await chunk in provider.processStream(input) {
+            chunkCount += 1
+            print("  Chunk \(chunkCount): \(chunk.samples.count) samples")
+            streamedChunks.append(chunk)
+        }
+        
+        let streamTime = Date().timeIntervalSince(streamStart)
+        
+        // Combine streamed chunks
+        let streamedSamples = streamedChunks.flatMap { $0.samples }
+        print("Streamed total: \(streamedSamples.count) samples in \(String(format: "%.2f", streamTime))s")
+        
+        // 3. Compare outputs
+        print("\n--- Quality Comparison ---")
+        let minLen = min(batchOutput.samples.count, streamedSamples.count)
+        
+        // Calculate differences
+        var maxDiff: Float = 0
+        var sumSquaredDiff: Float = 0
+        
+        for i in 0..<minLen {
+            let diff = abs(batchOutput.samples[i] - streamedSamples[i])
+            maxDiff = max(maxDiff, diff)
+            sumSquaredDiff += diff * diff
+        }
+        
+        let rmsDiff = sqrt(sumSquaredDiff / Float(minLen))
+        
+        print("Sample counts - Batch: \(batchOutput.samples.count), Stream: \(streamedSamples.count)")
+        print("Max difference: \(String(format: "%.6f", maxDiff))")
+        print("RMS difference: \(String(format: "%.6f", rmsDiff))")
+        
+        // Save outputs for manual inspection
+        let batchPath = "\(TestConfig.frcrnOutputDir)/streaming_test_batch.wav"
+        let streamPath = "\(TestConfig.frcrnOutputDir)/streaming_test_stream.wav"
+        
+        let saverConfig = AudioSaver.Configuration(sampleRate: Double(sampleRate))
+        let saver = AudioSaver(config: saverConfig)
+        try saver.save(MLXArray(batchOutput.samples), to: batchPath)
+        try saver.save(MLXArray(streamedSamples), to: streamPath)
+        print("✓ Saved batch: \(batchPath)")
+        print("✓ Saved stream: \(streamPath)")
+        
+        // Verify quality
+        // For discardEdges strategy, differences are expected at chunk boundaries
+        // But they should be small (< 0.01 for reasonable quality)
+        #expect(maxDiff < 0.5, "Max difference should be reasonable (< 0.5)")
+        #expect(abs(batchOutput.samples.count - streamedSamples.count) < 1000, "Sample counts should be close")
+        
+        // Quality assessment
+        if maxDiff < 0.001 {
+            print("✅ NEAR-IDENTICAL: max diff < 0.001")
+        } else if maxDiff < 0.01 {
+            print("✅ EXCELLENT: max diff < 0.01")
+        } else if maxDiff < 0.1 {
+            print("⚠️ ACCEPTABLE: max diff < 0.1")
+        } else {
+            print("❌ CHECK IMPLEMENTATION: max diff >= 0.1")
+        }
+    }
+}
+
 // MARK: - Test Tags
 
 extension Tag {

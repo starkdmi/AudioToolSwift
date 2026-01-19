@@ -41,6 +41,20 @@ public protocol StreamableProcessor: AudioProcessor {
     func reset() async
 }
 
+// MARK: - Output Streaming
+
+/// Protocol for processors that can stream output chunks during processing.
+/// This allows yielding processed audio chunks as they become ready,
+/// rather than waiting for complete processing.
+public protocol StreamableOutput: AudioProcessor {
+    /// Process audio and stream output chunks as they're ready.
+    /// Each yielded chunk represents a portion of the processed audio.
+    /// Consumers can play/save chunks immediately for lower latency.
+    /// - Parameter input: Complete input audio to process
+    /// - Returns: Async stream of processed audio chunks
+    nonisolated func processStream(_ input: AudioBuffer) -> AsyncThrowingStream<AudioBuffer, Error>
+}
+
 // MARK: - Specialized Protocols
 
 /// Voice Activity Detection

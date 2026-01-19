@@ -485,4 +485,92 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     }
     
     public func reset() async {}
+    
+    // MARK: - Output Streaming
+    
+    /// Process audio and stream output chunks as they're ready.
+    /// Uses no overlap - each segment is processed independently.
+    public nonisolated func processStream(_ input: AudioBuffer) -> AsyncThrowingStream<AudioBuffer, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    try await self.processStreamImpl(input, continuation: continuation)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+    /// Internal implementation for streaming - runs within actor context
+    private func processStreamImpl(_ input: AudioBuffer, continuation: AsyncThrowingStream<AudioBuffer, Error>.Continuation) async throws {
+        guard let model = model else {
+            throw ClearVoiceError.modelNotLoaded("MossFormerGAN_CoreML")
+        }
+        
+        let samples = input.samples
+        let totalLength = samples.count
+        
+        // For short audio, just yield single result
+        if totalLength <= segmentSamples {
+            let result = try await processSegment(samples, model: model)
+            continuation.yield(result)
+            continuation.finish()
+            return
+        }
+        
+        // Process in segments (no overlap per model recommendation)
+        let numSegments = Int(ceil(Double(totalLength) / Double(segmentSamples)))
+        
+        for idx in 0..<numSegments {
+            let start = idx * segmentSamples
+            let end = min(start + segmentSamples, totalLength)
+            let actualLen = end - start
+            
+            // For short final segment, use context from previous audio
+            var segment: [Float]
+            let trimAmount: Int
+            
+            if actualLen < segmentSamples {
+                let needExtra = segmentSamples - actualLen
+                let contextStart = max(0, start - needExtra)
+                segment = Array(samples[contextStart..<end])
+                
+                if segment.count < segmentSamples {
+                    let padAmt = segmentSamples - segment.count
+                    segment = [Float](repeating: 0, count: padAmt) + segment
+                    trimAmount = padAmt + (segment.count - actualLen - padAmt)
+                } else {
+                    trimAmount = segment.count - actualLen
+                }
+            } else {
+                segment = Array(samples[start..<end])
+                trimAmount = 0
+            }
+            
+            let result = try await processSegment(segment, model: model)
+            
+            // Trim to actual portion
+            var outputSamples: [Float]
+            if trimAmount > 0 && trimAmount < result.samples.count {
+                outputSamples = Array(result.samples.suffix(result.samples.count - trimAmount).prefix(actualLen))
+            } else {
+                outputSamples = Array(result.samples.prefix(actualLen))
+            }
+            
+            let chunkBuffer = AudioBuffer(
+                samples: outputSamples,
+                sampleRate: sampleRate,
+                channels: 1
+            )
+            continuation.yield(chunkBuffer)
+        }
+        
+        continuation.finish()
+    }
 }
+
+// MARK: - StreamableOutput Conformance
+
+extension MossFormerGANCoreMLProvider: StreamableOutput {}
+

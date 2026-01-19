@@ -162,6 +162,9 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
             
             currentIdx += stride
             chunkCount += 1
+            
+            // Clear GPU cache between chunks to reduce peak memory
+            GPU.clearCache()
         }
         
         print("DEBUG MossFormer2SE: Processed \(chunkCount) chunks")
@@ -228,6 +231,95 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
             enhanced: AudioBuffer(samples: result.enhanced.asArray(Float.self), sampleRate: sampleRate, channels: 1),
             background: AudioBuffer(samples: result.background.asArray(Float.self), sampleRate: sampleRate, channels: 1)
         )
+    }
+}
+
+// MARK: - StreamableOutput Conformance
+
+extension MossFormer2SE48KProvider: StreamableOutput {
+    /// Process audio and stream output chunks as they're ready.
+    /// Uses discardEdges strategy - each chunk is independent after edge trimming.
+    /// - Parameter input: Complete input audio to process
+    /// - Returns: Async stream of processed audio chunks (in sequential order)
+    public nonisolated func processStream(_ input: AudioBuffer) -> AsyncThrowingStream<AudioBuffer, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    try await self.processStreamImpl(input, continuation: continuation)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+    /// Internal implementation for streaming - runs within actor context
+    private func processStreamImpl(_ input: AudioBuffer, continuation: AsyncThrowingStream<AudioBuffer, Error>.Continuation) async throws {
+        guard let pipeline = pipeline else {
+            throw ClearVoiceError.modelNotLoaded("MossFormer2SE48K")
+        }
+        
+        let audio = input.samples
+        let totalLength = audio.count
+        let durationSeconds = Float(totalLength) / Float(sampleRate)
+        
+        // For short audio, just yield single result
+        if durationSeconds <= maxDirectDuration {
+            let result = try await processChunk(audio, pipeline: pipeline)
+            continuation.yield(result)
+            continuation.finish()
+            return
+        }
+        
+        // Streaming with chunking
+        let chunkSamples = chunkingConfig.chunkSamples
+        let stride = chunkingConfig.strideSamples
+        let giveUp = chunkingConfig.overlapSamples / 2
+        
+        var currentIdx = 0
+        var isFirst = true
+        
+        while currentIdx + chunkSamples <= totalLength + stride {
+            let endIdx = min(currentIdx + chunkSamples, totalLength)
+            
+            // Extract and pad chunk
+            var chunk = Array(audio[currentIdx..<endIdx])
+            if chunk.count < chunkSamples {
+                chunk.append(contentsOf: [Float](repeating: 0, count: chunkSamples - chunk.count))
+            }
+            
+            // Process through model
+            let processed = try await processChunk(chunk, pipeline: pipeline)
+            let output = processed.samples
+            
+            // Determine valid range (discard edges)
+            let validStart = isFirst ? 0 : giveUp
+            let validEnd = min(chunkSamples - giveUp, output.count)
+            
+            // Calculate how much of the original audio this chunk covers
+            let outputRangeStart = isFirst ? 0 : currentIdx + giveUp
+            let outputRangeEnd = min(currentIdx + chunkSamples - giveUp, totalLength)
+            let actualLen = outputRangeEnd - outputRangeStart
+            
+            // Extract valid portion
+            if validEnd > validStart && actualLen > 0 {
+                let trimmedSamples = Array(output[validStart..<min(validStart + actualLen, validEnd)])
+                let chunkBuffer = AudioBuffer(
+                    samples: trimmedSamples,
+                    sampleRate: sampleRate,
+                    channels: 1
+                )
+                continuation.yield(chunkBuffer)
+            }
+            
+            // Clear GPU cache between chunks
+            GPU.clearCache()
+            
+            currentIdx += stride
+            isFirst = false
+        }
+        
+        continuation.finish()
     }
 }
 
@@ -386,6 +478,95 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
             enhanced: AudioBuffer(samples: enhancedSamples, sampleRate: sampleRate, channels: 1),
             background: AudioBuffer(samples: backgroundSamples, sampleRate: sampleRate, channels: 1)
         )
+    }
+}
+
+// MARK: - StreamableOutput Conformance
+
+extension FRCRNSE16KProvider: StreamableOutput {
+    /// Process audio and stream output chunks as they're ready.
+    /// Uses discardEdges strategy - each chunk is independent after edge trimming.
+    public nonisolated func processStream(_ input: AudioBuffer) -> AsyncThrowingStream<AudioBuffer, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    try await self.processStreamImpl(input, continuation: continuation)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+    /// Internal implementation for streaming - runs within actor context
+    private func processStreamImpl(_ input: AudioBuffer, continuation: AsyncThrowingStream<AudioBuffer, Error>.Continuation) async throws {
+        guard let model = model else {
+            throw ClearVoiceError.modelNotLoaded("FRCRN_SE_16K")
+        }
+        
+        let audio = input.samples
+        let totalLength = audio.count
+        let chunkSamples = chunkingConfig.chunkSamples
+        let overlapSamples = chunkingConfig.overlapSamples
+        let stride = chunkSamples - overlapSamples
+        let giveUp = overlapSamples / 2
+        
+        // Split into chunks
+        let inputMLX = MLXArray(audio)
+        var currentIdx = 0
+        var isFirst = true
+        
+        while currentIdx + chunkSamples <= totalLength + stride {
+            let endIdx = min(currentIdx + chunkSamples, totalLength)
+            
+            // Extract chunk
+            var chunk = inputMLX[currentIdx..<endIdx]
+            eval(chunk)
+            
+            // Pad if needed
+            let chunkLength = endIdx - currentIdx
+            if chunkLength < chunkSamples {
+                let padding = MLXArray.zeros([chunkSamples - chunkLength])
+                chunk = concatenated([chunk, padding], axis: 0)
+                eval(chunk)
+            }
+            
+            // Process through FRCRN model
+            let batchedChunk = chunk.reshaped([1, -1])
+            let output = model(batchedChunk)
+            eval(output)
+            let processed = output[0]
+            eval(processed)
+            
+            // Determine valid range (discard edges)
+            let keepStart = isFirst ? 0 : giveUp
+            let keepEnd = chunkSamples - giveUp
+            
+            // Calculate actual output length for this chunk
+            let outputRangeStart = isFirst ? 0 : currentIdx + giveUp
+            let outputRangeEnd = min(currentIdx + chunkSamples - giveUp, totalLength)
+            let actualLen = outputRangeEnd - outputRangeStart
+            
+            if keepEnd > keepStart && actualLen > 0 {
+                let trimmed = processed[keepStart..<min(keepStart + actualLen, keepEnd)]
+                eval(trimmed)
+                let trimmedSamples = trimmed.asArray(Float.self)
+                
+                let chunkBuffer = AudioBuffer(
+                    samples: trimmedSamples,
+                    sampleRate: sampleRate,
+                    channels: 1
+                )
+                continuation.yield(chunkBuffer)
+            }
+            
+            GPU.clearCache()
+            
+            currentIdx += stride
+            isFirst = false
+        }
+        
+        continuation.finish()
     }
 }
 

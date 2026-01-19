@@ -234,12 +234,15 @@ public struct MLXOverlap {
             forDiscardEdges: strategy == .discardEdges
         )
         
-        // Process each chunk
+        // Process each chunk with memory management
         var processedChunks: [(chunk: MLXArray, startIdx: Int)] = []
         for (chunk, startIdx) in inputChunks {
             let processed = try await processChunk(chunk)
             eval(processed)
             processedChunks.append((processed, startIdx))
+            
+            // Clear GPU cache between chunks to reduce peak memory
+            GPU.clearCache()
         }
         
         // Reassemble based on strategy
@@ -328,6 +331,9 @@ public struct MLXOverlap {
             eval(enhanced, background)
             enhancedChunks.append((enhanced, startIdx))
             backgroundChunks.append((background, startIdx))
+            
+            // Clear GPU cache between chunks to reduce peak memory
+            GPU.clearCache()
         }
         
         // Reassemble both using the same strategy
