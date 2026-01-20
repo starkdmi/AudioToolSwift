@@ -124,6 +124,14 @@ public enum ModelPrecision: String, Sendable, CaseIterable, Hashable {
 public enum VADModel: Sendable, Hashable {
     case silero           // FluidAudio (default)
     case sileroManual     // Direct CoreML
+    
+    /// Expected input sample rate for this model
+    public var sampleRate: Int {
+        switch self {
+        case .silero, .sileroManual:
+            return 16000
+        }
+    }
 }
 
 /// Available enhancement models
@@ -132,6 +140,16 @@ public enum EnhancementModel: Sendable, Hashable {
     case mossformerSE48k  // MLX, 48kHz, ~30x RTF
     case mossformerGAN    // CoreML, 16kHz, ~3.5x RTF
     case frcrn            // MLX/CoreML, 16kHz, 5-11x RTF
+    
+    /// Expected input sample rate for this model
+    public var sampleRate: Int {
+        switch self {
+        case .mossformerSE16k, .mossformerGAN, .frcrn:
+            return 16000
+        case .mossformerSE48k:
+            return 48000
+        }
+    }
 }
 
 /// Available separation models
@@ -141,11 +159,28 @@ public enum SeparationModel: Sendable, Hashable {
     case mossformerWhamr  // MLX, 2 speakers, noisy
     case demucs           // MLX, music stems
     case uss              // CoreML/MLX, universal
+    
+    /// Expected input sample rate for this model
+    public var sampleRate: Int {
+        switch self {
+        case .mossformer2spk, .mossformer3spk, .mossformerWhamr:
+            return 16000
+        case .demucs:
+            return 44100
+        case .uss:
+            return 32000
+        }
+    }
 }
 
 /// Available upscaling models
 public enum UpscalingModel: Sendable, Hashable {
     case mossformerSR     // MLX, 16k → 48k
+    
+    /// Expected input sample rate for this model (before upscaling)
+    public var sampleRate: Int {
+        return 16000
+    }
 }
 
 /// Available transcription models
@@ -156,6 +191,11 @@ public enum TranscriptionModel: Sendable, Hashable {
     case whisperSmall     // MLX
     case whisperLarge     // MLX, supports translation
     case appleSpeech      // Native, iOS 26+
+    
+    /// Expected input sample rate for this model
+    public var sampleRate: Int {
+        return 16000  // All transcription models use 16kHz
+    }
 }
 
 /// Available translation models

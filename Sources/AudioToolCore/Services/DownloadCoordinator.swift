@@ -51,18 +51,33 @@ public actor DownloadCoordinator {
         variant: ModelVariant,
         priority: TaskPriority = .medium
     ) -> AsyncThrowingStream<DownloadProgress, Error> {
-        AsyncThrowingStream { continuation in
+        // Check if already downloading synchronously before creating stream
+        if activeTasks[variant.id] != nil {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: DownloadError.unknownError(
+                    underlying: NSError(domain: "DownloadCoordinator", code: 1,
+                                        userInfo: [NSLocalizedDescriptionKey: "Already downloading"])
+                ))
+            }
+        }
+        
+        // Check concurrent download limit
+        if activeTasks.count >= maxConcurrentDownloads {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: DownloadError.unknownError(
+                    underlying: NSError(domain: "DownloadCoordinator", code: 2,
+                                        userInfo: [NSLocalizedDescriptionKey: "Maximum concurrent downloads reached (\(maxConcurrentDownloads))"])
+                ))
+            }
+        }
+        
+        // Create placeholder task to reserve the slot synchronously
+        let placeholderTask = Task<Void, Never> { }
+        activeTasks[variant.id] = placeholderTask
+        
+        return AsyncThrowingStream { continuation in
             let task = Task(priority: priority) {
                 do {
-                    // Check if already downloading
-                    guard self.activeTasks[variant.id] == nil else {
-                        continuation.finish(throwing: DownloadError.unknownError(
-                            underlying: NSError(domain: "DownloadCoordinator", code: 1,
-                                                userInfo: [NSLocalizedDescriptionKey: "Already downloading"])
-                        ))
-                        return
-                    }
-                    
                     // Check storage availability
                     try await self.checkStorageAvailable(for: variant)
                     
@@ -114,7 +129,7 @@ public actor DownloadCoordinator {
                 await self.removeTask(for: variant.id)
             }
             
-            // Store task for cancellation
+            // Replace placeholder with real task
             Task {
                 await self.registerTask(task, for: variant.id)
             }
@@ -135,8 +150,32 @@ public actor DownloadCoordinator {
         variant: ModelVariant,
         progress: @escaping @Sendable (DownloadProgress) -> Void = { _ in }
     ) async throws -> URL {
+        // Check if already downloading
+        if activeTasks[variant.id] != nil {
+            throw DownloadError.unknownError(
+                underlying: NSError(domain: "DownloadCoordinator", code: 1,
+                                    userInfo: [NSLocalizedDescriptionKey: "Already downloading"])
+            )
+        }
+        
+        // Check concurrent download limit
+        if activeTasks.count >= maxConcurrentDownloads {
+            throw DownloadError.unknownError(
+                underlying: NSError(domain: "DownloadCoordinator", code: 2,
+                                    userInfo: [NSLocalizedDescriptionKey: "Maximum concurrent downloads reached (\(maxConcurrentDownloads))"])
+            )
+        }
+        
         // Check storage
         try await checkStorageAvailable(for: variant)
+        
+        // Register placeholder to reserve slot
+        let placeholderTask = Task<Void, Never> { }
+        activeTasks[variant.id] = placeholderTask
+        
+        defer {
+            activeTasks.removeValue(forKey: variant.id)
+        }
         
         let hubRepo = Hub.Repo(id: variant.repo)
         

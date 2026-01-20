@@ -36,14 +36,18 @@ public actor AppleTTSProvider: SpeechSynthesizer {
     
     private nonisolated let language: String
     private nonisolated let languageCode: String
+    private nonisolated let synthesisTimeout: TimeInterval
     
     // MARK: - Initialization
     
     /// Initialize Apple TTS provider
-    /// - Parameter language: BCP-47 language code (e.g., "en-US", "fr-FR", "de-DE", "ru-RU")
-    public init(language: String = "en-US") {
+    /// - Parameters:
+    ///   - language: BCP-47 language code (e.g., "en-US", "fr-FR", "de-DE", "ru-RU")
+    ///   - timeout: Maximum time to wait for synthesis completion (default: 60 seconds)
+    public init(language: String = "en-US", timeout: TimeInterval = 60.0) {
         self.language = language
         self.languageCode = String(language.prefix(2))
+        self.synthesisTimeout = timeout
     }
     
     // MARK: - SpeechSynthesizer Protocol
@@ -88,13 +92,13 @@ public actor AppleTTSProvider: SpeechSynthesizer {
                 
                 // Pump run loop until synthesis completes (required for headless environments)
                 let runLoop = RunLoop.current
-                let timeout = Date(timeIntervalSinceNow: 30.0) // 30 second timeout
+                let timeout = Date(timeIntervalSinceNow: self.synthesisTimeout)
                 while !isComplete && Date() < timeout {
                     runLoop.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
                 }
                 
                 if !isComplete {
-                    synthesisError = ClearVoiceError.resourceUnavailable("Synthesis timed out")
+                    synthesisError = ClearVoiceError.resourceUnavailable("Synthesis timed out after \(Int(self.synthesisTimeout)) seconds")
                 }
                 
                 // Return result on main continuation
@@ -146,7 +150,7 @@ public actor AppleTTSProvider: SpeechSynthesizer {
                 
                 // Pump run loop
                 let runLoop = RunLoop.current
-                let timeout = Date(timeIntervalSinceNow: 30.0)
+                let timeout = Date(timeIntervalSinceNow: self.synthesisTimeout)
                 while !isComplete && Date() < timeout {
                     runLoop.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
                 }

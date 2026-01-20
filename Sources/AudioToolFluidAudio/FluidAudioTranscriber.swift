@@ -78,7 +78,15 @@ public actor FluidAudioTranscriber: Transcriber {
         )
     }
     
-    /// Stream transcription segments as recognized
+    /// Stream transcription segments from audio stream.
+    ///
+    /// - Important: FluidAudio ASR is batch-oriented and requires complete audio.
+    ///   This implementation buffers the entire input stream before processing,
+    ///   so it does not provide true real-time streaming. A single segment is
+    ///   emitted after the input stream completes.
+    ///
+    /// - Parameter audio: Async stream of audio chunks
+    /// - Returns: Stream of transcription segments
     public nonisolated func streamTranscription(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -88,7 +96,6 @@ public actor FluidAudioTranscriber: Transcriber {
                 }
                 
                 // Collect audio chunks for batch processing
-                // Note: FluidAudio ASR is primarily batch-oriented
                 var allSamples = [Float]()
                 
                 for await chunk in audio {

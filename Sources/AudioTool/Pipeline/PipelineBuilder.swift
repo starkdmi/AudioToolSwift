@@ -202,7 +202,7 @@ public struct PipelineBuilder: Sendable {
         guard let voice = voice else {
             throw ClearVoiceError.pipelineConfigurationInvalid("Pipeline not attached to ClearVoice instance")
         }
-        return try await voice.executePipeline(self, audio: audio)
+        return try await voice.executePipeline(self, audio: audio, eventHandler: onSegmentHandler)
     }
     
     /// Execute pipeline on audio source (batch mode)
@@ -219,7 +219,7 @@ public struct PipelineBuilder: Sendable {
             audio = buffer
         }
         
-        return try await voice.executePipeline(self, audio: audio)
+        return try await voice.executePipeline(self, audio: audio, eventHandler: onSegmentHandler)
     }
     
     /// Execute pipeline with streaming output

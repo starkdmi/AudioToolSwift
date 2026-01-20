@@ -95,7 +95,10 @@ let package = Package(
         // Main public API (no MLX/CoreML dependency)
         .target(
             name: "ClearVoice",
-            dependencies: ["ClearVoiceCore"],
+            dependencies: [
+                "ClearVoiceCore",
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
             path: "Sources/ClearVoice"
         ),
         

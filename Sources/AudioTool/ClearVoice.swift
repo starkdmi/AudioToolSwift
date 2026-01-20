@@ -8,6 +8,7 @@
 import Foundation
 import AVFoundation
 import ClearVoiceCore
+@preconcurrency import AudioUtils
 
 
 /// Main entry point - thread-safe model coordinator
@@ -124,159 +125,109 @@ public actor ClearVoice {
     ///
     /// - Parameters:
     ///   - url: Path to audio file
-    ///   - targetSampleRate: Optional target sample rate for resampling
+    ///   - targetSampleRate: Optional target sample rate for resampling. If nil, preserves source sample rate.
     /// - Returns: Loaded audio buffer
     public func loadAudio(from url: URL, targetSampleRate: Int? = nil) async throws -> ClearVoiceCore.AudioBuffer {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw ClearVoiceError.audioFileNotFound(url)
         }
         
-        // Load audio using AVFoundation
-        let audioFile = try AVAudioFile(forReading: url)
-        let format = audioFile.processingFormat
-        let frameCount = AVAudioFrameCount(audioFile.length)
-        
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            throw ClearVoiceError.resourceUnavailable("Failed to create audio buffer")
-        }
-        
-        try audioFile.read(into: buffer)
-        
-        guard let channelData = buffer.floatChannelData else {
-            throw ClearVoiceError.resourceUnavailable("No audio data in buffer")
-        }
-        
-        // Convert to mono if stereo
-        var samples: [Float]
-        if format.channelCount > 1 {
-            // Mix down to mono
-            samples = [Float](repeating: 0, count: Int(frameCount))
-            for ch in 0..<Int(format.channelCount) {
-                for i in 0..<Int(frameCount) {
-                    samples[i] += channelData[ch][i]
-                }
-            }
-            for i in 0..<samples.count {
-                samples[i] /= Float(format.channelCount)
-            }
+        // Configure AudioLoader - preserve source rate when targetSampleRate is nil
+        let config: AudioLoader.Configuration
+        if let targetRate = targetSampleRate {
+            config = AudioLoader.Configuration(
+                targetSampleRate: Double(targetRate),
+                maxDuration: 3600.0,  // 1 hour max
+                normalizationMode: .none,
+                resamplingMethod: .auto
+            )
         } else {
-            samples = Array(UnsafeBufferPointer(start: channelData[0], count: Int(frameCount)))
+            // Preserve source sample rate - use a placeholder value since resamplingMethod is .none
+            config = AudioLoader.Configuration(
+                targetSampleRate: 48000,  // Ignored when resamplingMethod is .none
+                maxDuration: 3600.0,
+                normalizationMode: .none,
+                resamplingMethod: .none
+            )
         }
         
-        let sourceSampleRate = Int(format.sampleRate)
-        let targetRate = targetSampleRate ?? sourceSampleRate
+        let loader = AudioLoader(config: config)
         
-        // Resample if needed
-        if sourceSampleRate != targetRate {
-            samples = resampleAudio(samples, from: sourceSampleRate, to: targetRate)
+        do {
+            let audioData = try loader.loadMonoBuffer(from: url)
+            return ClearVoiceCore.AudioBuffer(
+                samples: audioData.samples,
+                sampleRate: audioData.sampleRate,
+                channels: 1
+            )
+        } catch let error as AudioLoaderError {
+            // Map AudioLoader errors to ClearVoice errors
+            switch error {
+            case .fileNotFound(let path):
+                throw ClearVoiceError.audioFileNotFound(URL(fileURLWithPath: path))
+            case .unsupportedFormat(let ext):
+                throw ClearVoiceError.invalidAudioFormat(expected: "wav/mp3/m4a/flac", found: ext)
+            case .fileTooLarge, .audioTooLong:
+                throw ClearVoiceError.resourceUnavailable(error.localizedDescription)
+            default:
+                throw ClearVoiceError.resourceUnavailable(error.localizedDescription)
+            }
         }
-        
-        return AudioBuffer(samples: samples, sampleRate: targetRate, channels: 1)
     }
     
     /// Save audio to file
     ///
-    /// Exports audio buffer to a file in the specified format.
+    /// Exports audio buffer to a file in the specified format using AudioUtils.
     ///
     /// - Parameters:
     ///   - buffer: Audio buffer to save
     ///   - url: Destination file path
     ///   - format: Output format (default: .wav)
     public func saveAudio(_ buffer: ClearVoiceCore.AudioBuffer, to url: URL, format: AudioFormat = .wav) async throws {
-        guard let avFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: Double(buffer.sampleRate),
-            channels: AVAudioChannelCount(buffer.channels),
-            interleaved: false
-        ) else {
-            throw ClearVoiceError.invalidAudioFormat(
-                expected: "pcmFormatFloat32",
-                found: "unsupported"
+        // Map ClearVoice format to AudioSaver format
+        let saverConfig: AudioSaver.Configuration
+        switch format {
+        case .wav:
+            saverConfig = AudioSaver.Configuration(
+                sampleRate: Double(buffer.sampleRate),
+                bitDepth: .float32,
+                fileFormat: .wav
+            )
+        case .m4a:
+            saverConfig = AudioSaver.Configuration(
+                sampleRate: Double(buffer.sampleRate),
+                bitDepth: .float32,
+                fileFormat: .m4a(bitRate: 128000)
+            )
+        case .mp3:
+            // MP3 not directly supported, fall back to WAV
+            saverConfig = AudioSaver.Configuration(
+                sampleRate: Double(buffer.sampleRate),
+                bitDepth: .int16,
+                fileFormat: .wav
+            )
+        case .flac:
+            // FLAC not in AudioSaver, use WAV with high bit depth
+            saverConfig = AudioSaver.Configuration(
+                sampleRate: Double(buffer.sampleRate),
+                bitDepth: .int24,
+                fileFormat: .wav
             )
         }
         
-        // Determine file settings based on format
-        let settings: [String: Any]
-        switch format {
-        case .wav:
-            settings = [
-                AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: Double(buffer.sampleRate),
-                AVNumberOfChannelsKey: buffer.channels,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsNonInterleaved: false
-            ]
-        case .m4a:
-            settings = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: Double(buffer.sampleRate),
-                AVNumberOfChannelsKey: buffer.channels,
-                AVEncoderBitRateKey: 128000
-            ]
-        case .mp3:
-            // Note: MP3 encoding not directly supported, use WAV format
-            settings = [
-                AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: Double(buffer.sampleRate),
-                AVNumberOfChannelsKey: buffer.channels,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsBigEndianKey: false
-            ]
-        case .flac:
-            settings = [
-                AVFormatIDKey: kAudioFormatFLAC,
-                AVSampleRateKey: Double(buffer.sampleRate),
-                AVNumberOfChannelsKey: buffer.channels
-            ]
+        let saver = AudioSaver(config: saverConfig)
+        
+        // Convert AudioBuffer to AudioData
+        let audioData = AudioData(
+            samples: buffer.samples,
+            sampleRate: buffer.sampleRate
+        )
+        
+        do {
+            try saver.saveBuffer(audioData, to: url)
+        } catch let error as AudioSaverError {
+            throw ClearVoiceError.resourceUnavailable(error.localizedDescription)
         }
-        
-        let audioFile = try AVAudioFile(forWriting: url, settings: settings)
-        
-        guard let pcmBuffer = AVAudioPCMBuffer(
-            pcmFormat: avFormat,
-            frameCapacity: AVAudioFrameCount(buffer.samples.count)
-        ) else {
-            throw ClearVoiceError.resourceUnavailable("Failed to create PCM buffer")
-        }
-        
-        pcmBuffer.frameLength = AVAudioFrameCount(buffer.samples.count)
-        
-        if let channelData = pcmBuffer.floatChannelData {
-            for (index, sample) in buffer.samples.enumerated() {
-                channelData[0][index] = sample
-            }
-        }
-        
-        try audioFile.write(from: pcmBuffer)
-    }
-    
-    /// Simple linear interpolation resampling
-    private func resampleAudio(_ samples: [Float], from sourceSampleRate: Int, to targetSampleRate: Int) -> [Float] {
-        guard sourceSampleRate != targetSampleRate else { return samples }
-        
-        let ratio = Double(targetSampleRate) / Double(sourceSampleRate)
-        let newLength = Int(Double(samples.count) * ratio)
-        
-        guard newLength > 0 else { return [] }
-        
-        var resampled = [Float](repeating: 0, count: newLength)
-        
-        for i in 0..<newLength {
-            let sourceIndex = Double(i) / ratio
-            let index = Int(sourceIndex)
-            let fraction = Float(sourceIndex - Double(index))
-            
-            if index < samples.count - 1 {
-                resampled[i] = samples[index] * (1 - fraction) + samples[index + 1] * fraction
-            } else if index < samples.count {
-                resampled[i] = samples[index]
-            }
-        }
-        
-        return resampled
     }
     
     // MARK: - Analysis
@@ -289,7 +240,10 @@ public actor ClearVoice {
         guard let vad = vadProvider else {
             throw ClearVoiceError.modelNotLoaded("VAD")
         }
-        return try await vad.detect(audio)
+        
+        // Resample to model's expected sample rate if needed
+        let input = try audio.resampled(to: model.sampleRate)
+        return try await vad.detect(input)
     }
     
     /// Speaker diarization
@@ -301,10 +255,13 @@ public actor ClearVoice {
             throw ClearVoiceError.modelNotLoaded("Diarization")
         }
         
+        // Diarization typically expects 16kHz
+        let input = try audio.resampled(to: 16000)
+        
         if let hint = vadHint {
-            return try await diarizer.diarize(audio, vadHint: hint)
+            return try await diarizer.diarize(input, vadHint: hint)
         } else {
-            return try await diarizer.diarize(audio)
+            return try await diarizer.diarize(input)
         }
     }
     
@@ -329,7 +286,16 @@ public actor ClearVoice {
         guard let enhancer = enhancerProviders[model] else {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
-        return try await enhancer.process(audio)
+        
+        // Resample to model's expected sample rate if needed
+        let input = try audio.resampled(to: model.sampleRate)
+        let output = try await enhancer.process(input)
+        
+        // Resample back to original rate if different
+        if audio.sampleRate != model.sampleRate {
+            return try output.resampled(to: audio.sampleRate)
+        }
+        return output
     }
     
     /// Enhance only speech segments (VAD-gated)
@@ -342,15 +308,25 @@ public actor ClearVoice {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
         
-        var result = audio
+        // Resample full audio to model's expected sample rate
+        let resampledAudio = try audio.resampled(to: model.sampleRate)
+        
+        var result = resampledAudio
         let speechSegments = segments.filter(\.isSpeech)
         
         for segment in speechSegments {
-            let chunk = audio.slice(segment.timeRange.start..<segment.timeRange.end)
+            // Scale time ranges to resampled audio
+            let scaledStart = segment.timeRange.start
+            let scaledEnd = segment.timeRange.end
+            let chunk = resampledAudio.slice(scaledStart..<scaledEnd)
             let enhanced = try await enhancer.process(chunk)
-            result = result.replacing(segment.timeRange.start..<segment.timeRange.end, with: enhanced)
+            result = result.replacing(scaledStart..<scaledEnd, with: enhanced)
         }
         
+        // Resample back to original rate if different
+        if audio.sampleRate != model.sampleRate {
+            return try result.resampled(to: audio.sampleRate)
+        }
         return result
     }
     
@@ -365,7 +341,16 @@ public actor ClearVoice {
         guard let separator = separatorProviders[model] else {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
-        return try await separator.separate(audio, speakers: speakers)
+        
+        // Resample to model's expected sample rate if needed
+        let input = try audio.resampled(to: model.sampleRate)
+        let outputs = try await separator.separate(input, speakers: speakers)
+        
+        // Resample all outputs back to original rate if different
+        if audio.sampleRate != model.sampleRate {
+            return try outputs.map { try $0.resampled(to: audio.sampleRate) }
+        }
+        return outputs
     }
     
     // MARK: - Upscaling
@@ -375,7 +360,10 @@ public actor ClearVoice {
         guard let upscaler = upscalerProvider else {
             throw ClearVoiceError.modelNotLoaded("Upscaler")
         }
-        return try await upscaler.process(audio)
+        
+        // Upscaler expects 16kHz input, outputs 48kHz
+        let input = try audio.resampled(to: 16000)
+        return try await upscaler.process(input)
     }
     
     // MARK: - Transcription
@@ -388,7 +376,10 @@ public actor ClearVoice {
         guard let transcriber = transcriberProviders[model] else {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
-        return try await transcriber.transcribe(audio)
+        
+        // Resample to model's expected sample rate if needed
+        let input = try audio.resampled(to: model.sampleRate)
+        return try await transcriber.transcribe(input)
     }
     
     // MARK: - Classification

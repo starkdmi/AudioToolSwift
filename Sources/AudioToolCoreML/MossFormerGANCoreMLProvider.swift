@@ -426,10 +426,11 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         let shape: [NSNumber] = [1, 2, NSNumber(value: T), NSNumber(value: F)]
         let multiArray = try MLMultiArray(shape: shape, dataType: .float32)
         
-        // Copy data
+        // Copy data using buffer pointer (much faster than element-by-element)
         let flatData = spec.flattened().asArray(Float.self)
-        for i in 0..<flatData.count {
-            multiArray[i] = NSNumber(value: flatData[i])
+        let dataPointer = multiArray.dataPointer.assumingMemoryBound(to: Float.self)
+        flatData.withUnsafeBufferPointer { srcPtr in
+            dataPointer.update(from: srcPtr.baseAddress!, count: flatData.count)
         }
         
         return try MLDictionaryFeatureProvider(dictionary: ["spectrogram": multiArray])
@@ -446,10 +447,12 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         let T = multiArray.shape[2].intValue
         let F = multiArray.shape[3].intValue
         
-        // Convert to flat array and reshape
-        var flatData = [Float](repeating: 0, count: 2 * T * F)
-        for i in 0..<flatData.count {
-            flatData[i] = multiArray[i].floatValue
+        // Convert to flat array using buffer pointer (much faster than element-by-element)
+        let totalCount = 2 * T * F
+        var flatData = [Float](repeating: 0, count: totalCount)
+        let srcPointer = multiArray.dataPointer.assumingMemoryBound(to: Float.self)
+        flatData.withUnsafeMutableBufferPointer { dstPtr in
+            dstPtr.baseAddress!.update(from: srcPointer, count: totalCount)
         }
         
         let mlxData = MLXArray(flatData).reshaped([1, 2, T, F])

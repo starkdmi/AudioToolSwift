@@ -83,7 +83,7 @@ public actor ModelLifecycleManager {
     /// If loading would exceed memory limit, LRU models are evicted first.
     ///
     /// - Parameter model: The model to register
-    /// - Throws: If model fails to load
+    /// - Throws: If model fails to load or exceeds memory limit
     public func register(_ model: any ManagedModel) async throws {
         let modelId = model.modelId
         
@@ -94,8 +94,16 @@ public actor ModelLifecycleManager {
             return
         }
         
-        // Check if we need to evict before loading
+        // Preflight check: reject models that exceed memory limit entirely
         let requiredMemory = model.estimatedMemoryBytes
+        if requiredMemory > memoryLimitBytes {
+            throw ClearVoiceError.memoryExhausted(
+                required: requiredMemory,
+                available: memoryLimitBytes
+            )
+        }
+        
+        // Check if we need to evict before loading
         try await evictIfNeeded(forNewMemory: requiredMemory)
         
         // Load the model
