@@ -1,5 +1,5 @@
 {
-  "originHash" : "2970553ddd3e4ccb0a0454f8eade7792b2ba613074c5956b77166f02871eec04",
+  "originHash" : "c1ffb730cf1575a7318569733f46ec0d8dc757465940aad648cfa65a41cd0ed9",
   "pins" : [
     {
       "identity" : "fluidaudio",
@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-jinja.git",
       "state" : {
-        "revision" : "06a511d5adab5a812852ff972e65702a24b8ce30",
-        "version" : "2.2.0"
+        "revision" : "ba2364165002abe8f4f3992d74a7b547c635638e",
+        "version" : "2.2.1"
       }
     },
     {

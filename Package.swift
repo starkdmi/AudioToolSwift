@@ -64,7 +64,7 @@ let package = Package(
         .package(name: "USSMLXSwift", path: "../Models/uss_mlx_swift"),
         
         // MLX for neural engine operations
-        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.2"),
+        .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.29.1")),
         
         // FluidAudio for VAD, transcription, diarization (v0.10.0+ for Sortformer)
         .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.10.0"),
@@ -76,11 +76,11 @@ let package = Package(
         // ChatterBox Multilingual TTS (MLX, 25 languages)
         .package(name: "ChatterboxMLXSwift", path: "../Models/chatterbox_swift"),
         
-        // HuggingFace Hub for model downloading (1.1.6+ required by mlx-swift-lm)
-        .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.1.6"),
+        // HuggingFace Hub for model downloading 
+        .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMinor(from: "1.1.6")),
         
         // MLX LLM for TranslateGemma translation
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "2.29.3"),
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMinor(from: "2.29.3")),
     ],
     targets: [
         // Core shared infrastructure
