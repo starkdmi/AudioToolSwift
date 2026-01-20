@@ -15,6 +15,13 @@ import ClearVoiceFluidAudio
 
 // MARK: - Kokoro TTS Test
 
+// Compute project root from source file path
+private let kokoroProjectRoot: String = {
+    var url = URL(fileURLWithPath: #filePath)
+    for _ in 0..<4 { url.deleteLastPathComponent() }
+    return url.path
+}()
+
 func runKokoroTest() async throws {
     print("\n=== Kokoro TTS Multilingual Test ===")
     print("Using precision: .bf16 → mlx-community/Kokoro-82M-bf16")
@@ -248,10 +255,10 @@ func runVoiceMatchingTest() async throws {
     
     // Reference audio files to test
     let referenceFiles = [
-        "/path/to/clear_voice_research/Docs/burunow_short.wav",
-        "/path/to/clear_voice_research/Docs/reference.wav",
-        "/path/to/clear_voice_research/Docs/watson_short.wav",
-        "/path/to/clear_voice_research/ClearVoice/voice_match_output/dark_knight_short.wav"
+        "\(kokoroProjectRoot)/ClearVoice/Docs/burunow_short.wav",
+        "\(kokoroProjectRoot)/ClearVoice/Docs/reference.wav",
+        "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav",
+        "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav"
     ]
     
     // Verify files exist
@@ -373,7 +380,7 @@ func runVoiceMatchingTest() async throws {
     // Step 3: Gender-aware matching (demo for watson_short)
     print("=== Step 3: Gender-Aware Matching (watson_short) ===\n")
     
-    let watsonPath = "/path/to/clear_voice_research/Docs/watson_short.wav"
+    let watsonPath = "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav"
     let watsonEmbedding = try await embeddingProvider.extractEmbedding(from: URL(fileURLWithPath: watsonPath))
     
     // Filter to female voices only
@@ -415,18 +422,18 @@ func runVoiceMatchingTest() async throws {
     
     let testCases: [(name: String, path: String, gender: VoiceGender, language: VoiceLanguage)] = [
         // With gender filter
-        ("watson_british", "/path/to/clear_voice_research/Docs/watson_short.wav", .female, .british),
-        ("watson_english", "/path/to/clear_voice_research/Docs/watson_short.wav", .female, .english),
-        ("dark_knight_british", "/path/to/clear_voice_research/ClearVoice/voice_match_output/dark_knight_short.wav", .male, .british),
-        ("dark_knight_english", "/path/to/clear_voice_research/ClearVoice/voice_match_output/dark_knight_short.wav", .male, .english),
+        ("watson_british", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .female, .british),
+        ("watson_english", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .female, .english),
+        ("dark_knight_british", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .male, .british),
+        ("dark_knight_english", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .male, .english),
         // WITHOUT gender filter - does embedding naturally pick correct gender?
-        ("watson_any_british", "/path/to/clear_voice_research/Docs/watson_short.wav", .any, .british),
-        ("watson_any_english", "/path/to/clear_voice_research/Docs/watson_short.wav", .any, .english),
-        ("dark_knight_any_british", "/path/to/clear_voice_research/ClearVoice/voice_match_output/dark_knight_short.wav", .any, .british),
-        ("dark_knight_any_english", "/path/to/clear_voice_research/ClearVoice/voice_match_output/dark_knight_short.wav", .any, .english),
+        ("watson_any_british", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .any, .british),
+        ("watson_any_english", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .any, .english),
+        ("dark_knight_any_british", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .any, .british),
+        ("dark_knight_any_english", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .any, .english),
         // COMPLETELY UNFILTERED - all 54 voices, any language
-        ("watson_unfiltered", "/path/to/clear_voice_research/Docs/watson_short.wav", .any, .any),
-        ("dark_knight_unfiltered", "/path/to/clear_voice_research/ClearVoice/voice_match_output/dark_knight_short.wav", .any, .any),
+        ("watson_unfiltered", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .any, .any),
+        ("dark_knight_unfiltered", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .any, .any),
     ]
     
     for testCase in testCases {

@@ -13,9 +13,16 @@ import Foundation
 @Suite("RUAccent Provider Tests")
 struct RUAccentProviderTests {
     
-    // Path to ruaccent assets - update these for your system
-    static let modelsDir = URL(fileURLWithPath: "/path/to/clear_voice_research/Models/ruaccent/models/balanced")
-    static let assetsDir = URL(fileURLWithPath: "/path/to/clear_voice_research/Models/ruaccent/assets/balanced")
+    // Compute project root from source file path
+    static let projectRoot: String = {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { url.deleteLastPathComponent() }
+        return url.path
+    }()
+    
+    // Path to ruaccent assets - relative to project root
+    static let modelsDir = URL(fileURLWithPath: "\(projectRoot)/Models/ruaccent/models/balanced")
+    static let assetsDir = URL(fileURLWithPath: "\(projectRoot)/Models/ruaccent/assets/balanced")
     
     @Test("Basic stress marking")
     func testBasicStressMarking() throws {

@@ -11,15 +11,6 @@
       }
     },
     {
-      "identity" : "misakiswift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mlalma/MisakiSwift",
-      "state" : {
-        "revision" : "bb5e3e3671ef550dc545a98f4a4c15f58ee649ec",
-        "version" : "1.0.5"
-      }
-    },
-    {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ml-explore/mlx-swift",
@@ -35,15 +26,6 @@
       "state" : {
         "revision" : "5064b8c5d8ed3b0bbb71385c4124f0fc102e74a2",
         "version" : "2.29.3"
-      }
-    },
-    {
-      "identity" : "mlxutilslibrary",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mlalma/MLXUtilsLibrary.git",
-      "state" : {
-        "revision" : "41f6cfd5d68b65aa3c65a34efe3b71c371ed915b",
-        "version" : "0.0.6"
       }
     },
     {

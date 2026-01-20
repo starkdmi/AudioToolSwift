@@ -143,7 +143,22 @@ public actor ModelDownloader {
     }
     
     /// Get local cache path for a repo (nil if not downloaded)
+    /// Checks both Swift Hub library location (~/Documents/huggingface/models/)
+    /// and Python hf CLI location (~/.cache/huggingface/hub/)
     public nonisolated func localPath(for repo: String) -> URL? {
+        // Swift Hub library uses ~/Documents/huggingface/models/{owner}/{repo}
+        let repoComponents = repo.split(separator: "/")
+        if repoComponents.count == 2 {
+            let swiftHubPath = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents/huggingface/models")
+                .appendingPathComponent(String(repoComponents[0]))
+                .appendingPathComponent(String(repoComponents[1]))
+            if FileManager.default.fileExists(atPath: swiftHubPath.path) {
+                return swiftHubPath
+            }
+        }
+        
+        // Python hf CLI uses ~/.cache/huggingface/hub/models--{owner}--{repo}/snapshots/{hash}
         let repoName = repo.replacingOccurrences(of: "/", with: "--")
         let hfCache = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cache/huggingface/hub/models--\(repoName)")

@@ -19,6 +19,7 @@ struct AppleTranslationIntegrationTests {
     
     // MARK: - Language Availability Tests (Works on macOS 15+)
     
+    #if canImport(Translation)
     @Test("Check language availability - installed languages")
     @available(macOS 15.0, iOS 18.0, *)
     func testLanguageAvailability() async {
@@ -63,7 +64,12 @@ struct AppleTranslationIntegrationTests {
         let anyInstalled = [enToFr, enToDe, enToIt, enToRu, enToTr].contains(.installed)
         #expect(anyInstalled, "At least one language pair should be installed")
     }
+    #endif
     
+    // MARK: - TranslationSession Tests (macOS 26+ only)
+    // These tests require Xcode 26+ SDK where TranslationSession initializers are available
+    
+    #if compiler(>=6.2)
     @Test("Direct TranslationSession test - English to French")
     @available(macOS 26.0, iOS 26.0, *)
     func testDirectTranslationSession() async throws {
@@ -119,4 +125,5 @@ struct AppleTranslationIntegrationTests {
         
         #expect(responses.count == 3)
     }
+    #endif
 }

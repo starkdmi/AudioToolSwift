@@ -13,13 +13,20 @@ import MLX
 
 final class HarryPotterDiarizationTest: XCTestCase {
     
+    // Compute project root from source file path
+    static let projectRoot: String = {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { url.deleteLastPathComponent() }
+        return url.path
+    }()
+    
     /// Test diarization on harry_potter.wav (2:16 trailer, ~10 speakers, background music)
     func testDiarizeHarryPotter() async throws {
         print("\n=== Harry Potter Trailer Diarization Test ===")
         print("Expected: Up to 10 speakers, with background music\n")
         
         // Use direct file path instead of bundle to match CLI exactly
-        let testURL = URL(fileURLWithPath: "/path/to/clear_voice_research/Docs/harry_potter.wav")
+        let testURL = URL(fileURLWithPath: "\(Self.projectRoot)/ClearVoice/Docs/harry_potter.wav")
         
         // Load at 16kHz for diarization
         let loader = AudioLoader(config: AudioLoader.Configuration(

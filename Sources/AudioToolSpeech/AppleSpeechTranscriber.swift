@@ -4,16 +4,27 @@
 //
 //  Apple SpeechAnalyzer provider for on-device speech-to-text (iOS 26+)
 //
+//  Note: This file requires Xcode 26+ SDK to compile. On earlier SDKs,
+//  a placeholder implementation is provided.
+//
 
 import Foundation
-import Speech
 import AVFoundation
 import ClearVoiceCore
 
 // Type alias to disambiguate from CoreAudioTypes.AudioBuffer
 public typealias SpeechAudioBuffer = ClearVoiceCore.AudioBuffer
 
-// MARK: - Apple Speech Transcriber
+// Check if we're building with the iOS/macOS 26+ SDK
+// SpeechAnalyzer is only available in Speech framework on iOS 26+/macOS 26+
+#if canImport(Speech) && swift(>=6.0)
+import Speech
+
+// Check for SpeechAnalyzer availability using compiler version
+// This type only exists in Xcode 26+ SDK
+#if compiler(>=6.2)
+
+// MARK: - Apple Speech Transcriber (Full Implementation)
 
 /// On-device speech transcription using Apple's SpeechAnalyzer API (iOS 26+)
 @available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
@@ -293,3 +304,49 @@ extension ClearVoiceCore.AudioBuffer {
         return try AVAudioFile(forReading: url)
     }
 }
+
+#else
+
+// MARK: - Placeholder Implementation (Pre-Xcode 26 SDK)
+
+/// Placeholder for AppleSpeechTranscriber when building with Xcode < 26
+/// 
+/// This placeholder is compiled when the SpeechAnalyzer API is not available.
+/// To use actual Apple Speech transcription, build with Xcode 26+ on macOS 26+.
+@available(iOS 26.0, macOS 26.0, visionOS 26.0, *)
+public actor AppleSpeechTranscriber: Transcriber {
+    
+    public nonisolated let sampleRate: Int = 16000
+    public nonisolated let inputChannels: Int = 1
+    public nonisolated let outputChannels: Int = 1
+    
+    public init(locale: String = "en-US") {}
+    public init(locale: Locale) {}
+    
+    public static func supportedLocales() async -> [Locale] { [] }
+    public static func isLocaleSupported(_ locale: Locale) async -> Bool { false }
+    
+    public func load() async throws {
+        throw ClearVoiceError.resourceUnavailable(
+            "Apple SpeechAnalyzer requires macOS 26+ and Xcode 26+ SDK. " +
+            "Current SDK does not include SpeechAnalyzer API."
+        )
+    }
+    
+    public func transcribe(_ audio: ClearVoiceCore.AudioBuffer) async throws -> Transcription {
+        throw ClearVoiceError.resourceUnavailable("SpeechAnalyzer not available in this SDK")
+    }
+    
+    public nonisolated func streamTranscription(_ audio: AsyncStream<ClearVoiceCore.AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish(throwing: ClearVoiceError.resourceUnavailable("SpeechAnalyzer not available"))
+        }
+    }
+    
+    public func process(_ input: ClearVoiceCore.AudioBuffer) async throws -> ClearVoiceCore.AudioBuffer {
+        return input
+    }
+}
+
+#endif // compiler(>=6.2)
+#endif // canImport(Speech)

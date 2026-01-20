@@ -4,10 +4,18 @@
 //
 //  Apple Translation framework provider (iOS 26+, macOS 26+)
 //
+//  Note: Programmatic TranslationSession requires iOS 26+/macOS 26+.
+//  On earlier SDKs, a placeholder implementation is provided.
+//
 
 import Foundation
-@preconcurrency import Translation
 import ClearVoiceCore
+
+// Check for Translation framework and compiler version
+#if canImport(Translation) && compiler(>=6.2)
+@preconcurrency import Translation
+
+// MARK: - Apple Translation Provider (Full Implementation)
 
 /// Apple on-device translation provider
 ///
@@ -139,3 +147,52 @@ public actor AppleTranslationProvider: TextTranslator {
         return newSession
     }
 }
+
+#else
+
+// MARK: - Placeholder Implementation (Pre-Xcode 26 SDK)
+
+/// Placeholder for AppleTranslationProvider when building with Xcode < 26
+///
+/// This placeholder is compiled when the programmatic TranslationSession API is not available.
+/// To use actual Apple Translation, build with Xcode 26+ on macOS 26+.
+///
+/// Alternative: Use TranslateGemmaProvider from ClearVoiceMLXTranslation for on-device translation.
+@available(iOS 26.0, macOS 26.0, *)
+public actor AppleTranslationProvider: TextTranslator {
+    
+    public init() {}
+    
+    public func translate(
+        _ text: String,
+        from source: String?,
+        to target: String
+    ) async throws -> TranslationResult {
+        throw ClearVoiceError.resourceUnavailable(
+            "Apple Translation programmatic API requires macOS 26+ and Xcode 26+ SDK. " +
+            "Use TranslateGemmaProvider for on-device translation on macOS 15."
+        )
+    }
+    
+    public func translateBatch(
+        _ texts: [String],
+        from source: String?,
+        to target: String
+    ) async throws -> BatchTranslationResult {
+        throw ClearVoiceError.resourceUnavailable(
+            "Apple Translation programmatic API requires macOS 26+ and Xcode 26+ SDK."
+        )
+    }
+    
+    public func isAvailable(from source: String, to target: String) async -> Bool {
+        return false
+    }
+    
+    public func prepareLanguagePair(from source: String, to target: String) async throws {
+        throw ClearVoiceError.resourceUnavailable(
+            "Apple Translation programmatic API requires macOS 26+ and Xcode 26+ SDK."
+        )
+    }
+}
+
+#endif // canImport(Translation) && compiler(>=6.2)

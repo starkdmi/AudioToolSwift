@@ -15,14 +15,21 @@ import MLX
 
 final class BackgroundExtractionTests: XCTestCase {
     
-    let outputDir = "/path/to/clear_voice_research/ClearVoice/Tests/ClearVoiceUSSTests/Fixtures"
+    // Compute project root from source file path
+    static let projectRoot: String = {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { url.deleteLastPathComponent() } // file → ClearVoiceUSSTests → Tests → ClearVoice → ProjectTwo
+        return url.path
+    }()
+    
+    let outputDir = "\(projectRoot)/ClearVoice/Tests/ClearVoiceUSSTests/Fixtures"
     
     /// Test USS speech separation with background extraction
     func testUSSBackground() async throws {
         print("\n=== USS Background Extraction Test ===")
         
         // Load test audio at 32kHz (USS native rate)
-        let testPath = "/path/to/clear_voice_research/Models/uss_mlx_swift/USSSwift/Samples/harry_potter_short.wav"
+        let testPath = "\(Self.projectRoot)/Models/uss_mlx_swift/USSSwift/Samples/harry_potter_short.wav"
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 32000,
             normalizationMode: .none
@@ -60,7 +67,7 @@ final class BackgroundExtractionTests: XCTestCase {
         print("\n=== GAN SE CoreML Background Extraction Test ===")
         
         // Load test audio at 16kHz (GAN SE native rate)
-        let testPath = "/path/to/clear_voice_research/Models/mossformer_gan_se_coreml/test.wav"
+        let testPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/test.wav"
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 16000,
             normalizationMode: .none
@@ -72,14 +79,14 @@ final class BackgroundExtractionTests: XCTestCase {
         print("Input: \(samples.count) samples @ 16kHz (\(String(format: "%.1f", Double(samples.count) / 16000))s), max: \(String(format: "%.4f", samples.max() ?? 0))")
         
         // Load reference output for comparison
-        let refPath = "/path/to/clear_voice_research/Models/mossformer_gan_se_coreml/enhanced_output_no_chunk.wav"
+        let refPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/enhanced_output_no_chunk.wav"
         let refAudio = try loader.loadMono(from: URL(fileURLWithPath: refPath))
         eval(refAudio)
         let refSamples = refAudio.asArray(Float.self)
         print("Reference: \(refSamples.count) samples, max: \(String(format: "%.4f", refSamples.max() ?? 0))")
         
         // Load GAN SE (auto-compiles .mlpackage)
-        let modelPath = "/path/to/clear_voice_research/Models/mossformer_gan_se_coreml/MossFormerGAN_256frames.mlpackage"
+        let modelPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/MossFormerGAN_256frames.mlpackage"
         let gan = MossFormerGANCoreMLProvider(modelPath: modelPath)
         try await gan.load()
         
@@ -127,7 +134,7 @@ final class BackgroundExtractionTests: XCTestCase {
         print("\n=== Demucs Vocals/Accompaniment Test ===")
         
         // Load test audio at 44.1kHz (Demucs native rate)
-        let testPath = "/path/to/clear_voice_research/Models/demucs_mlx_swift/test.wav"
+        let testPath = "\(Self.projectRoot)/Models/demucs_mlx_swift/test.wav"
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 44100,
             normalizationMode: .none
@@ -139,7 +146,7 @@ final class BackgroundExtractionTests: XCTestCase {
         print("Input: \(samples.count) samples @ 44.1kHz (\(String(format: "%.1f", Double(samples.count) / 44100))s)")
         
         // Load Demucs (all 4 source models)
-        let weightsDir = "/path/to/clear_voice_research/Models/demucs_mlx_swift/Weights"
+        let weightsDir = "\(Self.projectRoot)/Models/demucs_mlx_swift/Weights"
         let demucs = DemucsProvider(weightsDirectory: weightsDir)
         try await demucs.loadAll()
         
@@ -166,7 +173,7 @@ final class BackgroundExtractionTests: XCTestCase {
         print("\n=== FRCRN SE Background Extraction Test ===")
         
         // Load test audio at 16kHz (FRCRN native rate) - use same file as GAN SE test
-        let testPath = "/path/to/clear_voice_research/Models/mossformer_gan_se_coreml/test.wav"
+        let testPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/test.wav"
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 16000,
             normalizationMode: .none
@@ -178,7 +185,7 @@ final class BackgroundExtractionTests: XCTestCase {
         print("Input: \(samples.count) samples @ 16kHz (\(String(format: "%.1f", Double(samples.count) / 16000))s), max: \(String(format: "%.4f", samples.max() ?? 0))")
         
         // Load FRCRN
-        let weightsPath = "/path/to/clear_voice_research/Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
+        let weightsPath = "\(Self.projectRoot)/Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
         let frcrn = MLXProviders.frcrnSE16K(weightsPath: weightsPath)
         try await frcrn.load()
         

@@ -14,6 +14,13 @@ import ClearVoiceCore
 
 // MARK: - ChatterBox TTS Test
 
+// Compute project root from source file path
+private let chatterboxProjectRoot: String = {
+    var url = URL(fileURLWithPath: #filePath)
+    for _ in 0..<4 { url.deleteLastPathComponent() }
+    return url.path
+}()
+
 func runChatterboxTest() async throws {
     print("\n=== ChatterBox Full Pipeline Test ===")
     print("S3Tokenizer: ✅ HuggingFace cache (fixed)")
@@ -22,9 +29,11 @@ func runChatterboxTest() async throws {
     
     GPU.set(memoryLimit: 6 * 1024 * 1024 * 1024)
     
-    let outputDir = "/path/to/clear_voice_research/ClearVoice/chatterbox_output"
-    let burunowPath = "/path/to/clear_voice_research/Docs/burunow_short.wav"
-    let model8bitPath = "~/.cache/huggingface/hub/models--starkdmi--chatterbox-fp16/snapshots/e68aaba8ef36cb9a8a8c9a5807c1b1004b113c70"
+    let outputDir = "\(chatterboxProjectRoot)/ClearVoice/chatterbox_output"
+    let burunowPath = "\(chatterboxProjectRoot)/ClearVoice/Docs/burunow_short.wav"
+    // HuggingFace cache is user-specific, use home directory
+    let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
+    let modelPath = "\(homeDir)/.cache/huggingface/hub/models--starkdmi--chatterbox-fp16/snapshots/e68aaba8ef36cb9a8a8c9a5807c1b1004b113c70"
     
     let text = "мы закрыли замок и прошли мимо замка"
     print("Text: \"\(text)\"\n")
@@ -32,7 +41,7 @@ func runChatterboxTest() async throws {
     let saver = AudioSaver(config: .init(sampleRate: 24000))
     
     let provider = ChatterboxTTSProvider(
-        modelPath: URL(fileURLWithPath: model8bitPath),
+        modelPath: URL(fileURLWithPath: modelPath),
         language: .russian,
         useRuAccent: true,
         convertToStressMarks: true

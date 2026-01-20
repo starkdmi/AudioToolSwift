@@ -41,6 +41,8 @@ struct AppleSpeechTranscriberTests {
         #expect(transcriber.sampleRate == 16000)
     }
     
+    // Tests that require full SpeechAnalyzer API (Xcode 26+ SDK)
+    #if compiler(>=6.2)
     @available(iOS 26.0, macOS 26.0, *)
     @Test("AppleSpeechTranscriber supported locales")
     func testSupportedLocales() async {
@@ -61,38 +63,6 @@ struct AppleSpeechTranscriberTests {
         let isEnglishSupported = await AppleSpeechTranscriber.isLocaleSupported(Locale(identifier: "en-US"))
         print("en-US supported: \(isEnglishSupported)")
         // Actual support depends on device/OS
-    }
-    
-    // MARK: - Factory Tests
-    
-    @available(iOS 26.0, macOS 26.0, *)
-    @Test("SpeechProviders.appleSpeech factory")
-    func testFactory() {
-        let transcriber = SpeechProviders.appleSpeech(locale: "fr-FR")
-        #expect(transcriber.sampleRate == 16000)
-    }
-    
-    // MARK: - ClearVoice Integration
-    
-    @available(iOS 26.0, macOS 26.0, *)
-    @Test("ClearVoice register transcriber")
-    func testClearVoiceRegistration() async {
-        let voice = ClearVoice()
-        let transcriber = SpeechProviders.appleSpeech(locale: "en-US")
-        await voice.register(transcriber: transcriber, for: .appleSpeech)
-        #expect(true)
-    }
-    
-    // MARK: - AudioBuffer Tests
-    
-    @Test("AudioBuffer creation and properties")
-    func testAudioBufferCreation() {
-        let samples: [Float] = Array(repeating: 0.5, count: 16000)
-        let buffer = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
-        
-        #expect(buffer.samples.count == 16000)
-        #expect(buffer.sampleRate == 16000)
-        #expect(buffer.channels == 1)
     }
     
     @available(iOS 26.0, macOS 26.0, *)
@@ -116,8 +86,6 @@ struct AppleSpeechTranscriberTests {
         #expect(audioFile.fileFormat.sampleRate == 16000)
     }
     
-    // MARK: - Transcription Integration Test
-    
     @available(iOS 26.0, macOS 26.0, *)
     @Test("AppleSpeechTranscriber load model")
     func testLoadModel() async throws {
@@ -131,5 +99,38 @@ struct AppleSpeechTranscriberTests {
             print("⚠ Model load skipped: \(error.localizedDescription)")
             // Don't fail test - locale support varies by device
         }
+    }
+    #endif
+    
+    // MARK: - Factory Tests
+    
+    @available(iOS 26.0, macOS 26.0, *)
+    @Test("SpeechProviders.appleSpeech factory")
+    func testFactory() {
+        let transcriber = SpeechProviders.appleSpeech(locale: "fr-FR")
+        #expect(transcriber.sampleRate == 16000)
+    }
+    
+    // MARK: - ClearVoice Integration
+    
+    @available(iOS 26.0, macOS 26.0, *)
+    @Test("ClearVoice register transcriber")
+    func testClearVoiceRegistration() async {
+        let voice = ClearVoice()
+        let transcriber = SpeechProviders.appleSpeech(locale: "en-US")
+        await voice.register(transcriber: transcriber, for: .appleSpeech)
+        #expect(Bool(true))
+    }
+    
+    // MARK: - AudioBuffer Tests
+    
+    @Test("AudioBuffer creation and properties")
+    func testAudioBufferCreation() {
+        let samples: [Float] = Array(repeating: 0.5, count: 16000)
+        let buffer = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
+        
+        #expect(buffer.samples.count == 16000)
+        #expect(buffer.sampleRate == 16000)
+        #expect(buffer.channels == 1)
     }
 }

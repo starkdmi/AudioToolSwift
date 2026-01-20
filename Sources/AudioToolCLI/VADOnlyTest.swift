@@ -12,10 +12,17 @@ import ClearVoiceCore
 
 // MARK: - VAD Test
 
+// Compute project root from source file path
+private let projectRoot: String = {
+    var url = URL(fileURLWithPath: #filePath)
+    for _ in 0..<4 { url.deleteLastPathComponent() } // file → Generate → Sources → ClearVoice → ProjectTwo
+    return url.path
+}()
+
 func runVADOnlyTest() async throws {
     print("\n=== VAD Test on Harry Potter Audio ===\n")
     
-    let testFile = "/path/to/clear_voice_research/Docs/harry_potter.wav"
+    let testFile = "\(projectRoot)/ClearVoice/Docs/harry_potter.wav"
     
     guard FileManager.default.fileExists(atPath: testFile) else {
         print("❌ File not found: \(testFile)")

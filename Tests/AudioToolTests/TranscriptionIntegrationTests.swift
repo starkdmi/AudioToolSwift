@@ -14,6 +14,13 @@ import MLX
 @Suite("Transcription Integration Tests")
 struct TranscriptionIntegrationTests {
     
+    // Compute project root from source file path
+    static let projectRoot: String = {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { url.deleteLastPathComponent() }
+        return url.path
+    }()
+    
     @available(iOS 26.0, macOS 26.0, *)
     @Test("Transcribe test.wav with Apple Speech", .timeLimit(.minutes(2)))
     @MainActor
@@ -21,7 +28,7 @@ struct TranscriptionIntegrationTests {
         print("\n=== Apple Speech Transcription Test ===")
         
         // Load the audio file
-        let testURL = URL(fileURLWithPath: "/path/to/clear_voice_research/Models/mossformer2_se_mlx_swift/test.wav")
+        let testURL = URL(fileURLWithPath: "\(Self.projectRoot)/Models/mossformer2_se_mlx_swift/test.wav")
         
         guard FileManager.default.fileExists(atPath: testURL.path) else {
             print("⚠ test.wav not found at: \(testURL.path)")

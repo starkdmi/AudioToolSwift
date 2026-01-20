@@ -20,8 +20,15 @@ import AudioUtils
 // MARK: - Test Configuration
 
 struct TestConfig {
-    // Project root (absolute path)
-    static let projectRoot = "/path/to/clear_voice_research"
+    // Project root computed from source file location
+    // #filePath → .../ClearVoice/Tests/ClearVoiceMLXIntegrationTests/MLXEnhancerIntegrationTests.swift
+    // We go up 4 levels: file → ClearVoiceMLXIntegrationTests → Tests → ClearVoice → ProjectTwo
+    static let projectRoot: String = {
+        let filePath = #filePath
+        var url = URL(fileURLWithPath: filePath)
+        for _ in 0..<4 { url.deleteLastPathComponent() }
+        return url.path
+    }()
     
     // Model weights paths
     static let frcrn16kWeights = "\(projectRoot)/Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"

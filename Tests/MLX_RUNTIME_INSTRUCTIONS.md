@@ -18,7 +18,7 @@ Instead of running the binary directly, use **xcodebuild test** or **run from Xc
 ### Option 1: Run Tests via xcodebuild (Recommended)
 
 ```bash
-cd /path/to/clear_voice_research/ClearVoice
+cd ~/Downloads/clear_voice_research/ClearVoice
 
 # Run all MLX integration tests
 RUN_MLX_TESTS=1 xcodebuild test \

@@ -14,14 +14,20 @@ import MLX
 
 final class DemucsVADPipelineTests: XCTestCase {
     
+    // Compute project root from source file path
+    static let projectRoot: String = {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { url.deleteLastPathComponent() }
+        return url.path
+    }()
+    
     /// Test Demucs → VAD pipeline on all three test files
     func testDemucsVADPipeline() async throws {
         print("\n=== Demucs → VAD Pipeline Test ===")
         print("Testing if vocal separation improves VAD detection\n")
         
         // Get Demucs weights from local Models directory
-        // Note: Adjust this path based on your local setup
-        let weightsPath = "/path/to/clear_voice_research/Models/demucs_mlx_swift/Weights"
+        let weightsPath = "\(Self.projectRoot)/Models/demucs_mlx_swift/Weights"
         
         // Verify weights exist
         guard FileManager.default.fileExists(atPath: weightsPath + "/vocals.safetensors") else {

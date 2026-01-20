@@ -13,12 +13,19 @@ import MLX
 
 final class USSSeparationTest: XCTestCase {
     
+    // Compute project root from source file path
+    static let projectRoot: String = {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { url.deleteLastPathComponent() }
+        return url.path
+    }()
+    
     /// Test speech and music separation on test.wav
     func testSpeechAndMusicSeparation() async throws {
         print("\n=== USS Speech & Music Separation Test ===")
         
         // Load test audio at 32kHz (USS native rate)
-        let testPath = "/path/to/clear_voice_research/Models/uss_mlx_swift/test.wav"
+        let testPath = "\(Self.projectRoot)/Models/uss_mlx_swift/test.wav"
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 32000,
             normalizationMode: .none
@@ -61,7 +68,7 @@ final class USSSeparationTest: XCTestCase {
         print("  Output: \(musicOutput.samples.count) samples, max: \(String(format: "%.4f", musicMax))")
         
         // Save outputs for listening
-        let outputDir = "/path/to/clear_voice_research/Models/uss_mlx_swift"
+        let outputDir = "\(Self.projectRoot)/Models/uss_mlx_swift"
         try AudioSaver.saveWAV(MLXArray(speechOutput.samples), to: "\(outputDir)/test_speech.wav", sampleRate: 32000)
         try AudioSaver.saveWAV(MLXArray(musicOutput.samples), to: "\(outputDir)/test_music.wav", sampleRate: 32000)
         print("\n✓ Saved: test_speech.wav, test_music.wav")

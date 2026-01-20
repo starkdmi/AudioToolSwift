@@ -15,23 +15,30 @@ import ClearVoiceCore
 
 final class VoiceMatchingIntegrationTests: XCTestCase {
     
+    // Compute project root from source file path
+    static let projectRoot: String = {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { url.deleteLastPathComponent() }
+        return url.path
+    }()
+    
     // NOTE: This test requires Metal/MLX and must be run via xcodebuild
     // Run: xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData -only-testing:ClearVoiceMLXIntegrationTests/VoiceMatchingIntegrationTests
     
     /// Test full voice matching pipeline with real audio
     /// 
-    /// Reference files:
-    /// - /path/to/clear_voice_research/Docs/burunow_short.wav
-    /// - /path/to/clear_voice_research/Docs/reference.wav  
-    /// - /path/to/clear_voice_research/Docs/watson_short.wav
+    /// Reference files (relative to project root):
+    /// - ClearVoice/Docs/burunow_short.wav
+    /// - ClearVoice/Docs/reference.wav  
+    /// - ClearVoice/Docs/watson_short.wav
     func testVoiceMatchingWithRealAudio() async throws {
         print("\n=== Voice Matching Integration Test ===\n")
         
         // Reference audio files
         let referenceFiles = [
-            "/path/to/clear_voice_research/Docs/burunow_short.wav",
-            "/path/to/clear_voice_research/Docs/reference.wav",
-            "/path/to/clear_voice_research/Docs/watson_short.wav"
+            "\(Self.projectRoot)/ClearVoice/Docs/burunow_short.wav",
+            "\(Self.projectRoot)/ClearVoice/Docs/reference.wav",
+            "\(Self.projectRoot)/ClearVoice/Docs/watson_short.wav"
         ]
         
         // Check files exist

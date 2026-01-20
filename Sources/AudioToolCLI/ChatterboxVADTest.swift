@@ -14,6 +14,13 @@ import ClearVoiceCore
 
 // MARK: - ChatterBox VAD Trim Test (Single Generation)
 
+// Compute project root from source file path
+private let chatterboxVADProjectRoot: String = {
+    var url = URL(fileURLWithPath: #filePath)
+    for _ in 0..<4 { url.deleteLastPathComponent() }
+    return url.path
+}()
+
 /// Minimal test to verify VAD trim feature - generates just ONE audio sample
 /// to avoid RAM issues from multiple model loads
 func runChatterboxVADTest() async throws {
@@ -24,11 +31,11 @@ func runChatterboxVADTest() async throws {
     GPU.set(memoryLimit: 6 * 1024 * 1024 * 1024)
     
     // Output directory
-    let outputDir = "/path/to/clear_voice_research/ClearVoice/chatterbox_output"
+    let outputDir = "\(chatterboxVADProjectRoot)/ClearVoice/chatterbox_output"
     try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
     
     // Reference audio file
-    let watsonPath = "/path/to/clear_voice_research/Docs/watson_short.wav"
+    let watsonPath = "\(chatterboxVADProjectRoot)/ClearVoice/Docs/watson_short.wav"
     guard FileManager.default.fileExists(atPath: watsonPath) else {
         print("❌ Reference file not found: watson_short.wav")
         return
@@ -36,7 +43,8 @@ func runChatterboxVADTest() async throws {
     
     // Create provider with VAD enabled (default) - use local model path
     print("Loading ChatterBox model (fp16, English, VAD enabled)...")
-    let modelPath = "~/.cache/huggingface/hub/models--starkdmi--chatterbox-fp16/snapshots/e68aaba8ef36cb9a8a8c9a5807c1b1004b113c70"
+    let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
+    let modelPath = "\(homeDir)/.cache/huggingface/hub/models--starkdmi--chatterbox-fp16/snapshots/e68aaba8ef36cb9a8a8c9a5807c1b1004b113c70"
     let provider = ChatterboxTTSProvider(
         modelPath: URL(fileURLWithPath: modelPath),
         language: .english,
