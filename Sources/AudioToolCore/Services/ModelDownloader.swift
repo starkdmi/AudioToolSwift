@@ -79,7 +79,7 @@ public actor ModelDownloader {
                 do {
                     let hubRepo = Hub.Repo(id: repo)
                     
-                    let modelDir = try await HubApi.shared.snapshot(
+                    _ = try await HubApi.shared.snapshot(
                         from: hubRepo,
                         matching: globs
                     ) { progress, speed in

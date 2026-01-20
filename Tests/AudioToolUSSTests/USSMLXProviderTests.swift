@@ -73,7 +73,7 @@ final class USSMLXProviderTests: XCTestCase {
         
         // Just verify all embedding types can be loaded
         for type in [USSSoundType.speech, .music, .noise, .nature, .human, .animal, .things] {
-            let uss = USSProviders.speechSeparation(embeddingType: type)
+            _ = USSProviders.speechSeparation(embeddingType: type)
             // Loading would fail if embeddings are missing
             print("✓ Embedding type '\(type.rawValue)' available")
         }

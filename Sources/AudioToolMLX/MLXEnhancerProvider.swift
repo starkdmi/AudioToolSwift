@@ -147,7 +147,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
             
             // Determine valid range
             let validStart = currentIdx == 0 ? 0 : giveUp
-            let validEnd = chunkSamples - giveUp
+            // validEnd would be: chunkSamples - giveUp (used implicitly below)
             let outputRangeStart = currentIdx == 0 ? 0 : currentIdx + giveUp
             let outputRangeEnd = currentIdx == 0 ? chunkSamples - giveUp : currentIdx + chunkSamples - giveUp
             
@@ -400,7 +400,7 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
             chunkSamples: chunkingConfig.chunkSamples,
             overlapRatio: chunkingConfig.overlapRatio,
             strategy: .discardEdges
-        ) { [self] chunk in
+        ) { chunk in
             // Process chunk through FRCRN model
             let batchedChunk = chunk.reshaped([1, -1])
             let output = model(batchedChunk)

@@ -185,7 +185,7 @@ public struct MLXOverlap {
             
             // Determine valid range in the chunk
             let keepStart = isFirst ? 0 : giveUp
-            let keepEnd = chunkSamples - giveUp
+            // keepEnd would be: chunkSamples - giveUp (used implicitly in range calculation below)
             
             // Determine output range
             let outputRangeStart = isFirst ? 0 : startIdx + giveUp

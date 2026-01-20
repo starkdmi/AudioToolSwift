@@ -211,7 +211,7 @@ public actor SpeakerEmbeddingProvider {
         let vadChunks = try await vad.process(audio)
         
         // VAD processes in 256ms chunks at 16kHz = 4096 samples per chunk
-        let samplesPerChunk = 4096
+        // (Note: chunk size used for documentation, actual timing is from vadChunks)
         
         // Build frame-level speech mask (1 = speech, 0 = silence)
         // WeSpeaker uses ~17ms frames, so we need to map VAD chunks to frames

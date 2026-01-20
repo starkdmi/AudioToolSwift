@@ -59,6 +59,6 @@ extension ClearVoice {
             maxTokens: maxTokens,
             progressHandler: progressHandler
         )
-        await self.register(translator: provider, for: .translateGemma)
+        self.register(translator: provider, for: .translateGemma)
     }
 }

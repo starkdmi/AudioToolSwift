@@ -126,12 +126,12 @@ public actor DownloadCoordinator {
                 }
                 
                 // Clean up
-                await self.removeTask(for: variant.id)
+                self.removeTask(for: variant.id)
             }
             
             // Replace placeholder with real task
             Task {
-                await self.registerTask(task, for: variant.id)
+                self.registerTask(task, for: variant.id)
             }
             
             // Handle stream termination

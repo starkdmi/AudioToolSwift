@@ -3,6 +3,14 @@
 
 import PackageDescription
 
+// Common Swift settings for all targets
+let commonSwiftSettings: [SwiftSetting] = [
+    .unsafeFlags(["-warnings-as-errors"])
+]
+
+// FluidAudio wrapper has Sendable issues in upstream dependency - exclude from strict mode
+let fluidAudioSwiftSettings: [SwiftSetting] = []
+
 let package = Package(
     name: "ClearVoice",
     platforms: [
@@ -89,7 +97,8 @@ let package = Package(
             dependencies: [
                 .product(name: "Hub", package: "swift-transformers"),
             ],
-            path: "Sources/ClearVoiceCore"
+            path: "Sources/ClearVoiceCore",
+            swiftSettings: commonSwiftSettings
         ),
         
         // Main public API (no MLX/CoreML dependency)
@@ -99,7 +108,8 @@ let package = Package(
                 "ClearVoiceCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/ClearVoice"
+            path: "Sources/ClearVoice",
+            swiftSettings: commonSwiftSettings
         ),
         
         // MLX Backend providers
@@ -115,7 +125,8 @@ let package = Package(
                 .product(name: "DemucsMLXSwift", package: "DemucsMLXSwift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/ClearVoiceMLX"
+            path: "Sources/ClearVoiceMLX",
+            swiftSettings: commonSwiftSettings
         ),
         
         // CoreML Backend providers
@@ -128,10 +139,12 @@ let package = Package(
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
             ],
-            path: "Sources/ClearVoiceCoreML"
+            path: "Sources/ClearVoiceCoreML",
+            swiftSettings: commonSwiftSettings
         ),
         
         // FluidAudio Backend providers (VAD, transcription, diarization)
+        // Note: FluidAudio has Sendable issues in upstream - excluded from strict warnings
         .target(
             name: "ClearVoiceFluidAudio",
             dependencies: [
@@ -139,7 +152,8 @@ let package = Package(
                 "ClearVoiceCore",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
-            path: "Sources/ClearVoiceFluidAudio"
+            path: "Sources/ClearVoiceFluidAudio",
+            swiftSettings: fluidAudioSwiftSettings
         ),
         
         // USS MLX Backend providers (speech separation)
@@ -151,7 +165,8 @@ let package = Package(
                 .product(name: "USSMLXSwift", package: "USSMLXSwift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/ClearVoiceUSS"
+            path: "Sources/ClearVoiceUSS",
+            swiftSettings: commonSwiftSettings
         ),
         
         // TTS Backend providers (Kokoro with MisakiSwift G2P)
@@ -165,7 +180,8 @@ let package = Package(
                 .product(name: "ChatterboxMLXSwift", package: "ChatterboxMLXSwift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/ClearVoiceTTS"
+            path: "Sources/ClearVoiceTTS",
+            swiftSettings: commonSwiftSettings
         ),
         
         // Speech-to-Text Backend (Apple SpeechAnalyzer, iOS 26+)
@@ -175,7 +191,8 @@ let package = Package(
                 "ClearVoice",
                 "ClearVoiceCore",
             ],
-            path: "Sources/ClearVoiceSpeech"
+            path: "Sources/ClearVoiceSpeech",
+            swiftSettings: commonSwiftSettings
         ),
         
         // Translation Backend (Apple Translation framework)
@@ -185,7 +202,8 @@ let package = Package(
                 "ClearVoice",
                 "ClearVoiceCore",
             ],
-            path: "Sources/ClearVoiceTranslation"
+            path: "Sources/ClearVoiceTranslation",
+            swiftSettings: commonSwiftSettings
         ),
         
         // MLX Translation Backend (TranslateGemma, 55+ languages)
@@ -197,7 +215,8 @@ let package = Package(
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
-            path: "Sources/ClearVoiceMLXTranslation"
+            path: "Sources/ClearVoiceMLXTranslation",
+            swiftSettings: commonSwiftSettings
         ),
         
         // Unit tests with mocks (swift test compatible)
@@ -207,7 +226,8 @@ let package = Package(
             path: "Tests/ClearVoiceTests",
             resources: [
                 .copy("Fixtures/")
-            ]
+            ],
+            swiftSettings: commonSwiftSettings
         ),
         
         // MLX Integration tests (requires xcodebuild for Metal)
@@ -225,7 +245,8 @@ let package = Package(
             path: "Tests/ClearVoiceMLXIntegrationTests",
             resources: [
                 .copy("Fixtures/")
-            ]
+            ],
+            swiftSettings: commonSwiftSettings
         ),
         
         // FluidAudio Integration tests (VAD, transcription, diarization)
@@ -241,7 +262,8 @@ let package = Package(
             path: "Tests/ClearVoiceFluidAudioTests",
             resources: [
                 .copy("Fixtures/")
-            ]
+            ],
+            swiftSettings: commonSwiftSettings
         ),
         
         // USS MLX Integration tests (speech separation)
@@ -258,7 +280,8 @@ let package = Package(
             path: "Tests/ClearVoiceUSSTests",
             resources: [
                 .copy("Fixtures/")
-            ]
+            ],
+            swiftSettings: commonSwiftSettings
         ),
         
         // MLX Translation Integration tests (TranslateGemma)
@@ -270,7 +293,8 @@ let package = Package(
                 "ClearVoice",
                 "ClearVoiceCore",
             ],
-            path: "Tests/ClearVoiceMLXTranslationTests"
+            path: "Tests/ClearVoiceMLXTranslationTests",
+            swiftSettings: commonSwiftSettings
         ),
         // CLI executable for testing MLX providers (use xcodebuild + run directly)
         // Build: xcodebuild build -scheme Generate -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
@@ -286,7 +310,8 @@ let package = Package(
                 "ClearVoiceCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/Generate"
+            path: "Sources/Generate",
+            swiftSettings: commonSwiftSettings
         ),
     ],
     swiftLanguageModes: [.v6]
