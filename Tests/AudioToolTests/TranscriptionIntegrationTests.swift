@@ -66,7 +66,8 @@ struct TranscriptionIntegrationTests {
             localeToUse = firstLocale
             print("No English locale, using: \(firstLocale.identifier)")
         } else {
-            throw TranscriptionTestSkipped(reason: "No speech recognition locales available")
+            try #require(false, "No speech recognition locales available")
+            return // Compiler needs this after #require(false)
         }
         
         // Create transcriber
