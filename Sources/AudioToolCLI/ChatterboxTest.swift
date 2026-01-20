@@ -29,8 +29,8 @@ func runChatterboxTest() async throws {
     
     GPU.set(memoryLimit: 6 * 1024 * 1024 * 1024)
     
-    let outputDir = "\(chatterboxProjectRoot)/ClearVoice/chatterbox_output"
-    let burunowPath = "\(chatterboxProjectRoot)/ClearVoice/Docs/burunow_short.wav"
+    let outputDir = "\(chatterboxProjectRoot)/Models/chatterbox_swift"
+    let burunowPath = "\(chatterboxProjectRoot)/Docs/burunow_short.wav"
     
     let text = "мы закрыли замок и прошли мимо замка"
     print("Text: \"\(text)\"\n")

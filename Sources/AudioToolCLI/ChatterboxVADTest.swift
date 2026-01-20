@@ -30,8 +30,8 @@ func runChatterboxVADTest() async throws {
     // Limit GPU memory to 6GB
     GPU.set(memoryLimit: 6 * 1024 * 1024 * 1024)
     
-    // Output directory
-    let outputDir = "\(chatterboxVADProjectRoot)/ClearVoice/chatterbox_output"
+    // Output directory - save to Models/chatterbox_swift for consistency
+    let outputDir = "\(chatterboxVADProjectRoot)/Models/chatterbox_swift"
     try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
     
     // Reference audio file

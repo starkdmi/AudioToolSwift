@@ -28,17 +28,17 @@ final class VoiceMatchingIntegrationTests: XCTestCase {
     /// Test full voice matching pipeline with real audio
     /// 
     /// Reference files (relative to project root):
-    /// - ClearVoice/Docs/burunow_short.wav
-    /// - ClearVoice/Docs/reference.wav  
-    /// - ClearVoice/Docs/watson_short.wav
+    /// - Docs/burunow_short.wav
+    /// - Docs/reference.wav  
+    /// - Docs/watson_short.wav
     func testVoiceMatchingWithRealAudio() async throws {
         print("\n=== Voice Matching Integration Test ===\n")
         
-        // Reference audio files
+        // Reference audio files (at project root /Docs/, not /ClearVoice/Docs/)
         let referenceFiles = [
-            "\(Self.projectRoot)/ClearVoice/Docs/burunow_short.wav",
-            "\(Self.projectRoot)/ClearVoice/Docs/reference.wav",
-            "\(Self.projectRoot)/ClearVoice/Docs/watson_short.wav"
+            "\(Self.projectRoot)/Docs/burunow_short.wav",
+            "\(Self.projectRoot)/Docs/reference.wav",
+            "\(Self.projectRoot)/Docs/watson_short.wav"
         ]
         
         // Check files exist

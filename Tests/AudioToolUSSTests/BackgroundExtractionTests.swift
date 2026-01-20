@@ -22,11 +22,11 @@ final class BackgroundExtractionTests: XCTestCase {
         return url.path
     }()
     
-    let outputDir = "\(projectRoot)/ClearVoice/Tests/ClearVoiceUSSTests/Fixtures"
-    
     /// Test USS speech separation with background extraction
     func testUSSBackground() async throws {
         print("\n=== USS Background Extraction Test ===")
+        
+        let outputDir = "\(Self.projectRoot)/Models/uss_mlx_swift"
         
         // Load test audio at 32kHz (USS native rate)
         let testPath = "\(Self.projectRoot)/Models/uss_mlx_swift/USSSwift/Samples/harry_potter_short.wav"
@@ -57,7 +57,7 @@ final class BackgroundExtractionTests: XCTestCase {
         // Save outputs
         try AudioSaver.saveWAV(MLXArray(result.separated.samples), to: "\(outputDir)/uss_speech.wav", sampleRate: 32000)
         try AudioSaver.saveWAV(MLXArray(result.background.samples), to: "\(outputDir)/uss_background.wav", sampleRate: 32000)
-        print("✓ Saved: uss_speech.wav, uss_background.wav")
+        print("✓ Saved: uss_speech.wav, uss_background.wav to \(outputDir)")
         
         XCTAssertGreaterThan(result.separated.samples.max() ?? 0, 0.01)
     }
@@ -65,6 +65,8 @@ final class BackgroundExtractionTests: XCTestCase {
     /// Test GAN SE CoreML with background extraction
     func testGANSEBackground() async throws {
         print("\n=== GAN SE CoreML Background Extraction Test ===")
+        
+        let outputDir = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml"
         
         // Load test audio at 16kHz (GAN SE native rate)
         let testPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/test.wav"
@@ -124,7 +126,7 @@ final class BackgroundExtractionTests: XCTestCase {
         // Save outputs
         try AudioSaver.saveWAV(MLXArray(result.enhanced.samples), to: "\(outputDir)/ganse_enhanced.wav", sampleRate: 16000)
         try AudioSaver.saveWAV(MLXArray(result.background.samples), to: "\(outputDir)/ganse_background.wav", sampleRate: 16000)
-        print("✓ Saved: ganse_enhanced.wav, ganse_background.wav, ganse_enhanced_std.wav")
+        print("✓ Saved: ganse_enhanced.wav, ganse_background.wav, ganse_enhanced_std.wav to \(outputDir)")
         
         XCTAssertGreaterThan(result.enhanced.samples.max() ?? 0, 0.01)
     }
@@ -132,6 +134,8 @@ final class BackgroundExtractionTests: XCTestCase {
     /// Test Demucs vocals/accompaniment separation
     func testDemucsBackground() async throws {
         print("\n=== Demucs Vocals/Accompaniment Test ===")
+        
+        let outputDir = "\(Self.projectRoot)/Models/demucs_mlx_swift"
         
         // Load test audio at 44.1kHz (Demucs native rate)
         let testPath = "\(Self.projectRoot)/Models/demucs_mlx_swift/test.wav"
@@ -163,7 +167,7 @@ final class BackgroundExtractionTests: XCTestCase {
         // Save outputs
         try AudioSaver.saveWAV(MLXArray(result.vocals.samples), to: "\(outputDir)/demucs_vocals.wav", sampleRate: 44100)
         try AudioSaver.saveWAV(MLXArray(result.accompaniment.samples), to: "\(outputDir)/demucs_accompaniment.wav", sampleRate: 44100)
-        print("✓ Saved: demucs_vocals.wav, demucs_accompaniment.wav")
+        print("✓ Saved: demucs_vocals.wav, demucs_accompaniment.wav to \(outputDir)")
         
         XCTAssertGreaterThan(result.vocals.samples.max() ?? 0, 0.001)
     }
@@ -171,6 +175,8 @@ final class BackgroundExtractionTests: XCTestCase {
     /// Test FRCRN SE with background extraction
     func testFRCRNBackground() async throws {
         print("\n=== FRCRN SE Background Extraction Test ===")
+        
+        let outputDir = "\(Self.projectRoot)/Models/frcrn_se_mlx_swift"
         
         // Load test audio at 16kHz (FRCRN native rate) - use same file as GAN SE test
         let testPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/test.wav"
@@ -202,7 +208,7 @@ final class BackgroundExtractionTests: XCTestCase {
         // Save outputs
         try AudioSaver.saveWAV(MLXArray(result.enhanced.samples), to: "\(outputDir)/frcrn_enhanced.wav", sampleRate: 16000)
         try AudioSaver.saveWAV(MLXArray(result.background.samples), to: "\(outputDir)/frcrn_background.wav", sampleRate: 16000)
-        print("✓ Saved: frcrn_enhanced.wav, frcrn_background.wav")
+        print("✓ Saved: frcrn_enhanced.wav, frcrn_background.wav to \(outputDir)")
         
         XCTAssertGreaterThan(result.enhanced.samples.max() ?? 0, 0.01)
         XCTAssertGreaterThan(result.background.samples.max() ?? 0, 0.001)

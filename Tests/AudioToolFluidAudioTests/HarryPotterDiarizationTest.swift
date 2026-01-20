@@ -26,7 +26,8 @@ final class HarryPotterDiarizationTest: XCTestCase {
         print("Expected: Up to 10 speakers, with background music\n")
         
         // Use direct file path instead of bundle to match CLI exactly
-        let testURL = URL(fileURLWithPath: "\(Self.projectRoot)/ClearVoice/Docs/harry_potter.wav")
+        // projectRoot is /Users/.../ProjectTwo, file is at Docs/harry_potter.wav
+        let testURL = URL(fileURLWithPath: "\(Self.projectRoot)/Docs/harry_potter.wav")
         
         // Load at 16kHz for diarization
         let loader = AudioLoader(config: AudioLoader.Configuration(

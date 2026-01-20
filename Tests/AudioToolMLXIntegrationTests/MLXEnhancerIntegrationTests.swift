@@ -84,16 +84,16 @@ struct FRCRNChunkingIntegrationTests {
         print("Loading model...")
         try await provider.load()
         
-        // Create synthetic 6s audio (longer than 4s chunk to trigger chunking)
-        // Noisy sine wave at 440Hz
+        // Load real test audio (noisy speech at 16kHz)
         let sampleRate = 16000
-        let duration: Float = 6.0
-        let samples: [Float] = (0..<Int(duration * Float(sampleRate))).map { i in
-            let t = Float(i) / Float(sampleRate)
-            let sine = sin(2.0 * Float.pi * 440.0 * t) * 0.5
-            let noise = Float.random(in: -0.1...0.1)
-            return sine + noise
-        }
+        let testAudioPath = TestConfig.frcrnTestAudio
+        print("Loading test audio from: \(testAudioPath)")
+        
+        let loaderConfig = AudioLoader.Configuration(targetSampleRate: Double(sampleRate))
+        let loader = AudioLoader(config: loaderConfig)
+        let audio = try loader.loadMono(from: URL(fileURLWithPath: testAudioPath))
+        eval(audio)
+        let samples = audio.asArray(Float.self)
         
         let input = AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
         print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
@@ -245,15 +245,16 @@ struct StreamingVerificationTests {
         print("Loading model...")
         try await provider.load()
         
-        // Create synthetic 8s audio (triggers chunking)
+        // Load real test audio at 16kHz
         let sampleRate = 16000
-        let duration: Float = 8.0
-        let samples: [Float] = (0..<Int(duration * Float(sampleRate))).map { i in
-            let t = Float(i) / Float(sampleRate)
-            let sine = sin(2.0 * Float.pi * 440.0 * t) * 0.5
-            let noise = Float.random(in: -0.1...0.1)
-            return sine + noise
-        }
+        let testAudioPath = TestConfig.frcrnTestAudio
+        print("Loading test audio from: \(testAudioPath)")
+        
+        let loaderConfig = AudioLoader.Configuration(targetSampleRate: Double(sampleRate))
+        let loader = AudioLoader(config: loaderConfig)
+        let audio = try loader.loadMono(from: URL(fileURLWithPath: testAudioPath))
+        eval(audio)
+        let samples = audio.asArray(Float.self)
         
         let input = AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
         print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
@@ -330,6 +331,187 @@ struct StreamingVerificationTests {
         } else {
             print("❌ CHECK IMPLEMENTATION: max diff >= 0.1")
         }
+    }
+}
+
+// MARK: - MossFormer2 Speaker Separation Integration Tests
+
+@Suite("MossFormer2 SS Integration with Chunking", .tags(.integration))
+struct MossFormer2SSIntegrationTests {
+    
+    // Test paths computed from project root
+    static var ssModelDir: String { "\(TestConfig.projectRoot)/Models/mosforrmer2_ss_mlx_swift" }
+    
+    @Test("MossFormer2 SS 2-speaker separation with chunking")
+    func testMossFormer2SS2Speaker() async throws {
+        guard TestConfig.shouldRunIntegrationTests else {
+            print("Skipping MLX tests")
+            return
+        }
+        
+        print("\n=== MossFormer2 SS 2-Speaker with Chunking ===")
+        
+        // Create provider - auto-downloads from HuggingFace if needed
+        let provider = MossFormer2SSProvider(model: .twoSpeaker, precision: .fp32)
+        
+        print("Loading model...")
+        try await provider.load()
+        print("Model ready")
+        
+        // Load test audio (16kHz for 2-speaker model)
+        let testPath = "\(Self.ssModelDir)/mix.wav"
+        print("Loading audio from: \(testPath)")
+        
+        let loaderConfig = AudioLoader.Configuration(targetSampleRate: 16000)
+        let loader = AudioLoader(config: loaderConfig)
+        let audio = try loader.loadMono(from: URL(fileURLWithPath: testPath))
+        eval(audio)
+        let samples = audio.asArray(Float.self)
+        
+        let input = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
+        print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
+        
+        // Separate speakers
+        print("Processing...")
+        let startTime = Date()
+        let outputs = try await provider.separate(input, speakers: 2)
+        let processingTime = Date().timeIntervalSince(startTime)
+        
+        let rtf = input.duration / processingTime
+        print("Output: \(outputs.count) speakers, \(outputs.first?.samples.count ?? 0) samples each")
+        print("RTF: \(String(format: "%.2f", rtf))x")
+        
+        // Save outputs
+        let saverConfig = AudioSaver.Configuration(sampleRate: 16000)
+        let saver = AudioSaver(config: saverConfig)
+        
+        for (i, output) in outputs.enumerated() {
+            let path = "\(Self.ssModelDir)/ss_2spk_speaker\(i + 1).wav"
+            try saver.save(MLXArray(output.samples), to: path)
+            print("Saved: \(path)")
+        }
+        
+        // Verify
+        #expect(outputs.count == 2, "Should have 2 speaker outputs")
+        #expect(outputs[0].sampleRate == 16000)
+        #expect(outputs[0].frameCount > 0)
+    }
+    
+    @Test("MossFormer2 SS 3-speaker separation with chunking")
+    func testMossFormer2SS3Speaker() async throws {
+        guard TestConfig.shouldRunIntegrationTests else {
+            print("Skipping MLX tests")
+            return
+        }
+        
+        print("\n=== MossFormer2 SS 3-Speaker with Chunking ===")
+        
+        // Create provider (8kHz model)
+        let provider = MossFormer2SSProvider(model: .threeSpeaker, precision: .fp32)
+        
+        print("Loading model...")
+        try await provider.load()
+        print("Model ready")
+        
+        // Load test audio (8kHz for 3-speaker model)
+        let testPath = "\(Self.ssModelDir)/mix3_8k.wav"
+        print("Loading audio from: \(testPath)")
+        
+        let loaderConfig = AudioLoader.Configuration(targetSampleRate: 8000)
+        let loader = AudioLoader(config: loaderConfig)
+        let audio = try loader.loadMono(from: URL(fileURLWithPath: testPath))
+        eval(audio)
+        let samples = audio.asArray(Float.self)
+        
+        let input = AudioBuffer(samples: samples, sampleRate: 8000, channels: 1)
+        print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
+        
+        // Separate speakers
+        print("Processing...")
+        let startTime = Date()
+        let outputs = try await provider.separate(input, speakers: 3)
+        let processingTime = Date().timeIntervalSince(startTime)
+        
+        let rtf = input.duration / processingTime
+        print("Output: \(outputs.count) speakers, \(outputs.first?.samples.count ?? 0) samples each")
+        print("RTF: \(String(format: "%.2f", rtf))x")
+        
+        // Save outputs
+        let saverConfig = AudioSaver.Configuration(sampleRate: 8000)
+        let saver = AudioSaver(config: saverConfig)
+        
+        for (i, output) in outputs.enumerated() {
+            let path = "\(Self.ssModelDir)/ss_3spk_speaker\(i + 1).wav"
+            try saver.save(MLXArray(output.samples), to: path)
+            print("Saved: \(path)")
+        }
+        
+        // Verify
+        #expect(outputs.count == 3, "Should have 3 speaker outputs")
+        #expect(outputs[0].sampleRate == 8000)
+    }
+}
+
+// MARK: - MossFormer2 Super Resolution Integration Tests
+
+@Suite("MossFormer2 SR 48K Integration with Chunking", .tags(.integration))
+struct MossFormer2SRIntegrationTests {
+    
+    static var srModelDir: String { "\(TestConfig.projectRoot)/Models/mossformer2_sr_mlx_swift" }
+    
+    @Test("MossFormer2 SR 16kHz to 48kHz upsampling with chunking")
+    func testMossFormer2SR48K() async throws {
+        guard TestConfig.shouldRunIntegrationTests else {
+            print("Skipping MLX tests")
+            return
+        }
+        
+        print("\n=== MossFormer2 SR 48K with Chunking ===")
+        print("Super-resolution: 16kHz -> 48kHz")
+        
+        // Create provider - auto-downloads from HuggingFace if needed
+        let provider = MLXProviders.mossformer2SR48K()
+        
+        print("Loading model...")
+        try await provider.load()
+        print("Model ready")
+        
+        // Load test audio at 16kHz (input rate)
+        let testPath = "\(Self.srModelDir)/test_16k.wav"
+        print("Loading audio from: \(testPath)")
+        
+        let loaderConfig = AudioLoader.Configuration(targetSampleRate: 16000)
+        let loader = AudioLoader(config: loaderConfig)
+        let audio = try loader.loadMono(from: URL(fileURLWithPath: testPath))
+        eval(audio)
+        let samples = audio.asArray(Float.self)
+        
+        let input = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
+        print("Input: \(input.samples.count) samples at 16kHz (\(String(format: "%.2f", input.duration))s)")
+        
+        // Upsample
+        print("Processing...")
+        let startTime = Date()
+        let output = try await provider.process(input)
+        let processingTime = Date().timeIntervalSince(startTime)
+        
+        let rtf = input.duration / processingTime
+        print("Output: \(output.samples.count) samples at 48kHz (\(String(format: "%.2f", output.duration))s)")
+        print("RTF: \(String(format: "%.2f", rtf))x")
+        
+        // Save output
+        let outputPath = "\(Self.srModelDir)/sr_enhanced_test.wav"
+        let saverConfig = AudioSaver.Configuration(sampleRate: 48000)
+        let saver = AudioSaver(config: saverConfig)
+        try saver.save(MLXArray(output.samples), to: outputPath)
+        print("Saved: \(outputPath)")
+        
+        // Verify 3x upsample ratio (16kHz -> 48kHz)
+        // Note: Output may differ slightly due to chunking boundary effects
+        #expect(output.sampleRate == 48000, "Output should be 48kHz")
+        let expectedSamples = input.samples.count * 3
+        let sampleDiff = abs(output.samples.count - expectedSamples)
+        #expect(sampleDiff < 3000, "Sample count should be approximately 3x input (within 3000 samples)")
     }
 }
 

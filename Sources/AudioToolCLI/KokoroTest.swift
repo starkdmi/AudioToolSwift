@@ -26,8 +26,8 @@ func runKokoroTest() async throws {
     print("\n=== Kokoro TTS Multilingual Test ===")
     print("Using precision: .bf16 → mlx-community/Kokoro-82M-bf16")
     
-    // Output directory
-    let outputDir = FileManager.default.currentDirectoryPath + "/tts_output"
+    // Output directory - save to Models/kokoro-ios for consistency
+    let outputDir = "\(kokoroProjectRoot)/Models/kokoro-ios"
     try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
     
     // Get model path first (download once)
@@ -138,8 +138,8 @@ func runVoiceMixingTest() async throws {
     print("\n=== Kokoro Voice Mixing Test ===")
     print("Testing: af_bella (50%) + af_sarah (50%)")
     
-    // Output directory
-    let outputDir = FileManager.default.currentDirectoryPath + "/tts_output"
+    // Output directory - save to Models/kokoro-ios for consistency
+    let outputDir = "\(kokoroProjectRoot)/Models/kokoro-ios"
     try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
     
     // Get model path
