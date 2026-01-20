@@ -31,17 +31,15 @@ func runChatterboxTest() async throws {
     
     let outputDir = "\(chatterboxProjectRoot)/ClearVoice/chatterbox_output"
     let burunowPath = "\(chatterboxProjectRoot)/ClearVoice/Docs/burunow_short.wav"
-    // HuggingFace cache is user-specific, use home directory
-    let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
-    let modelPath = "\(homeDir)/.cache/huggingface/hub/models--starkdmi--chatterbox-fp16/snapshots/e68aaba8ef36cb9a8a8c9a5807c1b1004b113c70"
     
     let text = "мы закрыли замок и прошли мимо замка"
     print("Text: \"\(text)\"\n")
     
     let saver = AudioSaver(config: .init(sampleRate: 24000))
     
+    // Use precision-based init which dynamically finds cached model
     let provider = ChatterboxTTSProvider(
-        modelPath: URL(fileURLWithPath: modelPath),
+        precision: .fp16,
         language: .russian,
         useRuAccent: true,
         convertToStressMarks: true

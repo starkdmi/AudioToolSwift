@@ -41,12 +41,10 @@ func runChatterboxVADTest() async throws {
         return
     }
     
-    // Create provider with VAD enabled (default) - use local model path
+    // Create provider with VAD enabled (default) - use precision-based init for dynamic path lookup
     print("Loading ChatterBox model (fp16, English, VAD enabled)...")
-    let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
-    let modelPath = "\(homeDir)/.cache/huggingface/hub/models--starkdmi--chatterbox-fp16/snapshots/e68aaba8ef36cb9a8a8c9a5807c1b1004b113c70"
     let provider = ChatterboxTTSProvider(
-        modelPath: URL(fileURLWithPath: modelPath),
+        precision: .fp16,
         language: .english,
         useRuAccent: false
     )
