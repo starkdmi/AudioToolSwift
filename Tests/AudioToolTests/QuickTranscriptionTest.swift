@@ -24,7 +24,7 @@ struct QuickTranscriptionTest {
             print("  - \(locale.identifier)")
         }
         
-        #expect(locales.count > 0)
+        #expect(locales.count > 0, "Should have at least one supported locale")
         print("=== Done ===\n")
     }
     
@@ -39,10 +39,8 @@ struct QuickTranscriptionTest {
         print("Found \(locales.count) locales")
         
         // Find first locale (any will do for testing)
-        guard let firstLocale = locales.first else {
-            print("⚠ No locales available")
-            return
-        }
+        try #require(!locales.isEmpty, "No speech recognition locales available")
+        let firstLocale = locales.first!
         
         print("Using locale: \(firstLocale.identifier)")
         
@@ -68,6 +66,7 @@ struct QuickTranscriptionTest {
         print("Segments: \(result.segments.count)")
         print("--- Done ---\n")
         
-        #expect(true)  // Pass if we get here
+        // Silence should produce empty or minimal text - validate the pipeline completed
+        #expect(result.text.count < 50, "Silence should produce little to no text")
     }
 }

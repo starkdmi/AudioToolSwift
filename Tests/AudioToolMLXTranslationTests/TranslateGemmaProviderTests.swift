@@ -11,6 +11,18 @@ import Foundation
 @testable import ClearVoiceCore
 @testable import ClearVoiceMLXTranslation
 
+/// Whether MLX tests should run (default: yes, set SKIP_MLX_TESTS=1 to skip)
+private var shouldRunMLXTests: Bool {
+    ProcessInfo.processInfo.environment["SKIP_MLX_TESTS"] != "1"
+}
+
+/// Trait for enabling tests only when MLX tests are not skipped
+private extension Trait where Self == Testing.ConditionTrait {
+    static var enabledForMLX: Self {
+        .enabled(if: shouldRunMLXTests, "MLX tests disabled via SKIP_MLX_TESTS=1")
+    }
+}
+
 @Suite("TranslateGemma Provider Tests")
 struct TranslateGemmaProviderTests {
     
@@ -49,7 +61,7 @@ struct TranslateGemmaProviderTests {
     
     // MARK: - Integration Tests (Requires Model Download)
     
-    @Test("Basic English to German translation")
+    @Test("Basic English to German translation", .enabledForMLX)
     func testEnglishToGermanTranslation() async throws {
         let provider = TranslateGemmaProvider(
             maxTokens: 64,
@@ -77,7 +89,7 @@ struct TranslateGemmaProviderTests {
         #expect(lowerResult.contains("hallo") || lowerResult.contains("wie"))
     }
     
-    @Test("English to French translation")
+    @Test("English to French translation", .enabledForMLX)
     func testEnglishToFrenchTranslation() async throws {
         let provider = TranslateGemmaProvider(maxTokens: 64)
         
@@ -94,7 +106,7 @@ struct TranslateGemmaProviderTests {
         #expect(lowerResult.contains("bonjour") || lowerResult.contains("matin"))
     }
     
-    @Test("English to Japanese translation")
+    @Test("English to Japanese translation", .enabledForMLX)
     func testEnglishToJapaneseTranslation() async throws {
         let provider = TranslateGemmaProvider(maxTokens: 64)
         
@@ -116,7 +128,7 @@ struct TranslateGemmaProviderTests {
         #expect(containsJapanese)
     }
     
-    @Test("Batch translation")
+    @Test("Batch translation", .enabledForMLX)
     func testBatchTranslation() async throws {
         let provider = TranslateGemmaProvider(maxTokens: 64)
         
@@ -138,12 +150,16 @@ struct TranslateGemmaProviderTests {
     
     // MARK: - ClearVoice Integration
     
-    @Test("ClearVoice integration with TranslateGemma")
+    @Test("ClearVoice integration with TranslateGemma", .enabledForMLX)
     func testClearVoiceIntegration() async throws {
+        // Create a fresh ClearVoice and explicitly register TranslateGemma
+        // Note: ClearVoice is a shared actor, so we specify the model explicitly
         let voice = ClearVoice()
-        await voice.configureTranslateGemma(maxTokens: 64)
+        let provider = TranslateGemmaProvider(maxTokens: 64)
+        await voice.register(translator: provider, for: .translateGemma)
         
-        let result = try await voice.translate("Hello", from: "en", to: "de-DE")
+        // Use translateGemma model explicitly to avoid conflicts with other registered translators
+        let result = try await voice.translate("Hello", from: "en", to: "de-DE", model: .translateGemma)
         
         print("ClearVoice translation: '\(result.sourceText)' -> '\(result.translatedText)'")
         

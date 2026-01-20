@@ -22,7 +22,17 @@ final class VADThresholdTests: XCTestCase {
             throw XCTSkip("music_35s.wav not found - run: ffmpeg -i music.mp3 -ss 25 -to 60 music_35s.wav")
         }
         
-        try await runVADSettingsTest(url: testURL)
+        let results = try await runVADSettingsTest(url: testURL)
+        
+        // Assertions for music file - should detect singing as speech with low threshold
+        let lowThresholdResult = results.first { $0.description == "Very low threshold" }
+        XCTAssertNotNil(lowThresholdResult, "Should have results for very low threshold")
+        
+        if let result = lowThresholdResult {
+            // Music with singing should have detectable speech at low thresholds
+            XCTAssertGreaterThan(result.segments.count, 0, 
+                "Music with singing should have some detected segments at low threshold")
+        }
     }
     
     /// Test billions.wav with different thresholds and duration settings
@@ -34,10 +44,31 @@ final class VADThresholdTests: XCTestCase {
             throw XCTSkip("billions.wav not found")
         }
         
-        try await runVADSettingsTest(url: testURL)
+        let results = try await runVADSettingsTest(url: testURL)
+        
+        // Assertions for billions.wav - speech should be detected in the second half
+        let defaultResult = results.first { $0.description == "Default" }
+        XCTAssertNotNil(defaultResult, "Should have results for default threshold")
+        
+        // All configs should produce valid (possibly empty) segment lists
+        for result in results {
+            XCTAssertGreaterThanOrEqual(result.segments.count, 0, 
+                "Config '\(result.description)' should produce valid segment count")
+            XCTAssertLessThanOrEqual(result.speechPercent, 100.0,
+                "Speech percentage should not exceed 100%")
+        }
     }
     
-    private func runVADSettingsTest(url: URL) async throws {
+    /// Result structure for threshold testing
+    struct ThresholdTestResult {
+        let description: String
+        let segments: [VADSegment]
+        let totalSpeech: Double
+        let audioDuration: Double
+        var speechPercent: Double { (totalSpeech / audioDuration) * 100 }
+    }
+    
+    private func runVADSettingsTest(url: URL) async throws -> [ThresholdTestResult] {
         // Load at 16kHz
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 16000,
@@ -66,6 +97,8 @@ final class VADThresholdTests: XCTestCase {
             (0.1, 0.5, 0.8, "Very low + long durations"),
         ]
         
+        var results: [ThresholdTestResult] = []
+        
         for (threshold, minSpeech, minSilence, desc) in configs {
             let vad = FluidAudioProviders.sileroVAD(
                 threshold: threshold,
@@ -88,6 +121,15 @@ final class VADThresholdTests: XCTestCase {
                 print("    ... and \(segments.count - 3) more")
             }
             print()
+            
+            results.append(ThresholdTestResult(
+                description: desc,
+                segments: segments,
+                totalSpeech: totalSpeech,
+                audioDuration: duration
+            ))
         }
+        
+        return results
     }
 }

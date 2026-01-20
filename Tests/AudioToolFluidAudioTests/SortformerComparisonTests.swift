@@ -297,13 +297,17 @@ final class SortformerComparisonTests: XCTestCase {
         print("\n" + String(repeating: "=", count: 70))
         print("=== SUMMARY TABLE ===")
         print(String(repeating: "=", count: 70))
-        print(String(format: "%-15s | %-20s | %-20s", "Audio", "Pyannote", "Sortformer"))
+        print("Audio".padding(toLength: 15, withPad: " ", startingAt: 0) + " | " +
+              "Pyannote".padding(toLength: 20, withPad: " ", startingAt: 0) + " | " +
+              "Sortformer".padding(toLength: 20, withPad: " ", startingAt: 0))
         print(String(repeating: "-", count: 70))
         
         for (name, pyannote, sortformer) in results {
             let pInfo = pyannote.map { "\($0.speakerCount)spk, \(String(format: "%.1f", $0.rtf))x RTF" } ?? "skipped"
             let sInfo = "\(sortformer.speakerCount)spk, \(String(format: "%.1f", sortformer.rtf))x RTF"
-            print(String(format: "%-15s | %-20s | %-20s", name, pInfo, sInfo))
+            print(name.padding(toLength: 15, withPad: " ", startingAt: 0) + " | " +
+                  pInfo.padding(toLength: 20, withPad: " ", startingAt: 0) + " | " +
+                  sInfo.padding(toLength: 20, withPad: " ", startingAt: 0))
         }
         
         print(String(repeating: "=", count: 70) + "\n")

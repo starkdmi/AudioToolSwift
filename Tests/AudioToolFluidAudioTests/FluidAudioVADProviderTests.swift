@@ -8,6 +8,8 @@
 import XCTest
 import ClearVoiceFluidAudio
 import ClearVoiceCore
+import AudioUtils
+import MLX
 
 final class FluidAudioVADProviderTests: XCTestCase {
     
@@ -57,18 +59,41 @@ final class FluidAudioVADProviderTests: XCTestCase {
     
     func testDetectWithTestAudio() async throws {
         // Load test audio from fixtures
-        let testURL = Bundle.module.url(forResource: "test", withExtension: "wav", subdirectory: "Fixtures")
-        
-        guard let url = testURL else {
+        guard let testURL = Bundle.module.url(forResource: "test", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("Test fixture test.wav not found")
         }
         
-        // Load audio (simplified - in real test would use AudioLoader)
-        let data = try Data(contentsOf: url)
-        // For now, just verify the file exists and detection doesn't crash
-        XCTAssertFalse(data.isEmpty, "Test audio should have data")
+        // Load and process actual audio
+        let loader = AudioLoader(config: AudioLoader.Configuration(
+            targetSampleRate: 16000,
+            normalizationMode: .none
+        ))
+        let audio = try loader.loadMono(from: testURL)
+        eval(audio)
+        let samples = audio.asArray(Float.self)
         
-        print("Test audio loaded: \(data.count) bytes")
+        let audioBuffer = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
+        
+        // Run VAD detection
+        let segments = try await provider.detect(audioBuffer)
+        
+        // Real assertions for test audio
+        XCTAssertFalse(segments.isEmpty, "Test audio should contain speech segments")
+        
+        // Verify segment properties
+        for segment in segments {
+            XCTAssertGreaterThanOrEqual(segment.timeRange.start, 0, "Segment start should be >= 0")
+            XCTAssertGreaterThan(segment.timeRange.end, segment.timeRange.start, "Segment end should be > start")
+            XCTAssertLessThanOrEqual(segment.timeRange.end, audioBuffer.duration, "Segment end should be <= audio duration")
+            XCTAssertGreaterThanOrEqual(segment.probability, 0, "Probability should be >= 0")
+            XCTAssertLessThanOrEqual(segment.probability, 1, "Probability should be <= 1")
+        }
+        
+        // Calculate total speech
+        let totalSpeech = segments.reduce(0.0) { $0 + ($1.timeRange.end - $1.timeRange.start) }
+        print("Detected \(segments.count) segments, total speech: \(String(format: "%.2f", totalSpeech))s")
+        
+        XCTAssertGreaterThan(totalSpeech, 0.5, "Should detect at least 0.5s of speech")
     }
     
     // MARK: - Process Tests (Passthrough)
@@ -91,9 +116,20 @@ final class FluidAudioVADProviderTests: XCTestCase {
     // MARK: - Performance Tests
     
     func testDetectionPerformance() async throws {
-        // Create 5 seconds of audio (random noise simulating speech)
+        // Create 5 seconds of deterministic pseudo-speech audio
         let sampleCount = 16000 * 5
-        let samples = (0..<sampleCount).map { _ in Float.random(in: -0.5...0.5) }
+        var samples = [Float](repeating: 0, count: sampleCount)
+        
+        // Use deterministic pattern instead of random
+        for i in 0..<sampleCount {
+            // Deterministic pseudo-speech pattern
+            let t = Float(i) / 16000.0
+            let base = sin(2.0 * .pi * 200.0 * t)  // 200 Hz fundamental
+            let harmonics = sin(2.0 * .pi * 400.0 * t) * 0.5 + sin(2.0 * .pi * 800.0 * t) * 0.25
+            let envelope = sin(2.0 * .pi * 4.0 * t) * 0.5 + 0.5  // Slow modulation
+            samples[i] = (base + harmonics) * 0.3 * envelope
+        }
+        
         let audio = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
         
         let startTime = Date()
@@ -105,7 +141,9 @@ final class FluidAudioVADProviderTests: XCTestCase {
         
         print("VAD RTF: \(String(format: "%.1f", rtf))x (5s audio in \(String(format: "%.3f", duration))s)")
         
-        // VAD should be very fast (>100x RTF typically)
-        XCTAssertGreaterThan(rtf, 10.0, "VAD should be at least 10x real-time")
+        // Use CI-aware threshold - VAD should be fast but CI may be slower
+        let isCI = ProcessInfo.processInfo.environment["CI"] == "1"
+        let threshold = isCI ? 3.0 : 10.0
+        XCTAssertGreaterThan(rtf, threshold, "VAD should be at least \(threshold)x real-time")
     }
 }

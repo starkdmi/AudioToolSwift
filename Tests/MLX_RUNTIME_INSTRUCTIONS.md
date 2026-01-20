@@ -11,6 +11,14 @@ MLX error: Failed to load the default metallib. library not found
 
 This happens because Metal `.metallib` shaders aren't bundled correctly with SPM.
 
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SKIP_MLX_TESTS=1` | Skip MLX integration tests (default: run them) |
+| `SKIP_INTEGRATION_TESTS=1` | Skip all integration tests |
+| `CI=1` | Indicates CI environment (adjusts performance thresholds) |
+
 ## Solution: Run via Xcode Product
 
 Instead of running the binary directly, use **xcodebuild test** or **run from Xcode IDE**:
@@ -21,11 +29,16 @@ Instead of running the binary directly, use **xcodebuild test** or **run from Xc
 cd ~/Downloads/clear_voice_research/ClearVoice
 
 # Run all MLX integration tests
-RUN_MLX_TESTS=1 xcodebuild test \
+xcodebuild test \
   -scheme ClearVoice-Package \
   -destination 'platform=macOS' \
   -derivedDataPath .build/DerivedData \
   -only-testing:ClearVoiceMLXIntegrationTests
+
+# Skip MLX tests
+SKIP_MLX_TESTS=1 xcodebuild test \
+  -scheme ClearVoice-Package \
+  -destination 'platform=macOS'
 ```
 
 ### Option 2: Run CVGenerate from Xcode IDE

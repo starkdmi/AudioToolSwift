@@ -24,12 +24,14 @@ struct RUAccentProviderTests {
     static let modelsDir = URL(fileURLWithPath: "\(projectRoot)/Models/ruaccent/models/balanced")
     static let assetsDir = URL(fileURLWithPath: "\(projectRoot)/Models/ruaccent/assets/balanced")
     
+    /// Check if models are available (use with try #require)
+    static var modelsAvailable: Bool {
+        FileManager.default.fileExists(atPath: modelsDir.path)
+    }
+    
     @Test("Basic stress marking")
     func testBasicStressMarking() throws {
-        guard FileManager.default.fileExists(atPath: Self.modelsDir.path) else {
-            print("⚠️ Skipping test - models not found at \(Self.modelsDir.path)")
-            return
-        }
+        try #require(Self.modelsAvailable, "RUAccent models not found at \(Self.modelsDir.path)")
         
         let provider = try RUAccentProvider(
             profile: .balanced,
@@ -45,10 +47,7 @@ struct RUAccentProviderTests {
     
     @Test("Multiple words")
     func testMultipleWords() throws {
-        guard FileManager.default.fileExists(atPath: Self.modelsDir.path) else {
-            print("⚠️ Skipping test - models not found")
-            return
-        }
+        try #require(Self.modelsAvailable, "RUAccent models not found")
         
         let provider = try RUAccentProvider(
             profile: .balanced,
@@ -63,10 +62,7 @@ struct RUAccentProviderTests {
     
     @Test("Dictionary lookup")
     func testDictionaryLookup() throws {
-        guard FileManager.default.fileExists(atPath: Self.modelsDir.path) else {
-            print("⚠️ Skipping test - models not found")
-            return
-        }
+        try #require(Self.modelsAvailable, "RUAccent models not found")
         
         let provider = try RUAccentProvider(
             profile: .balanced,
@@ -81,10 +77,7 @@ struct RUAccentProviderTests {
     
     @Test("Punctuation preserved")
     func testPunctuationPreserved() throws {
-        guard FileManager.default.fileExists(atPath: Self.modelsDir.path) else {
-            print("⚠️ Skipping test - models not found")
-            return
-        }
+        try #require(Self.modelsAvailable, "RUAccent models not found")
         
         let provider = try RUAccentProvider(
             profile: .balanced,
@@ -101,10 +94,7 @@ struct RUAccentProviderTests {
     
     @Test("Empty string")
     func testEmptyString() throws {
-        guard FileManager.default.fileExists(atPath: Self.modelsDir.path) else {
-            print("⚠️ Skipping test - models not found")
-            return
-        }
+        try #require(Self.modelsAvailable, "RUAccent models not found")
         
         let provider = try RUAccentProvider(
             profile: .balanced,
@@ -119,10 +109,7 @@ struct RUAccentProviderTests {
     
     @Test("ClearVoice integration")
     func testClearVoiceIntegration() async throws {
-        guard FileManager.default.fileExists(atPath: Self.modelsDir.path) else {
-            print("⚠️ Skipping test - models not found")
-            return
-        }
+        try #require(Self.modelsAvailable, "RUAccent models not found")
         
         // Test factory method
         let provider = try TTSProviders.ruaccent(

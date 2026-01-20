@@ -30,10 +30,8 @@ struct TranscriptionIntegrationTests {
         // Load the audio file
         let testURL = URL(fileURLWithPath: "\(Self.projectRoot)/Models/mossformer2_se_mlx_swift/test.wav")
         
-        guard FileManager.default.fileExists(atPath: testURL.path) else {
-            print("⚠ test.wav not found at: \(testURL.path)")
-            return
-        }
+        try #require(FileManager.default.fileExists(atPath: testURL.path), 
+                     "test.wav not found at: \(testURL.path)")
         
         // Load audio at 16kHz
         let loader = AudioLoader(config: AudioLoader.Configuration(
@@ -68,8 +66,7 @@ struct TranscriptionIntegrationTests {
             localeToUse = firstLocale
             print("No English locale, using: \(firstLocale.identifier)")
         } else {
-            print("⚠ No locales available")
-            return
+            throw TranscriptionTestSkipped(reason: "No speech recognition locales available")
         }
         
         // Create transcriber

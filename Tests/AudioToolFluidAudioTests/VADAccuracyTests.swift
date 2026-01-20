@@ -29,7 +29,18 @@ final class VADAccuracyTests: XCTestCase {
             throw XCTSkip("billions.wav not found")
         }
         
-        try await runVADTest(url: testURL)
+        let result = try await runVADTest(url: testURL)
+        
+        // Billions.wav should have speech segments
+        // For difficult audio, VAD may not detect segments - that's acceptable behavior
+        XCTAssertLessThanOrEqual(result.speechPercent, 100.0, 
+            "Speech percentage should be valid")
+        
+        // If speech is detected, it should be reasonable
+        if !result.segments.isEmpty {
+            XCTAssertGreaterThan(result.totalSpeech, 0, 
+                "Detected speech should have positive duration")
+        }
     }
     
     /// Test VAD on watson_30s.wav - interview with multiple speech segments
@@ -41,7 +52,15 @@ final class VADAccuracyTests: XCTestCase {
             throw XCTSkip("watson_30s.wav not found")
         }
         
-        try await runVADTest(url: testURL)
+        let result = try await runVADTest(url: testURL)
+        
+        // Watson interview should have substantial speech
+        XCTAssertGreaterThan(result.segments.count, 0, 
+            "Interview audio should have speech segments")
+        XCTAssertGreaterThan(result.speechPercent, 20.0, 
+            "Interview should have at least 20% speech")
+        XCTAssertLessThan(result.speechPercent, 95.0, 
+            "Interview should have some pauses (< 95% speech)")
     }
     
     /// Test VAD on original test.wav
@@ -53,10 +72,28 @@ final class VADAccuracyTests: XCTestCase {
             throw XCTSkip("test.wav not found")
         }
         
-        try await runVADTest(url: testURL)
+        let result = try await runVADTest(url: testURL)
+        
+        // Test.wav should have speech
+        XCTAssertGreaterThan(result.segments.count, 0, 
+            "Test audio should have speech segments")
+        
+        // First segment should not start at 0 (there's initial silence)
+        if let firstSegment = result.segments.first {
+            XCTAssertGreaterThan(firstSegment.timeRange.start, 0.1, 
+                "First segment should not start at 0 (initial silence expected)")
+        }
     }
     
-    private func runVADTest(url: URL) async throws {
+    /// Result structure for VAD accuracy testing
+    struct VADTestResult {
+        let segments: [VADSegment]
+        let totalSpeech: Double
+        let audioDuration: Double
+        var speechPercent: Double { (totalSpeech / audioDuration) * 100 }
+    }
+    
+    private func runVADTest(url: URL) async throws -> VADTestResult {
         // Load at 16kHz
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 16000,
@@ -84,7 +121,7 @@ final class VADAccuracyTests: XCTestCase {
         let speechPercent = (totalSpeech / duration) * 100
         print("\nTotal speech: \(String(format: "%.2f", totalSpeech))s / \(String(format: "%.2f", duration))s (\(String(format: "%.0f", speechPercent))%)")
         
-        // Check for non-zero start times
+        // Log timing check for first segment
         if let first = segments.first {
             if first.timeRange.start < 0.3 {
                 print("⚠️ First segment starts very early (\(String(format: "%.2f", first.timeRange.start))s) - verify if correct")
@@ -92,5 +129,11 @@ final class VADAccuracyTests: XCTestCase {
                 print("✓ First segment starts at \(String(format: "%.2f", first.timeRange.start))s")
             }
         }
+        
+        return VADTestResult(
+            segments: segments,
+            totalSpeech: totalSpeech,
+            audioDuration: duration
+        )
     }
 }

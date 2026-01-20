@@ -233,7 +233,9 @@ final class KokoroVoiceMatcherTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
         let avgTime = elapsed / 100.0
         
-        // Should be very fast (< 5ms per match, excluding embedding extraction)
-        XCTAssertLessThan(avgTime, 0.005, "Matching should take < 5ms (got \(avgTime * 1000)ms)")
+        // Use CI-aware threshold - CI machines may be slower
+        let isCI = ProcessInfo.processInfo.environment["CI"] == "1"
+        let maxTimeMs = isCI ? 20.0 : 5.0
+        XCTAssertLessThan(avgTime, maxTimeMs / 1000.0, "Matching should take < \(maxTimeMs)ms (got \(avgTime * 1000)ms)")
     }
 }

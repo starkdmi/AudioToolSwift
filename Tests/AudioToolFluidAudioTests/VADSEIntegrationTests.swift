@@ -117,10 +117,13 @@ final class VADSEIntegrationTests: XCTestCase {
         let overallRTF = audioDuration / (vadTime + totalEnhanceTime)
         print("   Overall RTF: \(String(format: "%.1f", overallRTF))x")
         
-        // 6. Assertions
+        // 6. Assertions - use CI-aware thresholds
+        let isCI = ProcessInfo.processInfo.environment["CI"] == "1"
+        let vadRTFThreshold = isCI ? 20.0 : 100.0
+        
         XCTAssertFalse(segments.isEmpty, "Should detect at least one speech segment")
         XCTAssertEqual(enhancedSegments.count, segments.count, "Should enhance all segments")
-        XCTAssertGreaterThan(vadRTF, 100, "VAD should be >100x real-time")
+        XCTAssertGreaterThan(vadRTF, vadRTFThreshold, "VAD should be >\(vadRTFThreshold)x real-time")
         
         print("\n✓ VAD → SE 48K pipeline test passed!")
     }

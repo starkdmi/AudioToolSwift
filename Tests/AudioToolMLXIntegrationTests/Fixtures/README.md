@@ -10,10 +10,12 @@ For integration tests to run, you need:
 ## Environment Variables
 
 Set these before running tests:
-- `RUN_MLX_TESTS=1` - Enable MLX integration tests
-- `FRCRN_WEIGHTS=/path/to/model.safetensors` - FRCRN weights path
-- `MOSSFORMER_GAN_WEIGHTS=/path/to/weights.npz` - MossFormer GAN weights path  
-- `TEST_AUDIO=/path/to/noisy.wav` - Test audio file
+- `SKIP_MLX_TESTS=1` - Skip MLX integration tests (default: run them)
+- `SKIP_INTEGRATION_TESTS=1` - Skip all integration tests
+- `CI=1` - Indicates CI environment (adjusts performance thresholds)
+- `FRCRN_WEIGHTS=/path/to/model.safetensors` - FRCRN weights path (optional, auto-detected)
+- `MOSSFORMER_GAN_WEIGHTS=/path/to/weights.npz` - MossFormer GAN weights path (optional)
+- `TEST_AUDIO=/path/to/noisy.wav` - Test audio file (optional, uses fixtures)
 
 ## Running Tests
 

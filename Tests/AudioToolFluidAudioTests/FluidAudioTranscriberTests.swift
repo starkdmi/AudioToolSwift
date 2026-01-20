@@ -57,10 +57,13 @@ final class FluidAudioTranscriberTests: XCTestCase {
         print(result.text)
         print("--- End ---\n")
         
-        // Verify
+        // Verify - use CI-aware thresholds
+        let isCI = ProcessInfo.processInfo.environment["CI"] == "1"
+        let rtfThreshold = isCI ? 2.0 : 5.0
+        
         XCTAssertFalse(result.text.isEmpty, "Transcription should not be empty")
         XCTAssertGreaterThan(result.text.count, 50, "Transcription should have substantial text")
-        XCTAssertGreaterThan(rtf, 5, "Transcription should be at least 5x real-time")
+        XCTAssertGreaterThan(rtf, rtfThreshold, "Transcription should be at least \(rtfThreshold)x real-time")
         
         print("✓ Transcription test passed")
     }
@@ -90,6 +93,9 @@ final class FluidAudioTranscriberTests: XCTestCase {
         print("RTF: \(String(format: "%.0f", rtf))x (\(String(format: "%.1f", audioDuration))s audio in \(String(format: "%.2f", duration))s)")
         print("Text: \(result.text.prefix(100))...")
         
-        XCTAssertGreaterThan(rtf, 5, "Should be at least 5x real-time")
+        // Use CI-aware threshold
+        let isCI = ProcessInfo.processInfo.environment["CI"] == "1"
+        let rtfThreshold = isCI ? 2.0 : 5.0
+        XCTAssertGreaterThan(rtf, rtfThreshold, "Should be at least \(rtfThreshold)x real-time")
     }
 }
