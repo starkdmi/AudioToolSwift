@@ -16,7 +16,36 @@ import MLX
 
 /// Universal Speech Separation provider using ResUNet30 with FiLM conditioning
 /// Separates audio by sound type (speech, music, noise, etc.)
-public actor USSMLXProvider: AudioProcessor {
+///
+/// ## Embedding Swap Performance
+///
+/// Based on benchmarking with 30s audio (harry_potter_short.wav):
+///
+/// | Approach | Time | RTF | Notes |
+/// |----------|------|-----|-------|
+/// | Sequential `process(_:type:)` | 1.1s | 27x | **Recommended** |
+/// | `processMultiple()` | 2.4s | 12x | Has logging overhead |
+///
+/// **Key findings:**
+/// - Embedding swap is instant (~0ms) because all embeddings are cached
+/// - JIT compilation happens once during prewarm, not per-embedding
+/// - First call with ANY new embedding has only ~5% penalty after initial prewarm
+/// - Sequential `process(_:type:)` is faster than `processMultiple()` for small batches
+///
+/// ## Usage for chunked multi-type separation:
+/// ```swift
+/// let uss = USSProviders.speechSeparation()
+/// try await uss.load()
+///
+/// for chunk in audioChunks {
+///     // Recommended: Use sequential process with type (fastest)
+///     let music = try await uss.process(chunk, type: .music)
+///     let animal = try await uss.process(chunk, type: .animal)
+/// }
+///
+/// await uss.unload() // Release GPU memory when done
+/// ```
+public actor USSMLXProvider: AudioProcessor, ManagedModel {
     
     // MARK: - AudioProcessor Conformance
     
@@ -24,12 +53,28 @@ public actor USSMLXProvider: AudioProcessor {
     public nonisolated let inputChannels: Int = 1
     public nonisolated let outputChannels: Int = 1
     
+    // MARK: - ManagedModel Conformance
+    
+    /// Model ID for lifecycle manager
+    public nonisolated var modelId: String { "uss_mlx" }
+    
+    /// Estimated memory: ~53MB FP16 weights + ~14KB embeddings cache
+    public nonisolated var estimatedMemoryBytes: Int {
+        useFp16 ? 55_000_000 : 110_000_000
+    }
+    
     // MARK: - Private Properties
     
     private var inference: USSInference?
     private var conditioning: MLXArray?
     
-    private let embeddingType: EmbeddingLoader.EmbeddingType
+    /// Cached embeddings for all types (loaded on first access)
+    private var embeddingCache: [EmbeddingLoader.EmbeddingType: MLXArray] = [:]
+    
+    /// Current active embedding type
+    private var currentEmbeddingType: EmbeddingLoader.EmbeddingType
+    
+    private let initialEmbeddingType: EmbeddingLoader.EmbeddingType
     private let segmentDuration: Float
     private let useFp16: Bool
     private let compile: Bool
@@ -38,7 +83,7 @@ public actor USSMLXProvider: AudioProcessor {
     
     /// Initialize USS MLX provider
     /// - Parameters:
-    ///   - embeddingType: Sound type to separate (default: .speech)
+    ///   - embeddingType: Initial sound type to separate (default: .speech)
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0)
     ///   - useFp16: Use FP16 weights (default: true, 53MB vs 106MB)
     ///   - compile: Enable MLX compilation (default: true)
@@ -48,15 +93,16 @@ public actor USSMLXProvider: AudioProcessor {
         useFp16: Bool = true,
         compile: Bool = true
     ) {
-        self.embeddingType = embeddingType
+        self.initialEmbeddingType = embeddingType
+        self.currentEmbeddingType = embeddingType
         self.segmentDuration = segmentDuration
         self.useFp16 = useFp16
         self.compile = compile
     }
     
-    // MARK: - AudioProcessor Conformance
+    // MARK: - Model Lifecycle
     
-    /// Load USS model and embeddings from USSMLXSwift bundle
+    /// Load USS model and cache all embeddings from USSMLXSwift bundle
     public func load() async throws {
         // Initialize model
         let model = ResUNet30()
@@ -69,12 +115,20 @@ public actor USSMLXProvider: AudioProcessor {
         // Load weights
         try WeightLoader.loadWeights(model: model, from: weightsURL.path)
         
-        // Load conditioning embedding from USSMLXSwift bundle
+        // Load and cache ALL embeddings upfront (~14KB total for 7 types)
         guard let embeddingsDir = USSBundle.embeddingsDirectory else {
             throw ClearVoiceError.modelNotFound("USS embeddings directory")
         }
         
-        let conditioning = try EmbeddingLoader.loadEmbedding(type: embeddingType, from: embeddingsDir.path)
+        for type in EmbeddingLoader.EmbeddingType.allCases {
+            let embedding = try EmbeddingLoader.loadEmbedding(type: type, from: embeddingsDir.path)
+            embeddingCache[type] = embedding
+        }
+        
+        // Set initial conditioning
+        guard let initialConditioning = embeddingCache[initialEmbeddingType] else {
+            throw ClearVoiceError.modelNotFound("USS embedding for \(initialEmbeddingType.rawValue)")
+        }
         
         // Create inference pipeline with 2s chunks, no overlap (hopLength == segmentDuration)
         let inference = USSInference(
@@ -86,21 +140,172 @@ public actor USSMLXProvider: AudioProcessor {
             segmentBatchSize: 1
         )
         
-        // Prewarm model
-        inference.prewarm(conditioning: conditioning)
+        // Prewarm model with initial conditioning
+        inference.prewarm(conditioning: initialConditioning)
         
         self.inference = inference
-        self.conditioning = conditioning
+        self.conditioning = initialConditioning
+        self.currentEmbeddingType = initialEmbeddingType
     }
     
-    /// Process audio - separate target sound type
-    /// - Parameter input: Input audio buffer
+    /// Check if the model is currently loaded and ready for inference
+    public func checkIfLoaded() async -> Bool {
+        inference != nil
+    }
+    
+    /// Unload model from memory and release GPU resources
+    public func unload() async {
+        inference = nil
+        conditioning = nil
+        embeddingCache.removeAll()
+        GPU.clearCache()
+    }
+    
+    // MARK: - Embedding Switching
+    
+    /// Current active embedding type
+    public var activeEmbeddingType: EmbeddingLoader.EmbeddingType {
+        currentEmbeddingType
+    }
+    
+    /// Switch conditioning embedding type without reloading model weights.
+    /// Embeddings are cached, so switching is instant (~0ms).
+    /// - Parameter type: New embedding type to use for subsequent process() calls
+    /// - Throws: ClearVoiceError.modelNotLoaded if model not loaded
+    public func setConditioning(_ type: EmbeddingLoader.EmbeddingType) async throws {
+        guard inference != nil else {
+            throw ClearVoiceError.modelNotLoaded("USS MLX")
+        }
+        
+        guard let cachedConditioning = embeddingCache[type] else {
+            throw ClearVoiceError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
+        }
+        
+        self.conditioning = cachedConditioning
+        self.currentEmbeddingType = type
+    }
+    
+    /// Prewarm with additional embeddings for faster first-call performance.
+    /// 
+    /// **Note**: Based on benchmarking, this provides minimal benefit (~5% on first call)
+    /// because the JIT compilation happens on model graph, not per-embedding.
+    /// The main prewarm during `load()` handles most of the compilation.
+    /// 
+    /// - Parameter types: Embedding types to prewarm (runs tiny inference with each)
+    public func prewarmEmbeddings(_ types: [EmbeddingLoader.EmbeddingType]) async throws {
+        guard let inference = inference else {
+            throw ClearVoiceError.modelNotLoaded("USS MLX")
+        }
+        
+        // Create tiny audio for prewarming (0.1 second = 3200 samples)
+        let tinySamples = [Float](repeating: 0, count: 3200)
+        let tinyAudio = MLXArray(tinySamples).reshaped([1, -1])
+        
+        for type in types {
+            guard let conditioning = embeddingCache[type] else { continue }
+            
+            let _ = inference.separate(
+                audio: tinyAudio,
+                conditioning: conditioning,
+                compile: compile,
+                useSimpleSegmentation: true
+            )
+        }
+    }
+    
+    // MARK: - AudioProcessor Conformance
+    
+    /// Process audio - separate target sound type using current embedding
+    /// - Parameter input: Input audio buffer at 32kHz
     /// - Returns: Separated audio buffer
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
         guard let inference = inference, let conditioning = conditioning else {
             throw ClearVoiceError.modelNotLoaded("USS MLX")
         }
         
+        return try separateWithConditioning(input, conditioning: conditioning, inference: inference)
+    }
+    
+    /// Process audio with specific embedding type (one-off, doesn't change stored state).
+    /// 
+    /// **This is the recommended approach for multi-type separation.**
+    /// Benchmarks show sequential `process(_:type:)` calls are faster than `processMultiple()`.
+    /// 
+    /// - Parameters:
+    ///   - input: Input audio buffer at 32kHz
+    ///   - type: Embedding type to use for this separation only
+    /// - Returns: Separated audio buffer
+    public func process(_ input: AudioBuffer, type: EmbeddingLoader.EmbeddingType) async throws -> AudioBuffer {
+        guard let inference = inference else {
+            throw ClearVoiceError.modelNotLoaded("USS MLX")
+        }
+        
+        guard let cachedConditioning = embeddingCache[type] else {
+            throw ClearVoiceError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
+        }
+        
+        // Use specified conditioning without modifying stored state
+        return try separateWithConditioning(input, conditioning: cachedConditioning, inference: inference)
+    }
+    
+    /// Process audio and separate multiple sound types.
+    /// 
+    /// **Note**: Benchmarks show this is ~2x slower than sequential `process(_:type:)` calls
+    /// due to internal logging overhead. For best performance, use `process(_:type:)` instead.
+    /// 
+    /// - Parameters:
+    ///   - input: Input audio buffer at 32kHz
+    ///   - types: Array of embedding types to separate
+    /// - Returns: Dictionary mapping type to separated audio
+    public func processMultiple(
+        _ input: AudioBuffer,
+        types: [EmbeddingLoader.EmbeddingType]
+    ) async throws -> [EmbeddingLoader.EmbeddingType: AudioBuffer] {
+        guard let inference = inference else {
+            throw ClearVoiceError.modelNotLoaded("USS MLX")
+        }
+        
+        // Collect conditionings from cache
+        var conditionings: [MLXArray] = []
+        for type in types {
+            guard let cachedConditioning = embeddingCache[type] else {
+                throw ClearVoiceError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
+            }
+            conditionings.append(cachedConditioning)
+        }
+        
+        // Convert input to MLXArray
+        let samples = MLXArray(input.samples)
+        let audio = samples.reshaped([1, -1])
+        
+        // Use USSInference.separateMultipleEmbeddings for efficient batch processing
+        let separatedArrays = inference.separateMultipleEmbeddings(
+            audio: audio,
+            conditionings: conditionings,
+            useSimpleSegmentation: true
+        )
+        
+        // Build result dictionary
+        var results: [EmbeddingLoader.EmbeddingType: AudioBuffer] = [:]
+        for (idx, type) in types.enumerated() {
+            let separated = separatedArrays[idx]
+            eval(separated)
+            
+            let outputSamples = extractOutputSamples(from: separated)
+            results[type] = AudioBuffer(samples: outputSamples, sampleRate: sampleRate)
+        }
+        
+        return results
+    }
+    
+    // MARK: - Private Helpers
+    
+    /// Core separation logic shared by process methods
+    private func separateWithConditioning(
+        _ input: AudioBuffer,
+        conditioning: MLXArray,
+        inference: USSInference
+    ) throws -> AudioBuffer {
         // Convert to MLXArray - (samples,) -> (batch=1, samples)
         let samples = MLXArray(input.samples)
         let audio = samples.reshaped([1, -1])
@@ -114,17 +319,21 @@ public actor USSMLXProvider: AudioProcessor {
         )
         eval(separated)
         
-        // Extract output - (batch, channels, samples) -> (samples,)
-        let outputSamples: [Float]
-        if separated.ndim == 3 {
-            outputSamples = separated[0, 0, 0...].asArray(Float.self)
-        } else if separated.ndim == 2 {
-            outputSamples = separated[0, 0...].asArray(Float.self)
-        } else {
-            outputSamples = separated.asArray(Float.self)
-        }
-        
+        // Extract output
+        let outputSamples = extractOutputSamples(from: separated)
         return AudioBuffer(samples: outputSamples, sampleRate: sampleRate)
+    }
+    
+    /// Extract output samples handling different output shapes
+    private func extractOutputSamples(from separated: MLXArray) -> [Float] {
+        // Extract output - (batch, channels, samples) -> (samples,)
+        if separated.ndim == 3 {
+            return separated[0, 0, 0...].asArray(Float.self)
+        } else if separated.ndim == 2 {
+            return separated[0, 0...].asArray(Float.self)
+        } else {
+            return separated.asArray(Float.self)
+        }
     }
     
     // MARK: - Separation API
@@ -132,6 +341,11 @@ public actor USSMLXProvider: AudioProcessor {
     /// Separate target sound from audio (alias for process)
     public func separate(_ audio: AudioBuffer) async throws -> AudioBuffer {
         return try await process(audio)
+    }
+    
+    /// Separate specific sound type from audio (alias for process with type)
+    public func separate(_ audio: AudioBuffer, type: EmbeddingLoader.EmbeddingType) async throws -> AudioBuffer {
+        return try await process(audio, type: type)
     }
     
     // MARK: - Background Extraction
@@ -151,6 +365,32 @@ public actor USSMLXProvider: AudioProcessor {
             throw ClearVoiceError.modelNotLoaded("USS MLX")
         }
         
+        return try separateWithBackgroundInternal(audio, conditioning: conditioning, inference: inference)
+    }
+    
+    /// Separate specific sound type and extract background
+    /// - Parameters:
+    ///   - audio: Input audio buffer at 32kHz
+    ///   - type: Embedding type to use for separation
+    /// - Returns: Separated target and background audio
+    public func separateWithBackground(_ audio: AudioBuffer, type: EmbeddingLoader.EmbeddingType) async throws -> SeparatedWithBackground {
+        guard let inference = inference else {
+            throw ClearVoiceError.modelNotLoaded("USS MLX")
+        }
+        
+        guard let cachedConditioning = embeddingCache[type] else {
+            throw ClearVoiceError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
+        }
+        
+        return try separateWithBackgroundInternal(audio, conditioning: cachedConditioning, inference: inference)
+    }
+    
+    /// Internal helper for background extraction
+    private func separateWithBackgroundInternal(
+        _ audio: AudioBuffer,
+        conditioning: MLXArray,
+        inference: USSInference
+    ) throws -> SeparatedWithBackground {
         // Convert to MLXArray
         let inputSamples = MLXArray(audio.samples)
         let inputAudio = inputSamples.reshaped([1, -1])
@@ -165,14 +405,7 @@ public actor USSMLXProvider: AudioProcessor {
         eval(separated)
         
         // Extract output samples
-        let separatedSamples: [Float]
-        if separated.ndim == 3 {
-            separatedSamples = separated[0, 0, 0...].asArray(Float.self)
-        } else if separated.ndim == 2 {
-            separatedSamples = separated[0, 0...].asArray(Float.self)
-        } else {
-            separatedSamples = separated.asArray(Float.self)
-        }
+        let separatedSamples = extractOutputSamples(from: separated)
         
         // Compute background via subtraction: input - separated
         // Handle potential length mismatch (separated may be slightly different due to padding)
