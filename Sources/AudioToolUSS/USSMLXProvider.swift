@@ -428,3 +428,55 @@ public extension USSMLXProvider {
     /// Available sound types for separation
     typealias SoundType = EmbeddingLoader.EmbeddingType
 }
+
+// MARK: - UniversalSoundSeparator Conformance
+
+extension USSMLXProvider: UniversalSoundSeparator {
+    
+    /// Map USSSoundType to EmbeddingLoader.EmbeddingType
+    private func embeddingType(for soundType: USSSoundType) -> EmbeddingLoader.EmbeddingType {
+        switch soundType {
+        case .speech: return .speech
+        case .music: return .music
+        case .animal: return .animal
+        case .nature: return .nature
+        case .noise: return .noise
+        case .things: return .things
+        case .human: return .human
+        }
+    }
+    
+    /// Separate a specific sound type from audio using USSSoundType
+    /// This is the primary API for pipeline integration.
+    public func separateSound(_ audio: AudioBuffer, type: USSSoundType) async throws -> AudioBuffer {
+        let embedding = embeddingType(for: type)
+        return try await process(audio, type: embedding)
+    }
+    
+    /// Separate multiple sound types with progress reporting
+    /// Reports progress per-embedding (e.g., 3 types = 33%, 66%, 100%)
+    public func separateMultipleSounds(
+        _ audio: AudioBuffer,
+        types: [USSSoundType],
+        onProgress: ProgressCallback?
+    ) async throws -> [USSSoundType: AudioBuffer] {
+        var results: [USSSoundType: AudioBuffer] = [:]
+        for (idx, type) in types.enumerated() {
+            let embedding = embeddingType(for: type)
+            results[type] = try await process(audio, type: embedding)
+            let percent = Double(idx + 1) / Double(types.count) * 100.0
+            await onProgress?(percent)
+        }
+        return results
+    }
+    
+    /// Separate sound type and return background residual using USSSoundType
+    public func separateSoundWithBackground(
+        _ audio: AudioBuffer,
+        type: USSSoundType
+    ) async throws -> (separated: AudioBuffer, background: AudioBuffer) {
+        let embedding = embeddingType(for: type)
+        let result = try await separateWithBackground(audio, type: embedding)
+        return (separated: result.separated, background: result.background)
+    }
+}

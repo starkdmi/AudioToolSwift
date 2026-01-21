@@ -18,6 +18,7 @@ public struct PipelineStage: Sendable {
         case analyze
         case enhance(EnhancementModel)
         case separate(speakers: Int, useOriginal: Bool)
+        case separateUSS(types: [USSSoundType])
         case upscale
         case transcribe(TranscriptionModel)
         case classify
@@ -91,6 +92,36 @@ public struct PipelineBuilder: Sendable {
             name: "separation"
         ))
         return builder
+    }
+    
+    /// Add Universal Sound Separation (USS)
+    ///
+    /// Separates specific sound types from audio using USS (ResUNet30 + FiLM conditioning).
+    /// Progress is reported per-embedding when multiple types are requested.
+    ///
+    /// Example:
+    /// ```swift
+    /// pipeline
+    ///     .separateUSS([.music, .animal, .nature])  // Extract music, animals, nature
+    /// ```
+    ///
+    /// - Parameter types: Sound types to extract (e.g., `.music`, `.animal`, `.speech`)
+    /// - Returns: Updated pipeline builder
+    public func separateUSS(_ types: [USSSoundType]) -> PipelineBuilder {
+        var builder = self
+        builder.stages.append(PipelineStage(
+            type: .separateUSS(types: types),
+            name: "uss"
+        ))
+        return builder
+    }
+    
+    /// Add Universal Sound Separation for a single type
+    ///
+    /// - Parameter type: Sound type to extract
+    /// - Returns: Updated pipeline builder
+    public func separateUSS(_ type: USSSoundType) -> PipelineBuilder {
+        separateUSS([type])
     }
     
     /// Add upscaling

@@ -613,6 +613,29 @@ public enum AudioFormat: Sendable, Hashable {
     case flac
 }
 
+// MARK: - USS Sound Types
+
+/// Universal Sound Separation target types
+///
+/// Mirrors `EmbeddingLoader.EmbeddingType` from USSMLXSwift.
+/// Each type represents a different sound class that USS can isolate.
+public enum USSSoundType: String, Sendable, Hashable, CaseIterable {
+    /// Human speech
+    case speech = "speech"
+    /// Musical instruments and vocals
+    case music = "music"
+    /// Animal sounds (dogs, birds, etc.)
+    case animal = "animal"
+    /// Nature sounds (rain, wind, water)
+    case nature = "nature"
+    /// Urban/industrial noise
+    case noise = "noise"
+    /// Things/objects (impacts, mechanical)
+    case things = "things"
+    /// Human non-speech sounds (coughs, laughs)
+    case human = "human"
+}
+
 // MARK: - Audio Source
 
 /// Input audio source

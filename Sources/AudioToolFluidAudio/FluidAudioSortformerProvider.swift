@@ -47,7 +47,13 @@ import ClearVoiceCore
 /// Use `FluidAudioDiarizationProvider` (Pyannote) for:
 /// - Scenarios with >4 speakers
 /// - Non-English audio
-public actor FluidAudioSortformerProvider: DiarizationProvider {
+public actor FluidAudioSortformerProvider: DiarizationProvider, ChunkedProgressProvider {
+    
+    // MARK: - ChunkedProgressProvider Conformance
+    
+    /// Sortformer uses batch processing for production quality, so chunked progress is not available.
+    /// Progress reporting is limited to 0% and 100%.
+    public nonisolated var supportsChunkedProgress: Bool { false }
     
     // MARK: - AudioProcessor Conformance
     
@@ -168,6 +174,30 @@ public actor FluidAudioSortformerProvider: DiarizationProvider {
     public func diarize(_ audio: AudioBuffer, vadHint: [VADSegment]) async throws -> SpeakerTimeline {
         // Sortformer handles speaker activity internally
         return try await diarize(audio)
+    }
+    
+    /// Diarize with progress reporting
+    /// 
+    /// - Note: Uses batch processing (`processComplete`) for production quality.
+    ///   Progress reporting is limited to 0% and 100% to preserve quality.
+    ///   Streaming mode (`processSamples`) produces slightly different results
+    ///   due to limited lookahead context at chunk boundaries.
+    ///
+    /// - Parameters:
+    ///   - audio: Input audio buffer (16kHz mono expected)
+    ///   - onProgress: Callback with progress percentage (0.0 to 100.0)
+    /// - Returns: Speaker timeline with labeled segments
+    public func diarize(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> SpeakerTimeline {
+        // Report initial progress
+        await onProgress?(0.0)
+        
+        // Use batch processing for production quality (identical to diarize(_:))
+        let result = try await diarize(audio)
+        
+        // Report completion
+        await onProgress?(100.0)
+        
+        return result
     }
     
     // MARK: - Internal Processing

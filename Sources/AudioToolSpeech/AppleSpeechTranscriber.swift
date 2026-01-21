@@ -272,6 +272,101 @@ public actor AppleSpeechTranscriber: Transcriber {
     public func process(_ input: ClearVoiceCore.AudioBuffer) async throws -> ClearVoiceCore.AudioBuffer {
         return input
     }
+    
+    // MARK: - Progress-Aware Transcription
+    
+    /// Transcribe with progress reporting
+    /// Reports progress as segments are recognized (real-time from SpeechAnalyzer)
+    public func transcribe(
+        _ audio: ClearVoiceCore.AudioBuffer,
+        onProgress: ProgressCallback?
+    ) async throws -> Transcription {
+        guard isModelAvailable else {
+            throw ClearVoiceError.modelNotLoaded("Apple Speech - call load() first")
+        }
+        
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        
+        defer {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+        
+        let audioFile = try audio.writeToTemporaryFile(at: tempURL)
+        let audioDuration = audio.duration
+        
+        let transcriber = SpeechTranscriber(
+            locale: locale,
+            transcriptionOptions: [],
+            reportingOptions: [],
+            attributeOptions: []
+        )
+        
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        
+        actor ProgressAwareCollector {
+            var fullText = ""
+            var segments: [TranscriptionSegment] = []
+            var currentTime: Double = 0
+            let totalDuration: Double
+            let onProgress: ProgressCallback?
+            
+            init(totalDuration: Double, onProgress: ProgressCallback?) {
+                self.totalDuration = totalDuration
+                self.onProgress = onProgress
+            }
+            
+            func appendResult(_ result: SpeechTranscriber.Result) async {
+                if result.isFinal {
+                    let text = String(result.text.characters)
+                    fullText += text
+                    
+                    let duration = Double(text.count) * 0.1
+                    let segment = TranscriptionSegment(
+                        text: text,
+                        timeRange: TimeRange(start: currentTime, end: currentTime + duration),
+                        speakerID: nil,
+                        confidence: 1.0
+                    )
+                    segments.append(segment)
+                    currentTime += duration
+                    
+                    // Report progress based on estimated time processed
+                    let progress = min(currentTime / max(totalDuration, 1.0), 0.95) * 100
+                    await onProgress?(progress)
+                }
+            }
+            
+            func getFullText() -> String { fullText }
+            func getSegments() -> [TranscriptionSegment] { segments }
+        }
+        
+        let collector = ProgressAwareCollector(totalDuration: audioDuration, onProgress: onProgress)
+        
+        await onProgress?(5.0)  // Starting
+        
+        async let resultsTask: Void = Task {
+            for try await result in transcriber.results {
+                await collector.appendResult(result)
+            }
+        }.value
+        
+        try await Task.sleep(for: .milliseconds(100))
+        
+        try await analyzer.analyzeSequence(from: audioFile)
+        try await analyzer.finalizeAndFinishThroughEndOfInput()
+        
+        try await resultsTask
+        
+        await onProgress?(100.0)  // Complete
+        
+        return Transcription(
+            text: await collector.getFullText().trimmingCharacters(in: .whitespacesAndNewlines),
+            segments: await collector.getSegments(),
+            language: locale.language.languageCode?.identifier
+        )
+    }
 }
 
 // MARK: - AudioBuffer Extension

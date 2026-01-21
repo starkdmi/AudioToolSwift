@@ -41,6 +41,19 @@ public protocol StreamableProcessor: AudioProcessor {
     func reset() async
 }
 
+// MARK: - Progress Reporting
+
+/// Progress callback type for long-running operations
+/// - Parameter percent: Progress percentage (0.0 to 100.0)
+public typealias ProgressCallback = @Sendable (Double) async -> Void
+
+/// Protocol for providers that support chunked progress reporting during batch processing.
+/// Renamed from ProgressReporting to avoid conflict with Foundation's NSProgressReporting.
+public protocol ChunkedProgressProvider: Sendable {
+    /// Whether this provider supports progress callbacks during processing
+    var supportsChunkedProgress: Bool { get }
+}
+
 // MARK: - Output Streaming
 
 /// Protocol for processors that can stream output chunks during processing.
@@ -62,8 +75,26 @@ public protocol VADProvider: StreamableProcessor {
     /// Detect speech segments in audio
     func detect(_ audio: AudioBuffer) async throws -> [VADSegment]
     
+    /// Detect speech segments with progress reporting
+    /// - Parameters:
+    ///   - audio: Input audio buffer
+    ///   - onProgress: Callback with progress percentage (0.0 to 100.0)
+    /// - Returns: Array of VAD segments
+    func detect(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> [VADSegment]
+    
     /// Stream VAD segments as detected
     func streamDetection(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<VADSegment, Error>
+}
+
+/// Default implementation for progress-aware detection
+public extension VADProvider {
+    /// Default implementation calls detect without progress
+    func detect(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> [VADSegment] {
+        await onProgress?(0.0)
+        let result = try await detect(audio)
+        await onProgress?(100.0)
+        return result
+    }
 }
 
 /// Speaker Diarization
@@ -73,6 +104,24 @@ public protocol DiarizationProvider: AudioProcessor {
     
     /// Diarize with VAD hint for efficiency
     func diarize(_ audio: AudioBuffer, vadHint: [VADSegment]) async throws -> SpeakerTimeline
+    
+    /// Diarize with progress reporting
+    /// - Parameters:
+    ///   - audio: Input audio buffer
+    ///   - onProgress: Callback with progress percentage (0.0 to 100.0)
+    /// - Returns: Speaker timeline
+    func diarize(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> SpeakerTimeline
+}
+
+/// Default implementation for progress-aware diarization
+public extension DiarizationProvider {
+    /// Default implementation calls diarize without progress
+    func diarize(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> SpeakerTimeline {
+        await onProgress?(0.0)
+        let result = try await diarize(audio)
+        await onProgress?(100.0)
+        return result
+    }
 }
 
 /// Speech Enhancement (denoising, cleanup)
@@ -103,8 +152,23 @@ public protocol Transcriber: AudioProcessor {
     /// Transcribe audio to text
     func transcribe(_ audio: AudioBuffer) async throws -> Transcription
     
+    /// Transcribe audio with progress callback
+    /// Reports progress as segments are recognized
+    func transcribe(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> Transcription
+    
     /// Stream transcription segments as recognized
     func streamTranscription(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error>
+}
+
+/// Default implementation for transcribe with progress
+public extension Transcriber {
+    func transcribe(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> Transcription {
+        // Default: report 0% at start, transcribe, then report 100% at end
+        await onProgress?(0.0)
+        let result = try await transcribe(audio)
+        await onProgress?(100.0)
+        return result
+    }
 }
 
 /// Text-to-Speech
@@ -126,6 +190,58 @@ public protocol SpeechSynthesizer: Sendable {
 public protocol SoundClassifier: AudioProcessor {
     /// Classify sounds in audio
     func classify(_ audio: AudioBuffer) async throws -> [SoundClassification]
+}
+
+/// Universal Sound Separation (USS)
+///
+/// Separates specific sound types from mixed audio using FiLM conditioning.
+/// Supports efficient embedding switching for multi-type separation.
+public protocol UniversalSoundSeparator: AudioProcessor {
+    /// Separate a specific sound type from audio
+    /// - Parameters:
+    ///   - audio: Input audio buffer (32kHz expected)
+    ///   - type: Target sound type to extract
+    /// - Returns: Separated audio containing only the target sound type
+    func separateSound(_ audio: AudioBuffer, type: USSSoundType) async throws -> AudioBuffer
+    
+    /// Separate multiple sound types from audio
+    /// - Parameters:
+    ///   - audio: Input audio buffer (32kHz expected)
+    ///   - types: Array of target sound types to extract
+    ///   - onProgress: Optional callback with progress (0.0 to 100.0) per embedding
+    /// - Returns: Dictionary mapping sound type to separated audio
+    func separateMultipleSounds(
+        _ audio: AudioBuffer,
+        types: [USSSoundType],
+        onProgress: ProgressCallback?
+    ) async throws -> [USSSoundType: AudioBuffer]
+    
+    /// Separate sound type and also return background (residual)
+    /// - Parameters:
+    ///   - audio: Input audio buffer
+    ///   - type: Target sound type to extract
+    /// - Returns: Tuple of (separated target, background residual)
+    func separateSoundWithBackground(
+        _ audio: AudioBuffer,
+        type: USSSoundType
+    ) async throws -> (separated: AudioBuffer, background: AudioBuffer)
+}
+
+/// Default implementation for separateMultipleSounds with progress
+public extension UniversalSoundSeparator {
+    func separateMultipleSounds(
+        _ audio: AudioBuffer,
+        types: [USSSoundType],
+        onProgress: ProgressCallback?
+    ) async throws -> [USSSoundType: AudioBuffer] {
+        var results: [USSSoundType: AudioBuffer] = [:]
+        for (idx, type) in types.enumerated() {
+            results[type] = try await separateSound(audio, type: type)
+            let percent = Double(idx + 1) / Double(types.count) * 100.0
+            await onProgress?(percent)
+        }
+        return results
+    }
 }
 
 // MARK: - Text Translation

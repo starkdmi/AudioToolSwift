@@ -288,9 +288,9 @@ print(provider.configuration.chunkLen)  // 6 frames
 
 ---
 
-## Phase 3: StreamingPipelineTests.swift
+## Phase 3: StreamingPipelineTests.swift [COMPLETED]
 
-**New File:** `Tests/ClearVoiceFluidAudioTests/StreamingPipelineTests.swift`
+**File:** `Tests/ClearVoiceFluidAudioTests/StreamingPipelineTests.swift`
 
 ### Test Suite Structure
 
@@ -424,11 +424,11 @@ final class StreamingPipelineTests: XCTestCase {
 
 ---
 
-## Phase 4: Progress Reporting in Pipeline Execution
+## Phase 4: Progress Reporting in Pipeline Execution [COMPLETED]
 
 ### 4.1 Current State
 
-`PipelineEvent.progress(stage:, percent:)` is defined in `PipelineEvent.swift` but **never emitted** during pipeline execution.
+`PipelineEvent.progress(stage:, percent:)` is now emitted during pipeline execution for all stages.
 
 ### 4.2 Scope of Progress Reporting
 
@@ -642,9 +642,9 @@ Merge non-speech + SE background by timestamp into continuous track, then chunk 
 | `USSPrewarmBenchmarkTests.swift` | Create | **DONE** | Benchmark tests |
 | `FluidAudioProviders.swift` | Modify | **DONE** | Added `sortformerLowLatency()`, `sortformerHighLatency()`, `sortformerNVIDIALowLatency()` |
 | `FluidAudioSortformerProvider.swift` | Modify | **DONE** | Added `configuration`, `estimatedLatency`, `validateConfigCompatibility()` |
-| `StreamingPipelineTests.swift` | **Create** | Pending | New comprehensive pipeline test file |
-| `ClearVoice.swift` | Modify | Pending | Wire progress events for all pipeline stages |
-| `AudioBuffer+Resampling.swift` | Consider | Pending | Add resampling extension if not already available |
+| `StreamingPipelineTests.swift` | **Create** | **DONE** | Comprehensive pipeline test file |
+| `ClearVoice.swift` | Modify | **DONE** | Wire progress events for all pipeline stages |
+| `AudioBuffer+Resampling.swift` | Consider | N/A | Resampling implemented inline in tests |
 
 ### Test File Internal Structure
 

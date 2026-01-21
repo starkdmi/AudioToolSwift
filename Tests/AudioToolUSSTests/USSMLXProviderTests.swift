@@ -10,6 +10,7 @@ import ClearVoiceUSS
 import ClearVoiceCore
 import AudioUtils
 import MLX
+@preconcurrency import USSMLXSwift
 
 final class USSMLXProviderTests: XCTestCase {
     
@@ -72,7 +73,7 @@ final class USSMLXProviderTests: XCTestCase {
         print("\n=== USS Embedding Types Test ===")
         
         // Just verify all embedding types can be loaded
-        for type in [USSSoundType.speech, .music, .noise, .nature, .human, .animal, .things] {
+        for type in [EmbeddingLoader.EmbeddingType.speech, .music, .noise, .nature, .human, .animal, .things] {
             _ = USSProviders.speechSeparation(embeddingType: type)
             // Loading would fail if embeddings are missing
             print("✓ Embedding type '\(type.rawValue)' available")

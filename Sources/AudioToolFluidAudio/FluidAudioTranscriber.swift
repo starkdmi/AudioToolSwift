@@ -129,4 +129,37 @@ public actor FluidAudioTranscriber: Transcriber {
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
         return input
     }
+    
+    // MARK: - Progress-Aware Transcription
+    
+    /// Transcribe with progress reporting
+    /// Since FluidAudio ASR is batch-oriented, this reports:
+    /// - 0% at start, 50% when processing starts, 100% when complete
+    /// For real per-segment progress, use streaming API or pre-segmented audio
+    public func transcribe(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> Transcription {
+        guard let manager = asrManager else {
+            throw ClearVoiceError.modelNotLoaded("FluidAudio ASR")
+        }
+        
+        // Report initial progress
+        await onProgress?(0.0)
+        
+        // Start transcription - this is batch, so we can't get intermediate progress
+        let result = try await manager.transcribe(audio.samples)
+        
+        // Report near-complete
+        await onProgress?(90.0)
+        
+        // Build transcription result
+        let transcription = Transcription(
+            text: result.text,
+            segments: [],  // Basic implementation - segments require additional API
+            language: nil  // Language detection not exposed in basic API
+        )
+        
+        // Report complete
+        await onProgress?(100.0)
+        
+        return transcription
+    }
 }

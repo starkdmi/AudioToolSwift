@@ -32,6 +32,7 @@ public actor ClearVoice {
     internal var transcriberProviders: [TranscriptionModel: any Transcriber] = [:]
     internal var upscalerProvider: (any AudioUpscaler)?
     internal var classifierProvider: (any SoundClassifier)?
+    internal var ussProvider: (any UniversalSoundSeparator)?
     internal var synthesizerProviders: [String: any SpeechSynthesizer] = [:]
     internal var translatorProviders: [TranslationModel: any TextTranslator] = [:]
     internal var textPreprocessorProviders: [String: any TextPreprocessor] = [:]
@@ -109,6 +110,11 @@ public actor ClearVoice {
     /// Register a transcriber provider
     public func register(transcriber: any Transcriber, for model: TranscriptionModel) {
         self.transcriberProviders[model] = transcriber
+    }
+    
+    /// Register a USS (Universal Sound Separation) provider
+    public func register(uss: any UniversalSoundSeparator) {
+        self.ussProvider = uss
     }
     
     /// Register a text preprocessor provider (e.g., RUAccent for Russian stress marking)
@@ -382,6 +388,26 @@ public actor ClearVoice {
         return try await transcriber.transcribe(input)
     }
     
+    /// Transcribe audio with progress reporting
+    /// - Parameters:
+    ///   - audio: Audio buffer to transcribe
+    ///   - model: Transcription model to use
+    ///   - onProgress: Progress callback (0.0 to 100.0) as segments are recognized
+    /// - Returns: Complete transcription result
+    public func transcribe(
+        _ audio: ClearVoiceCore.AudioBuffer,
+        model: TranscriptionModel = .parakeet,
+        onProgress: ProgressCallback?
+    ) async throws -> Transcription {
+        guard let transcriber = transcriberProviders[model] else {
+            throw ClearVoiceError.modelNotLoaded(model.modelName)
+        }
+        
+        // Resample to model's expected sample rate if needed
+        let input = try audio.resampled(to: model.sampleRate)
+        return try await transcriber.transcribe(input, onProgress: onProgress)
+    }
+    
     // MARK: - Classification
     
     /// Classify sounds
@@ -527,10 +553,30 @@ public actor ClearVoice {
             try Task.checkCancellation()
             
             let stageStart = ContinuousClock.now
+            let stageName = stage.name
             
             switch stage.type {
             case .detect(let model):
-                let segments = try await detect(context.currentAudio, model: model)
+                await eventHandler?(.progress(stage: stageName, percent: 0))
+                
+                // Use progress-aware detection if available
+                let progressCallback: ProgressCallback? = if let handler = eventHandler {
+                    { @Sendable percent in
+                        await handler(.progress(stage: stageName, percent: percent))
+                    }
+                } else {
+                    nil
+                }
+                
+                let segments: [VADSegment]
+                if let vad = vadProvider {
+                    // Resample to model's expected sample rate if needed
+                    let input = try context.currentAudio.resampled(to: model.sampleRate)
+                    segments = try await vad.detect(input, onProgress: progressCallback)
+                } else {
+                    throw ClearVoiceError.modelNotLoaded("VAD")
+                }
+                
                 let timeline = SpeakerTimeline(segments: [])
                 context = PipelineContext(
                     analysis: AnalysisResult(segments: segments, speakers: timeline),
@@ -545,9 +591,29 @@ public actor ClearVoice {
                     analysis: context.analysis,
                     metrics: result.metrics
                 )
+                await eventHandler?(.progress(stage: stageName, percent: 100))
                 
             case .diarize:
-                let timeline = try await diarize(context.currentAudio)
+                await eventHandler?(.progress(stage: stageName, percent: 0))
+                
+                // Use progress-aware diarization if available
+                let progressCallback: ProgressCallback? = if let handler = eventHandler {
+                    { @Sendable percent in
+                        await handler(.progress(stage: stageName, percent: percent))
+                    }
+                } else {
+                    nil
+                }
+                
+                let timeline: SpeakerTimeline
+                if let diarizer = diarizationProvider {
+                    // Diarization typically expects 16kHz
+                    let input = try context.currentAudio.resampled(to: 16000)
+                    timeline = try await diarizer.diarize(input, onProgress: progressCallback)
+                } else {
+                    throw ClearVoiceError.modelNotLoaded("Diarization")
+                }
+                
                 let segments = context.analysis?.segments ?? []
                 context = PipelineContext(
                     analysis: AnalysisResult(segments: segments, speakers: timeline),
@@ -557,13 +623,16 @@ public actor ClearVoice {
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     classifications: result.classifications,
                     analysis: context.analysis,
                     metrics: result.metrics
                 )
+                await eventHandler?(.progress(stage: stageName, percent: 100))
                 
             case .analyze:
+                await eventHandler?(.progress(stage: stageName, percent: 0))
                 let analysis = try await analyze(context.currentAudio)
                 context = PipelineContext(
                     analysis: analysis,
@@ -573,20 +642,82 @@ public actor ClearVoice {
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     classifications: result.classifications,
                     analysis: analysis,
                     metrics: result.metrics
                 )
                 await eventHandler?(.analysisComplete(analysis))
+                await eventHandler?(.progress(stage: stageName, percent: 100))
                 
             case .enhance(let model):
-                let enhanced: ClearVoiceCore.AudioBuffer
-                if let segments = context.analysis?.speechSegments, !segments.isEmpty {
-                    enhanced = try await enhance(context.currentAudio, segments: segments, model: model)
-                } else {
-                    enhanced = try await enhance(context.currentAudio, model: model)
+                await eventHandler?(.progress(stage: stageName, percent: 0))
+                guard let enhancer = enhancerProviders[model] else {
+                    throw ClearVoiceError.modelNotLoaded(model.modelName)
                 }
+                let speechSegments = context.analysis?.speechSegments ?? []
+                let enhanced: ClearVoiceCore.AudioBuffer
+                if let eventHandler, let streamable = enhancer as? StreamableOutput {
+                    let resampledAudio = try context.currentAudio.resampled(to: model.sampleRate)
+                    if !speechSegments.isEmpty {
+                        let totalSpeechSamples = speechSegments.reduce(0) { partial, segment in
+                            partial + Int(segment.timeRange.duration * Double(model.sampleRate))
+                        }
+                        var processedSamples = 0
+                        var resultBuffer = resampledAudio
+                        for segment in speechSegments {
+                            let chunk = resampledAudio.slice(segment.timeRange.start..<segment.timeRange.end)
+                            var segmentSamples: [Float] = []
+                            segmentSamples.reserveCapacity(chunk.samples.count)
+                            for try await processedChunk in streamable.processStream(chunk) {
+                                segmentSamples.append(contentsOf: processedChunk.samples)
+                                processedSamples += processedChunk.samples.count
+                                let percent = min(100.0, Double(processedSamples) / Double(max(totalSpeechSamples, 1)) * 100)
+                                await eventHandler(.progress(stage: stageName, percent: percent))
+                            }
+                            let processedSegment = AudioBuffer(
+                                samples: segmentSamples,
+                                sampleRate: resampledAudio.sampleRate,
+                                channels: resampledAudio.channels
+                            )
+                            resultBuffer = resultBuffer.replacing(segment.timeRange.start..<segment.timeRange.end, with: processedSegment)
+                        }
+                        if context.currentAudio.sampleRate != model.sampleRate {
+                            enhanced = try resultBuffer.resampled(to: context.currentAudio.sampleRate)
+                        } else {
+                            enhanced = resultBuffer
+                        }
+                    } else {
+                        let totalSamples = resampledAudio.samples.count
+                        var processedSamples = 0
+                        var streamedSamples: [Float] = []
+                        streamedSamples.reserveCapacity(totalSamples)
+                        for try await processedChunk in streamable.processStream(resampledAudio) {
+                            streamedSamples.append(contentsOf: processedChunk.samples)
+                            processedSamples += processedChunk.samples.count
+                            let percent = min(100.0, Double(processedSamples) / Double(max(totalSamples, 1)) * 100)
+                            await eventHandler(.progress(stage: stageName, percent: percent))
+                        }
+                        let streamed = AudioBuffer(
+                            samples: streamedSamples,
+                            sampleRate: resampledAudio.sampleRate,
+                            channels: resampledAudio.channels
+                        )
+                        if context.currentAudio.sampleRate != model.sampleRate {
+                            enhanced = try streamed.resampled(to: context.currentAudio.sampleRate)
+                        } else {
+                            enhanced = streamed
+                        }
+                    }
+                } else {
+                    if !speechSegments.isEmpty {
+                        enhanced = try await enhance(context.currentAudio, segments: speechSegments, model: model)
+                    } else {
+                        enhanced = try await enhance(context.currentAudio, model: model)
+                    }
+                }
+                await eventHandler?(.progress(stage: stageName, percent: 100))
                 context = PipelineContext(
                     analysis: context.analysis,
                     currentAudio: enhanced,
@@ -595,6 +726,7 @@ public actor ClearVoice {
                 result = PipelineResult(
                     audio: enhanced,
                     separatedTracks: result.separatedTracks,
+                    ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     classifications: result.classifications,
                     analysis: result.analysis,
@@ -602,57 +734,152 @@ public actor ClearVoice {
                 )
                 
             case .separate(let speakers, let useOriginal):
+                await eventHandler?(.progress(stage: stageName, percent: 0))
                 let inputAudio = useOriginal ? context.originalAudio : context.currentAudio
                 let tracks = try await separate(inputAudio, speakers: speakers)
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: tracks,
+                    ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     classifications: result.classifications,
                     analysis: result.analysis,
                     metrics: result.metrics
                 )
+                await eventHandler?(.progress(stage: stageName, percent: 100))
+                
+            case .separateUSS(let types):
+                await eventHandler?(.progress(stage: stageName, percent: 0))
+                guard let uss = ussProvider else {
+                    throw ClearVoiceError.modelNotLoaded("USS")
+                }
+                
+                // Resample to USS sample rate (32kHz)
+                let ussInput = try context.currentAudio.resampled(to: 32000)
+                
+                // Use progress-aware multi-type separation
+                let progressCallback: ProgressCallback? = if let handler = eventHandler {
+                    { @Sendable percent in
+                        await handler(.progress(stage: stageName, percent: percent))
+                    }
+                } else {
+                    nil
+                }
+                
+                // Process each type and emit per-embedding progress
+                var ussSeparatedResults: [USSSoundType: ClearVoiceCore.AudioBuffer] = [:]
+                for (idx, type) in types.enumerated() {
+                    let separated = try await uss.separateSound(ussInput, type: type)
+                    ussSeparatedResults[type] = separated
+                    
+                    // Emit per-embedding event
+                    await eventHandler?(.ussSeparated(type: type, audio: separated))
+                    
+                    // Emit progress per embedding
+                    let percent = Double(idx + 1) / Double(types.count) * 100.0
+                    await progressCallback?(percent)
+                }
+                
+                result = PipelineResult(
+                    audio: result.audio,
+                    separatedTracks: result.separatedTracks,
+                    ussSeparated: ussSeparatedResults,
+                    transcription: result.transcription,
+                    classifications: result.classifications,
+                    analysis: result.analysis,
+                    metrics: result.metrics
+                )
+                // Note: 100% progress already emitted in the loop above
                 
             case .upscale:
-                let upscaled = try await upscale(context.currentAudio)
+                await eventHandler?(.progress(stage: stageName, percent: 0))
+                guard let upscaler = upscalerProvider else {
+                    throw ClearVoiceError.modelNotLoaded("Upscaler")
+                }
+                
+                let upscaled: ClearVoiceCore.AudioBuffer
+                
+                // Use streaming for progress reporting if supported
+                if let eventHandler, let streamable = upscaler as? StreamableOutput {
+                    let inputAudio = context.currentAudio
+                    let totalSamples = inputAudio.samples.count
+                    var processedSamples = 0
+                    var streamedSamples: [Float] = []
+                    streamedSamples.reserveCapacity(totalSamples * 3) // Upscaling typically 3x samples
+                    
+                    for try await processedChunk in streamable.processStream(inputAudio) {
+                        streamedSamples.append(contentsOf: processedChunk.samples)
+                        processedSamples += processedChunk.samples.count
+                        // Estimate progress based on input samples (3x output expected)
+                        let estimatedTotalOutput = totalSamples * 3
+                        let percent = min(100.0, Double(processedSamples) / Double(max(estimatedTotalOutput, 1)) * 100)
+                        await eventHandler(.progress(stage: stageName, percent: percent))
+                    }
+                    
+                    upscaled = AudioBuffer(
+                        samples: streamedSamples,
+                        sampleRate: upscaler.outputSampleRate,
+                        channels: inputAudio.channels
+                    )
+                } else {
+                    // Fallback to batch processing
+                    upscaled = try await upscale(context.currentAudio)
+                }
+                
                 context = PipelineContext(
                     analysis: context.analysis,
                     currentAudio: upscaled,
                     originalAudio: context.originalAudio
                 )
                 result = PipelineResult(
-                    audio: upscaled,
+                    audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     classifications: result.classifications,
-                    analysis: result.analysis,
+                    analysis: context.analysis,
                     metrics: result.metrics
                 )
+                await eventHandler?(.progress(stage: stageName, percent: 100))
                 
             case .transcribe(let model):
-                let transcription = try await transcribe(context.currentAudio, model: model)
+                await eventHandler?(.progress(stage: stageName, percent: 0))
+                
+                // Use progress-aware transcription
+                // For batch transcribers this reports 100% at end; streaming transcribers can report per-segment
+                let transcription = try await transcribe(context.currentAudio, model: model) { percent in
+                    await eventHandler?(.progress(stage: stageName, percent: percent))
+                }
+                
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    ussSeparated: result.ussSeparated,
                     transcription: transcription,
                     classifications: result.classifications,
                     analysis: result.analysis,
                     metrics: result.metrics
                 )
+                
+                // Emit per-segment events for consumers
                 for segment in transcription.segments {
                     await eventHandler?(.transcriptionSegment(segment))
                 }
+                await eventHandler?(.progress(stage: stageName, percent: 100))
                 
             case .classify:
+                await eventHandler?(.progress(stage: stageName, percent: 0))
                 let classifications = try await classify(context.currentAudio)
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     classifications: classifications,
                     analysis: result.analysis,
                     metrics: result.metrics
                 )
+                await eventHandler?(.progress(stage: stageName, percent: 100))
                 
             case .conditional(let condition, let thenStages, let elseStages):
                 let stagesToRun = condition(context) ? thenStages : elseStages
@@ -688,6 +915,7 @@ public actor ClearVoice {
                             result = PipelineResult(
                                 audio: result.audio,
                                 separatedTracks: result.separatedTracks,
+                                ussSeparated: result.ussSeparated ?? branchResult.ussSeparated,
                                 transcription: transcription,
                                 classifications: result.classifications ?? branchResult.classifications,
                                 analysis: result.analysis,
@@ -698,6 +926,7 @@ public actor ClearVoice {
                             result = PipelineResult(
                                 audio: result.audio,
                                 separatedTracks: result.separatedTracks,
+                                ussSeparated: result.ussSeparated ?? branchResult.ussSeparated,
                                 transcription: result.transcription,
                                 classifications: classifications,
                                 analysis: result.analysis,
@@ -721,6 +950,7 @@ public actor ClearVoice {
                     result = PipelineResult(
                         audio: result.audio,
                         separatedTracks: processedTracks,
+                        ussSeparated: result.ussSeparated,
                         transcription: result.transcription,
                         classifications: result.classifications,
                         analysis: result.analysis,
@@ -740,6 +970,7 @@ public actor ClearVoice {
         return PipelineResult(
             audio: result.audio,
             separatedTracks: result.separatedTracks,
+            ussSeparated: result.ussSeparated,
             transcription: result.transcription,
             classifications: result.classifications,
             analysis: result.analysis,

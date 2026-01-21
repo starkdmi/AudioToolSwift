@@ -14,6 +14,7 @@ import ClearVoiceUSS
 import ClearVoiceCore
 import AudioUtils
 import MLX
+@preconcurrency import USSMLXSwift
 
 final class USSEmbeddingSwapTests: XCTestCase {
     
@@ -130,7 +131,7 @@ final class USSEmbeddingSwapTests: XCTestCase {
         print("Input: \(audio.samples.count) samples (\(String(format: "%.1f", Double(audio.samples.count) / 32000))s)")
         
         // Process multiple types in one call
-        let types: [USSSoundType] = [.music, .animal, .noise]
+        let types: [EmbeddingLoader.EmbeddingType] = [.music, .animal, .noise]
         
         let start = Date()
         let results = try await uss.processMultiple(audio, types: types)
@@ -312,7 +313,7 @@ final class USSEmbeddingSwapTests: XCTestCase {
         
         let chunk = try loadTestChunk(seconds: 1.0)
         
-        let allTypes: [USSSoundType] = [.speech, .music, .noise, .nature, .human, .animal, .things]
+        let allTypes: [EmbeddingLoader.EmbeddingType] = [.speech, .music, .noise, .nature, .human, .animal, .things]
         
         for type in allTypes {
             let output = try await uss.process(chunk, type: type)

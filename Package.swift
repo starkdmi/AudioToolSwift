@@ -254,9 +254,11 @@ let package = Package(
         .testTarget(
             name: "ClearVoiceFluidAudioTests",
             dependencies: [
+                "ClearVoice",
                 "ClearVoiceFluidAudio",
                 "ClearVoiceMLX",
                 "ClearVoiceCore",
+                "ClearVoiceUSS",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Tests/ClearVoiceFluidAudioTests",

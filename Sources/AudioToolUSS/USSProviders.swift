@@ -156,7 +156,5 @@ public struct USSProviders {
     }
 }
 
-// MARK: - ClearVoiceUSS Module Exports
-
-/// Re-export embedding types for convenience
-public typealias USSSoundType = EmbeddingLoader.EmbeddingType
+// NOTE: USSSoundType is defined in ClearVoiceCore.Configuration
+// Use ClearVoiceCore.USSSoundType in protocol methods for pipeline integration

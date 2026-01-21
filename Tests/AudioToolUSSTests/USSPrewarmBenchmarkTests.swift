@@ -78,7 +78,7 @@ final class USSPrewarmBenchmarkTests: XCTestCase {
         let processStart = Date()
         for (idx, chunk) in chunks.enumerated() {
             // Alternate between music and animal
-            let type: USSSoundType = (idx % 2 == 0) ? .music : .animal
+            let type: EmbeddingLoader.EmbeddingType = (idx % 2 == 0) ? .music : .animal
             
             let chunkStart = Date()
             _ = try await uss.process(chunk, type: type)
@@ -163,7 +163,7 @@ final class USSPrewarmBenchmarkTests: XCTestCase {
         let processStart = Date()
         for (idx, chunk) in chunks.enumerated() {
             // Alternate between music and animal
-            let type: USSSoundType = (idx % 2 == 0) ? .music : .animal
+            let type: EmbeddingLoader.EmbeddingType = (idx % 2 == 0) ? .music : .animal
             
             let chunkStart = Date()
             _ = try await uss.process(chunk, type: type)
@@ -318,7 +318,7 @@ final class USSPrewarmBenchmarkTests: XCTestCase {
         try await uss.load()
         
         // Test all 7 embedding types - measure first call for each
-        let allTypes: [USSSoundType] = [.speech, .music, .noise, .nature, .human, .animal, .things]
+        let allTypes: [EmbeddingLoader.EmbeddingType] = [.speech, .music, .noise, .nature, .human, .animal, .things]
         
         print("\nFirst call timing for each embedding type:")
         for type in allTypes {

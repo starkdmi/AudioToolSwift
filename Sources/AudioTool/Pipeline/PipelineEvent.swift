@@ -24,6 +24,9 @@ public enum PipelineEvent: Sendable {
     /// Speaker separated
     case speakerSeparated(speakerIndex: Int, audio: AudioBuffer)
     
+    /// USS sound type separated
+    case ussSeparated(type: USSSoundType, audio: AudioBuffer)
+    
     /// Transcription segment recognized
     case transcriptionSegment(TranscriptionSegment)
     
@@ -70,6 +73,9 @@ public struct PipelineResult: Sendable {
     /// Separated speaker tracks (if separation was used)
     public let separatedTracks: [AudioBuffer]?
     
+    /// USS separated sound types (if separateUSS was used)
+    public let ussSeparated: [USSSoundType: AudioBuffer]?
+    
     /// Transcription result (if transcription was used)
     public let transcription: Transcription?
     
@@ -85,6 +91,7 @@ public struct PipelineResult: Sendable {
     public init(
         audio: AudioBuffer? = nil,
         separatedTracks: [AudioBuffer]? = nil,
+        ussSeparated: [USSSoundType: AudioBuffer]? = nil,
         transcription: Transcription? = nil,
         classifications: [SoundClassification]? = nil,
         analysis: AnalysisResult? = nil,
@@ -92,6 +99,7 @@ public struct PipelineResult: Sendable {
     ) {
         self.audio = audio
         self.separatedTracks = separatedTracks
+        self.ussSeparated = ussSeparated
         self.transcription = transcription
         self.classifications = classifications
         self.analysis = analysis
