@@ -529,44 +529,64 @@ public actor ClearVoice {
         
         var results: [SeparatedSpeakerTrack] = []
         
-        for (index, track) in tracks.enumerated() {
-            // Progress: each track gets equal share of 0-100%
-            let progressPerTrack = 100.0 / Double(tracks.count)
-            await onProgress?(Double(index) * progressPerTrack)
-            
-            // Try to identify using diarization
-            // Process through diarizer to get speaker predictions
-            let trackTimeline = try await diarizer.diarize(track)
-            
-            // Find dominant speaker from timeline
-            var speakerDurations: [SpeakerID: Double] = [:]
-            for segment in trackTimeline.segments {
-                speakerDurations[segment.speakerID, default: 0] += segment.timeRange.duration
+        // Check if diarizer supports direct speaker identification (preserves spkcache)
+        if let identifier = diarizer as? SpeakerIdentifier {
+            // Use identifySpeaker() which preserves internal state
+            for (index, track) in tracks.enumerated() {
+                let progressPerTrack = 100.0 / Double(tracks.count)
+                await onProgress?(Double(index) * progressPerTrack)
+                
+                let identification = try await identifier.identifySpeaker(track)
+                let speakerSlot = identification.speakerSlot
+                let mappedSpeaker = slotToSpeaker[speakerSlot]
+                
+                results.append(SeparatedSpeakerTrack(
+                    audio: track,
+                    speakerSlot: speakerSlot,
+                    speakerID: mappedSpeaker,
+                    confidence: identification.confidence,
+                    sourceTimeRange: sourceTimeRange,
+                    trackIndex: index
+                ))
             }
-            
-            let dominantSpeaker = speakerDurations.max(by: { $0.value < $1.value })?.key
-            
-            // Extract slot from speaker ID
-            var speakerSlot: Int? = nil
-            if let speaker = dominantSpeaker,
-               let slotStr = speaker.id.split(separator: "_").last,
-               let slot = Int(slotStr) {
-                speakerSlot = slot
+        } else {
+            // Fallback: Use diarize() (may reset state, less accurate)
+            for (index, track) in tracks.enumerated() {
+                let progressPerTrack = 100.0 / Double(tracks.count)
+                await onProgress?(Double(index) * progressPerTrack)
+                
+                let trackTimeline = try await diarizer.diarize(track)
+                
+                // Find dominant speaker from timeline
+                var speakerDurations: [SpeakerID: Double] = [:]
+                for segment in trackTimeline.segments {
+                    speakerDurations[segment.speakerID, default: 0] += segment.timeRange.duration
+                }
+                
+                let dominantSpeaker = speakerDurations.max(by: { $0.value < $1.value })?.key
+                
+                // Extract slot from speaker ID
+                var speakerSlot: Int? = nil
+                if let speaker = dominantSpeaker,
+                   let slotStr = speaker.id.split(separator: "_").last,
+                   let slot = Int(slotStr) {
+                    speakerSlot = slot
+                }
+                
+                // Calculate confidence based on dominant speaker's share
+                let totalDuration = speakerDurations.values.reduce(0, +)
+                let dominantDuration = speakerDurations[dominantSpeaker ?? SpeakerID("unknown")] ?? 0
+                let confidence = totalDuration > 0 ? Float(dominantDuration / totalDuration) : 0.0
+                
+                results.append(SeparatedSpeakerTrack(
+                    audio: track,
+                    speakerSlot: speakerSlot,
+                    speakerID: dominantSpeaker,
+                    confidence: confidence,
+                    sourceTimeRange: sourceTimeRange,
+                    trackIndex: index
+                ))
             }
-            
-            // Calculate confidence based on dominant speaker's share
-            let totalDuration = speakerDurations.values.reduce(0, +)
-            let dominantDuration = speakerDurations[dominantSpeaker ?? SpeakerID("unknown")] ?? 0
-            let confidence = totalDuration > 0 ? Float(dominantDuration / totalDuration) : 0.0
-            
-            results.append(SeparatedSpeakerTrack(
-                audio: track,
-                speakerSlot: speakerSlot,
-                speakerID: dominantSpeaker,
-                confidence: confidence,
-                sourceTimeRange: sourceTimeRange,
-                trackIndex: index
-            ))
         }
         
         await onProgress?(100.0)
@@ -728,7 +748,7 @@ public actor ClearVoice {
         
         var results: [EmbeddingIdentificationResult] = []
         
-        for (_, trackEmbedding) in trackEmbeddings.enumerated() {
+        for trackEmbedding in trackEmbeddings {
             // Find best matching reference speaker
             var bestMatch: SpeakerID?
             var bestSimilarity: Float = -1.0

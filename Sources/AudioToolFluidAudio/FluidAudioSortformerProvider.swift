@@ -10,66 +10,6 @@ import Foundation
 @preconcurrency import FluidAudio
 import ClearVoiceCore
 
-// MARK: - Speaker Identification Types
-
-/// Result of speaker re-identification using preserved Sortformer state
-///
-/// When running a separated audio track through a Sortformer instance that has
-/// previously processed the original audio, the spkcache contains learned speaker
-/// characteristics. The model can then identify which speaker slot the track belongs to.
-///
-/// Example:
-/// ```swift
-/// // 1. Run initial diarization (populates spkcache)
-/// let timeline = try await sortformer.diarize(mixedAudio)
-///
-/// // 2. Separate overlapping speakers
-/// let tracks = try await separator.separate(overlapRegion, speakers: 2)
-///
-/// // 3. Re-identify each track using same Sortformer instance
-/// let id1 = try await sortformer.identifySpeaker(tracks[0])
-/// // id1.speakerSlot == 0, id1.confidence == 0.92
-/// ```
-public struct SpeakerIdentification: Sendable, Equatable {
-    /// The speaker slot this audio belongs to (0-3 for Sortformer)
-    public let speakerSlot: Int
-    
-    /// Confidence score for the identified slot (probability)
-    public let confidence: Float
-    
-    /// Raw probabilities for all speaker slots [numSpeakers]
-    /// For Sortformer: [4] with probabilities for slots 0-3
-    public let allProbabilities: [Float]
-    
-    /// Average probability across all frames (for short segments)
-    /// This is used when the audio produces multiple frames
-    public let averageProbabilities: [Float]?
-    
-    /// Number of frames analyzed
-    public let frameCount: Int
-    
-    public init(
-        speakerSlot: Int,
-        confidence: Float,
-        allProbabilities: [Float],
-        averageProbabilities: [Float]? = nil,
-        frameCount: Int = 1
-    ) {
-        self.speakerSlot = speakerSlot
-        self.confidence = confidence
-        self.allProbabilities = allProbabilities
-        self.averageProbabilities = averageProbabilities
-        self.frameCount = frameCount
-    }
-    
-    /// Check if identification is confident enough to trust
-    /// - Parameter threshold: Minimum confidence threshold (default 0.5)
-    /// - Returns: True if confidence exceeds threshold
-    public func isConfident(threshold: Float = 0.5) -> Bool {
-        confidence >= threshold
-    }
-}
-
 // MARK: - FluidAudio Sortformer Provider
 
 /// Sortformer speaker diarization provider using FluidAudio's SortformerDiarizer
@@ -107,7 +47,7 @@ public struct SpeakerIdentification: Sendable, Equatable {
 /// Use `FluidAudioDiarizationProvider` (Pyannote) for:
 /// - Scenarios with >4 speakers
 /// - Non-English audio
-public actor FluidAudioSortformerProvider: DiarizationProvider, ChunkedProgressProvider {
+public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifier, ChunkedProgressProvider {
     
     // MARK: - ChunkedProgressProvider Conformance
     
@@ -439,38 +379,43 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, ChunkedProgressP
         let minDuration = 0.5 // Minimum 0.5 seconds for reliable identification
         let minSamples = Int(minDuration * Double(sampleRate))
         
+        // Pad short audio to minimum length
+        let processingSamples: [Float]
         if samples.count < minSamples {
-            // Pad with silence
             var paddedSamples = samples
             paddedSamples.append(contentsOf: [Float](repeating: 0, count: minSamples - samples.count))
+            processingSamples = paddedSamples
+        } else {
+            processingSamples = samples
+        }
+        
+        // Process the audio (padded or original)
+        if let result = try diarizer.processSamples(processingSamples) {
+            let frameCount = result.frameCount
+            var avgProbs = [Float](repeating: 0, count: numSpeakers)
             
-            if let result = try diarizer.processSamples(paddedSamples) {
-                let frameCount = result.frameCount
-                var avgProbs = [Float](repeating: 0, count: numSpeakers)
-                
-                for frame in 0..<frameCount {
-                    for speaker in 0..<numSpeakers {
-                        avgProbs[speaker] += result.getSpeakerPrediction(speaker: speaker, frame: frame)
-                    }
+            for frame in 0..<frameCount {
+                for speaker in 0..<numSpeakers {
+                    avgProbs[speaker] += result.getSpeakerPrediction(speaker: speaker, frame: frame)
                 }
-                
-                if frameCount > 0 {
-                    for i in 0..<numSpeakers {
-                        avgProbs[i] /= Float(frameCount)
-                    }
-                }
-                
-                let maxProb = avgProbs.max() ?? 0
-                let speakerSlot = avgProbs.firstIndex(of: maxProb) ?? 0
-                
-                return SpeakerIdentification(
-                    speakerSlot: speakerSlot,
-                    confidence: maxProb,
-                    allProbabilities: avgProbs,
-                    averageProbabilities: avgProbs,
-                    frameCount: frameCount
-                )
             }
+            
+            if frameCount > 0 {
+                for i in 0..<numSpeakers {
+                    avgProbs[i] /= Float(frameCount)
+                }
+            }
+            
+            let maxProb = avgProbs.max() ?? 0
+            let speakerSlot = avgProbs.firstIndex(of: maxProb) ?? 0
+            
+            return SpeakerIdentification(
+                speakerSlot: speakerSlot,
+                confidence: maxProb,
+                allProbabilities: avgProbs,
+                averageProbabilities: avgProbs,
+                frameCount: frameCount
+            )
         }
         
         // Fallback: Return low-confidence identification

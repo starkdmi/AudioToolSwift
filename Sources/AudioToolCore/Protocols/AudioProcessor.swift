@@ -124,6 +124,40 @@ public extension DiarizationProvider {
     }
 }
 
+/// Speaker Identification (for re-identification after separation)
+///
+/// Providers conforming to this protocol can identify which speaker slot
+/// a separated audio track belongs to, using preserved internal state.
+/// This is used for re-identifying speakers after source separation.
+public protocol SpeakerIdentifier: Sendable {
+    /// Identify which speaker slot an audio segment belongs to
+    ///
+    /// Uses preserved internal state (e.g., spkcache in Sortformer) to determine
+    /// which speaker produced the audio.
+    ///
+    /// - Parameter audio: Audio to identify (will be resampled if needed)
+    /// - Returns: Speaker identification with slot and confidence
+    func identifySpeaker(_ audio: AudioBuffer) async throws -> SpeakerIdentification
+    
+    /// Identify multiple separated tracks
+    ///
+    /// - Parameter tracks: Array of separated audio tracks
+    /// - Returns: Array of (track, identification) pairs sorted by speaker slot
+    func identifySpeakers(_ tracks: [AudioBuffer]) async throws -> [(audio: AudioBuffer, identification: SpeakerIdentification)]
+}
+
+/// Default implementation for batch speaker identification
+public extension SpeakerIdentifier {
+    func identifySpeakers(_ tracks: [AudioBuffer]) async throws -> [(audio: AudioBuffer, identification: SpeakerIdentification)] {
+        var results: [(audio: AudioBuffer, identification: SpeakerIdentification)] = []
+        for track in tracks {
+            let identification = try await identifySpeaker(track)
+            results.append((track, identification))
+        }
+        return results.sorted { $0.identification.speakerSlot < $1.identification.speakerSlot }
+    }
+}
+
 /// Speech Enhancement (denoising, cleanup)
 public protocol SpeechEnhancer: StreamableProcessor {
     // Inherits process() from AudioProcessor

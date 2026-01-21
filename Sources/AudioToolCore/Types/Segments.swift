@@ -135,9 +135,13 @@ public struct SpeakerTimeline: Sendable {
     }
     
     /// Get time ranges where speakers overlap
+    ///
+    /// Returns merged, non-overlapping time ranges where 2+ speakers are active.
+    /// Adjacent or overlapping ranges are merged to prevent duplicate processing.
     public func overlappingRanges() -> [TimeRange] {
         var overlaps: [TimeRange] = []
         
+        // Find all pairwise intersections
         for i in 0..<segments.count {
             for j in (i + 1)..<segments.count {
                 if let intersection = segments[i].timeRange.intersection(with: segments[j].timeRange) {
@@ -146,7 +150,26 @@ public struct SpeakerTimeline: Sendable {
             }
         }
         
-        return overlaps.sorted()
+        // Merge overlapping/adjacent ranges to avoid duplicates
+        guard !overlaps.isEmpty else { return [] }
+        
+        let sorted = overlaps.sorted()
+        var merged: [TimeRange] = [sorted[0]]
+        
+        for range in sorted.dropFirst() {
+            let last = merged[merged.count - 1]
+            // Merge if ranges overlap or are adjacent (within 0.01s tolerance)
+            if range.start <= last.end + 0.01 {
+                merged[merged.count - 1] = TimeRange(
+                    start: last.start,
+                    end: max(last.end, range.end)
+                )
+            } else {
+                merged.append(range)
+            }
+        }
+        
+        return merged
     }
 }
 
@@ -297,6 +320,62 @@ public enum OverlapHandling: Sendable, Equatable {
     
     /// Separate, identify, and merge back into timeline
     case separateIdentifyAndMerge
+}
+
+// MARK: - Speaker Identification
+
+/// Result of speaker identification for a separated audio track
+///
+/// Used after source separation to determine which speaker slot (from
+/// the original diarization) a separated track belongs to.
+///
+/// Example:
+/// ```swift
+/// // After separating overlapping audio into tracks
+/// let tracks = try await separator.separate(overlapRegion, speakers: 2)
+///
+/// // Re-identify each track using same Sortformer instance
+/// let id1 = try await sortformer.identifySpeaker(tracks[0])
+/// // id1.speakerSlot == 0, id1.confidence == 0.92
+/// ```
+public struct SpeakerIdentification: Sendable, Equatable {
+    /// The speaker slot this audio belongs to (0-3 for Sortformer)
+    public let speakerSlot: Int
+    
+    /// Confidence score for the identified slot (probability)
+    public let confidence: Float
+    
+    /// Raw probabilities for all speaker slots [numSpeakers]
+    /// For Sortformer: [4] with probabilities for slots 0-3
+    public let allProbabilities: [Float]
+    
+    /// Average probability across all frames (for short segments)
+    /// This is used when the audio produces multiple frames
+    public let averageProbabilities: [Float]?
+    
+    /// Number of frames analyzed
+    public let frameCount: Int
+    
+    public init(
+        speakerSlot: Int,
+        confidence: Float,
+        allProbabilities: [Float],
+        averageProbabilities: [Float]? = nil,
+        frameCount: Int = 1
+    ) {
+        self.speakerSlot = speakerSlot
+        self.confidence = confidence
+        self.allProbabilities = allProbabilities
+        self.averageProbabilities = averageProbabilities
+        self.frameCount = frameCount
+    }
+    
+    /// Check if identification is confident enough to trust
+    /// - Parameter threshold: Minimum confidence threshold (default 0.5)
+    /// - Returns: True if confidence exceeds threshold
+    public func isConfident(threshold: Float = 0.5) -> Bool {
+        confidence >= threshold
+    }
 }
 
 // MARK: - Translation
