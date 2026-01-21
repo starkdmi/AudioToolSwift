@@ -18,6 +18,7 @@ public struct PipelineStage: Sendable {
         case analyze
         case enhance(EnhancementModel)
         case separate(speakers: Int, useOriginal: Bool)
+        case separateOverlap(handling: OverlapHandling, useOriginal: Bool)
         case separateUSS(types: [USSSoundType])
         case upscale
         case transcribe(TranscriptionModel)
@@ -130,6 +131,68 @@ public struct PipelineBuilder: Sendable {
                 innerBuilder.separate(speakers: 3, useOriginal: useOriginal)
             })
         })
+    }
+    
+    /// Separate overlapping speech regions with speaker re-identification.
+    ///
+    /// This stage detects overlap regions from diarization, separates the speakers
+    /// using MossFormer2, and re-identifies each track using Sortformer's preserved
+    /// spkcache state.
+    ///
+    /// ## How It Works
+    /// 1. Finds overlapping time ranges from diarization
+    /// 2. For each overlap, selects appropriate model (WHAMR for 2, 3spk for 3)
+    /// 3. Separates the mixed audio into individual tracks
+    /// 4. Re-identifies each track using the diarizer's preserved speaker state
+    /// 5. Emits events for each detected overlap and identified track
+    ///
+    /// ## Requirements
+    /// - Must run after `.diarize()` stage
+    /// - Requires Sortformer diarization provider (preserves spkcache)
+    /// - Requires separation model (WHAMR and/or 3spk)
+    ///
+    /// ## Events Emitted
+    /// - `.overlapDetected(timeRange:speakerCount:)` for each overlap region
+    /// - `.trackIdentified(track:)` for each successfully identified track
+    ///
+    /// Example:
+    /// ```swift
+    /// let result = try await voice.pipeline()
+    ///     .detect(.silero)
+    ///     .diarize()
+    ///     .separateOverlap(.separateAndIdentify)
+    ///     .transcribe(.parakeet)
+    ///     .onEvent { event in
+    ///         switch event {
+    ///         case .overlapDetected(let range, let count):
+    ///             print("Overlap at \(range): \(count) speakers")
+    ///         case .trackIdentified(let track):
+    ///             print("Track identified: Speaker \(track.speakerSlot!)")
+    ///         default: break
+    ///         }
+    ///     }
+    ///     .process(audio: audio)
+    ///
+    /// // Access identified tracks
+    /// for track in result.identifiedTracks ?? [] {
+    ///     print("Speaker \(track.speakerID!): \(track.audio.duration)s")
+    /// }
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - handling: How to handle overlaps (default: `.separateAndIdentify`)
+    ///   - useOriginal: Use original audio (true) or enhanced audio (false)
+    /// - Returns: Updated pipeline builder
+    public func separateOverlap(
+        _ handling: OverlapHandling = .separateAndIdentify,
+        useOriginal: Bool = true
+    ) -> PipelineBuilder {
+        var builder = self
+        builder.stages.append(PipelineStage(
+            type: .separateOverlap(handling: handling, useOriginal: useOriginal),
+            name: "overlapSeparation"
+        ))
+        return builder
     }
     
     /// Add Universal Sound Separation (USS)

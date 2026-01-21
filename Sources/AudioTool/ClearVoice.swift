@@ -958,6 +958,7 @@ public actor ClearVoice {
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: tracks,
+                    identifiedTracks: result.identifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     classifications: result.classifications,
@@ -965,6 +966,94 @@ public actor ClearVoice {
                     metrics: result.metrics
                 )
                 // Note: 100% progress already emitted by separator
+                
+            case .separateOverlap(let handling, let useOriginal):
+                await eventHandler?(.progress(stage: stageName, percent: 0))
+                
+                guard let analysis = context.analysis else {
+                    throw ClearVoiceError.pipelineConfigurationInvalid("separateOverlap requires diarize() stage first")
+                }
+                
+                // Skip if not handling overlaps
+                if handling == .skip {
+                    await eventHandler?(.progress(stage: stageName, percent: 100))
+                    continue
+                }
+                
+                let timeline = analysis.speakers
+                let overlaps = timeline.overlappingRanges()
+                
+                // Skip if no overlaps
+                if overlaps.isEmpty {
+                    await eventHandler?(.progress(stage: stageName, percent: 100))
+                    continue
+                }
+                
+                let inputAudio = useOriginal ? context.originalAudio : context.currentAudio
+                var allIdentifiedTracks: [SeparatedSpeakerTrack] = []
+                
+                for (idx, overlapRange) in overlaps.enumerated() {
+                    // Emit overlap detected event
+                    let overlapSegments = timeline.segments.filter { $0.timeRange.overlaps(with: overlapRange) }
+                    let speakerCount = Set(overlapSegments.map(\.speakerID)).count
+                    await eventHandler?(.overlapDetected(timeRange: overlapRange, speakerCount: speakerCount))
+                    
+                    // Skip if we can't separate (1 or 4+ speakers)
+                    guard speakerCount >= 2 && speakerCount <= 3 else {
+                        let overlapProgress = Double(idx + 1) / Double(overlaps.count) * 100.0
+                        await eventHandler?(.progress(stage: stageName, percent: overlapProgress))
+                        continue
+                    }
+                    
+                    // Extract overlap audio
+                    let overlapAudio = inputAudio.slice(overlapRange.start..<overlapRange.end)
+                    
+                    if handling == .separate {
+                        // Just separate, don't identify
+                        let model = SeparationModel.forOverlappingSpeakers(speakerCount)!
+                        let tracks = try await separate(overlapAudio, speakers: speakerCount, model: model)
+                        
+                        for (trackIdx, track) in tracks.enumerated() {
+                            let separatedTrack = SeparatedSpeakerTrack(
+                                audio: track,
+                                speakerSlot: nil,
+                                speakerID: nil,
+                                confidence: 0,
+                                sourceTimeRange: overlapRange,
+                                trackIndex: trackIdx
+                            )
+                            allIdentifiedTracks.append(separatedTrack)
+                        }
+                    } else {
+                        // Separate and identify
+                        let identifiedTracks = try await separateAndIdentify(
+                            overlapAudio,
+                            timeline: timeline,
+                            sourceTimeRange: overlapRange
+                        )
+                        
+                        // Emit track identified events
+                        for track in identifiedTracks {
+                            await eventHandler?(.trackIdentified(track: track))
+                        }
+                        
+                        allIdentifiedTracks.append(contentsOf: identifiedTracks)
+                    }
+                    
+                    let overlapProgress = Double(idx + 1) / Double(overlaps.count) * 100.0
+                    await eventHandler?(.progress(stage: stageName, percent: overlapProgress))
+                }
+                
+                result = PipelineResult(
+                    audio: result.audio,
+                    separatedTracks: result.separatedTracks,
+                    identifiedTracks: allIdentifiedTracks.isEmpty ? nil : allIdentifiedTracks,
+                    ussSeparated: result.ussSeparated,
+                    transcription: result.transcription,
+                    classifications: result.classifications,
+                    analysis: result.analysis,
+                    metrics: result.metrics
+                )
                 
             case .separateUSS(let types):
                 await eventHandler?(.progress(stage: stageName, percent: 0))
