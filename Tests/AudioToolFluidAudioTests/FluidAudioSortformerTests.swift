@@ -13,6 +13,61 @@ import MLX
 
 final class FluidAudioSortformerTests: XCTestCase {
     
+    // MARK: - Factory Method Tests
+    
+    /// Test all Sortformer factory methods create providers with correct configurations
+    func testSortformerFactoryMethods() {
+        // Default factory
+        let defaultProvider = FluidAudioProviders.sortformer()
+        XCTAssertEqual(defaultProvider.configuration.chunkLen, 6)
+        XCTAssertEqual(defaultProvider.configuration.chunkRightContext, 7)
+        
+        // Low latency factory (should use .default config)
+        let lowLatency = FluidAudioProviders.sortformerLowLatency()
+        XCTAssertEqual(lowLatency.configuration.chunkLen, 6)
+        XCTAssertEqual(lowLatency.configuration.chunkRightContext, 7)
+        
+        // High latency factory (should use .nvidiaHighLatency config)
+        let highLatency = FluidAudioProviders.sortformerHighLatency()
+        XCTAssertEqual(highLatency.configuration.chunkLen, 340)
+        XCTAssertEqual(highLatency.configuration.chunkRightContext, 40)
+        
+        // NVIDIA low latency factory
+        let nvidiaLow = FluidAudioProviders.sortformerNVIDIALowLatency()
+        XCTAssertEqual(nvidiaLow.configuration.chunkLen, 6)
+        XCTAssertEqual(nvidiaLow.configuration.fifoLen, 188, "NVIDIA low latency uses larger FIFO")
+    }
+    
+    /// Test estimatedLatency property calculations
+    func testEstimatedLatencyProperty() {
+        // Low latency: (6 + 7) * 8 * 160 / 16000 = 1.04s
+        let lowLatency = FluidAudioProviders.sortformerLowLatency()
+        XCTAssertEqual(lowLatency.estimatedLatency, 1.04, accuracy: 0.01)
+        
+        // High latency: (340 + 40) * 8 * 160 / 16000 = 30.4s
+        let highLatency = FluidAudioProviders.sortformerHighLatency()
+        XCTAssertEqual(highLatency.estimatedLatency, 30.4, accuracy: 0.01)
+        
+        // NVIDIA low latency should also be ~1.04s (same chunk/context as default)
+        let nvidiaLow = FluidAudioProviders.sortformerNVIDIALowLatency()
+        XCTAssertEqual(nvidiaLow.estimatedLatency, 1.04, accuracy: 0.01)
+    }
+    
+    /// Test configuration property exposes correct values
+    func testConfigurationProperty() {
+        let provider = FluidAudioProviders.sortformerLowLatency()
+        let config = provider.configuration
+        
+        // Verify key config values are exposed
+        XCTAssertEqual(config.numSpeakers, 4)
+        XCTAssertEqual(config.sampleRate, 16000)
+        XCTAssertEqual(config.subsamplingFactor, 8)
+        XCTAssertEqual(config.melStride, 160)
+        XCTAssertEqual(config.melFeatures, 128)
+    }
+    
+    // MARK: - Sample Rate Tests
+    
     /// Test Sortformer sample rate requirements
     func testSortformerSampleRate() async throws {
         let diarizer = FluidAudioProviders.sortformer()

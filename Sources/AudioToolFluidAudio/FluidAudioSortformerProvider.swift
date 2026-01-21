@@ -22,6 +22,28 @@ import ClearVoiceCore
 /// - Optimized for ≤4 speakers (performance degrades beyond)
 /// - ~120x RTF on Apple Silicon
 ///
+/// ## Configuration Presets
+///
+/// | Config | Latency | Use Case |
+/// |--------|---------|----------|
+/// | `.default` | ~1.04s | Real-time streaming (recommended) |
+/// | `.nvidiaLowLatency` | ~1.04s | NVIDIA benchmark config |
+/// | `.nvidiaHighLatency` | ~30.4s | Batch, best quality |
+///
+/// - Warning: CoreML models have static input shapes baked in at conversion time.
+///   The `.default` config matches the model shipped with FluidAudio v0.10.0+.
+///   Other configurations may require separately converted models.
+///
+/// ## Recommended Factory Methods
+///
+/// ```swift
+/// // Low latency (recommended for streaming)
+/// let provider = FluidAudioProviders.sortformerLowLatency()
+///
+/// // High latency (best quality for batch processing)
+/// let provider = FluidAudioProviders.sortformerHighLatency()
+/// ```
+///
 /// Use `FluidAudioDiarizationProvider` (Pyannote) for:
 /// - Scenarios with >4 speakers
 /// - Non-English audio
@@ -38,6 +60,25 @@ public actor FluidAudioSortformerProvider: DiarizationProvider {
     private var diarizer: SortformerDiarizer?
     private let config: SortformerConfig
     
+    // MARK: - Public Properties
+    
+    /// The Sortformer configuration used by this provider
+    public nonisolated var configuration: SortformerConfig {
+        config
+    }
+    
+    /// Estimated latency in seconds based on configuration
+    ///
+    /// Calculated as: `(chunkLen + rightContext) × subsamplingFactor × melStride / sampleRate`
+    public nonisolated var estimatedLatency: Double {
+        let chunkLen = Double(config.chunkLen)
+        let rightContext = Double(config.chunkRightContext)
+        let subsamplingFactor = Double(config.subsamplingFactor)
+        let melStride = Double(config.melStride)
+        let sampleRate = Double(config.sampleRate)
+        return (chunkLen + rightContext) * subsamplingFactor * melStride / sampleRate
+    }
+    
     // MARK: - Initialization
     
     /// Initialize Sortformer diarization provider
@@ -47,7 +88,14 @@ public actor FluidAudioSortformerProvider: DiarizationProvider {
     }
     
     /// Load the Sortformer models (downloads from HuggingFace if needed)
+    ///
+    /// - Note: The CoreML model shipped with FluidAudio has static input shapes that must match
+    ///   the configuration. The `.default` config is guaranteed to work. Other configurations
+    ///   may require specially converted models.
     public func load() async throws {
+        // Validate config compatibility with shipped model
+        validateConfigCompatibility()
+        
         // Create diarizer with config
         diarizer = SortformerDiarizer(config: config)
         
@@ -56,6 +104,36 @@ public actor FluidAudioSortformerProvider: DiarizationProvider {
         
         // Initialize diarizer with loaded models
         diarizer?.initialize(models: models)
+    }
+    
+    /// Validates that the configuration is compatible with available models
+    /// Logs a warning if using a configuration that may not have a matching CoreML model
+    private func validateConfigCompatibility() {
+        let defaultConfig = SortformerConfig.default
+        
+        // Check if config matches the default (shipped) model
+        if config.isCompatible(with: defaultConfig) {
+            return // Config matches shipped model
+        }
+        
+        // Check if using NVIDIA low latency (similar to default)
+        let nvidiaLowConfig = SortformerConfig.nvidiaLowLatency
+        if config.isCompatible(with: nvidiaLowConfig) {
+            print("[Sortformer] Using NVIDIA low latency config - may require matching CoreML model")
+            return
+        }
+        
+        // Check if using NVIDIA high latency
+        let nvidiaHighConfig = SortformerConfig.nvidiaHighLatency
+        if config.isCompatible(with: nvidiaHighConfig) {
+            print("[Sortformer] Warning: High latency config requires separately converted CoreML model")
+            print("[Sortformer] If you experience runtime errors, use sortformerLowLatency() instead")
+            return
+        }
+        
+        // Custom configuration
+        print("[Sortformer] Warning: Custom config may not match available CoreML model")
+        print("[Sortformer] Config: chunkMelFrames=\(config.chunkMelFrames), fifoLen=\(config.fifoLen), spkcacheLen=\(config.spkcacheLen)")
     }
     
     // MARK: - DiarizationProvider Conformance

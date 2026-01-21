@@ -78,6 +78,70 @@ public struct FluidAudioProviders {
     public static func sortformer(config: SortformerConfig = .default) -> FluidAudioSortformerProvider {
         FluidAudioSortformerProvider(config: config)
     }
+    
+    // MARK: - Sortformer Latency Presets
+    
+    /// Create Sortformer with low latency (~1.04s) configuration
+    ///
+    /// Uses the default CoreML model shipped with FluidAudio v0.10.0+.
+    /// Optimized for real-time streaming with minimal delay.
+    ///
+    /// **Latency formula:**
+    /// ```
+    /// latency = (chunkLen + rightContext) × subsamplingFactor × melStride / sampleRate
+    ///         = (6 + 7) × 8 × 160 / 16000 = 1.04 seconds
+    /// ```
+    ///
+    /// **Best for:**
+    /// - Real-time streaming diarization
+    /// - Live audio processing
+    /// - Low-latency applications
+    ///
+    /// - Returns: Sortformer provider configured for low latency streaming
+    public static func sortformerLowLatency() -> FluidAudioSortformerProvider {
+        FluidAudioSortformerProvider(config: .default)
+    }
+    
+    /// Create Sortformer with high latency (~30.4s) configuration for best quality
+    ///
+    /// Uses NVIDIA's high latency configuration with extended right context for better accuracy.
+    ///
+    /// **Latency formula:**
+    /// ```
+    /// latency = (chunkLen + rightContext) × subsamplingFactor × melStride / sampleRate
+    ///         = (340 + 40) × 8 × 160 / 16000 = 30.4 seconds
+    /// ```
+    ///
+    /// - Warning: This configuration requires a separately converted CoreML model with matching
+    ///   static input shapes. The default FluidAudio model may not be compatible. If you
+    ///   experience runtime errors, use `sortformerLowLatency()` or `sortformer()` instead.
+    ///
+    /// **Best for:**
+    /// - Batch/offline processing
+    /// - Maximum accuracy scenarios
+    /// - When latency is not a concern
+    ///
+    /// - Returns: Sortformer provider configured for high latency (best quality)
+    public static func sortformerHighLatency() -> FluidAudioSortformerProvider {
+        FluidAudioSortformerProvider(config: .nvidiaHighLatency)
+    }
+    
+    /// Create Sortformer with NVIDIA's low latency configuration
+    ///
+    /// Uses NVIDIA's published low latency configuration which differs slightly from the default.
+    /// Achieves 20.57% DER on AMI SDM benchmark.
+    ///
+    /// **Configuration differences from `.default`:**
+    /// - `fifoLen`: 188 (vs 40 in default)
+    /// - `spkcacheUpdatePeriod`: 144 (vs 31 in default)
+    ///
+    /// - Warning: This configuration may require a specially converted CoreML model.
+    ///   Use `sortformerLowLatency()` for the safest default behavior.
+    ///
+    /// - Returns: Sortformer provider with NVIDIA's low latency configuration
+    public static func sortformerNVIDIALowLatency() -> FluidAudioSortformerProvider {
+        FluidAudioSortformerProvider(config: .nvidiaLowLatency)
+    }
 }
 
 // MARK: - ClearVoiceFluidAudio Module Exports
