@@ -94,6 +94,44 @@ public struct PipelineBuilder: Sendable {
         return builder
     }
     
+    /// Add speaker separation with model selection based on overlap count
+    ///
+    /// Automatically selects the appropriate model:
+    /// - 2 overlapping speakers: WHAMR model (best for noisy environments)
+    /// - 3 overlapping speakers: 3spk model
+    /// - 4+ speakers: No separation (too complex)
+    ///
+    /// Example usage with diarization:
+    /// ```swift
+    /// pipeline
+    ///     .diarize()
+    ///     .conditionally({ $0.analysis!.speakers.maxOverlappingSpeakers >= 2 }) {
+    ///         $0.separateOverlappingSpeakers(useOriginal: true)
+    ///     }
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - useOriginal: Whether to use original audio (true) or enhanced audio (false)
+    /// - Returns: Updated pipeline builder
+    /// - Note: This adds a conditional stage that auto-selects the model based on diarization results
+    public func separateOverlappingSpeakers(useOriginal: Bool = true) -> PipelineBuilder {
+        // Add conditional separation based on maxOverlappingSpeakers
+        conditionally({ context in
+            guard let speakers = context.analysis?.speakers else { return false }
+            return speakers.maxOverlappingSpeakers == 2
+        }, then: { builder in
+            builder.separate(speakers: 2, useOriginal: useOriginal)
+        }, else: { builder in
+            // Check for 3 speakers
+            builder.conditionally({ context in
+                guard let speakers = context.analysis?.speakers else { return false }
+                return speakers.maxOverlappingSpeakers == 3
+            }, then: { innerBuilder in
+                innerBuilder.separate(speakers: 3, useOriginal: useOriginal)
+            })
+        })
+    }
+    
     /// Add Universal Sound Separation (USS)
     ///
     /// Separates specific sound types from audio using USS (ResUNet30 + FiLM conditioning).

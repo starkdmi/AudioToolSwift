@@ -344,13 +344,31 @@ public actor ClearVoice {
         speakers: Int,
         model: SeparationModel = .mossformer2spk
     ) async throws -> [ClearVoiceCore.AudioBuffer] {
+        try await separate(audio, speakers: speakers, model: model, onProgress: nil)
+    }
+    
+    /// Separate speakers with progress reporting
+    /// - Parameters:
+    ///   - audio: Input audio buffer
+    ///   - speakers: Number of speakers to separate
+    ///   - model: Separation model to use
+    ///   - onProgress: Progress callback (0.0 to 100.0) as chunks are processed
+    /// - Returns: Array of separated audio buffers, one per speaker
+    public func separate(
+        _ audio: ClearVoiceCore.AudioBuffer,
+        speakers: Int,
+        model: SeparationModel = .mossformer2spk,
+        onProgress: ProgressCallback?
+    ) async throws -> [ClearVoiceCore.AudioBuffer] {
         guard let separator = separatorProviders[model] else {
             throw ClearVoiceError.modelNotLoaded(model.modelName)
         }
         
         // Resample to model's expected sample rate if needed
         let input = try audio.resampled(to: model.sampleRate)
-        let outputs = try await separator.separate(input, speakers: speakers)
+        
+        // Use progress-aware separation
+        let outputs = try await separator.separate(input, speakers: speakers, onProgress: onProgress)
         
         // Resample all outputs back to original rate if different
         if audio.sampleRate != model.sampleRate {
@@ -736,7 +754,20 @@ public actor ClearVoice {
             case .separate(let speakers, let useOriginal):
                 await eventHandler?(.progress(stage: stageName, percent: 0))
                 let inputAudio = useOriginal ? context.originalAudio : context.currentAudio
-                let tracks = try await separate(inputAudio, speakers: speakers)
+                
+                // Use progress-aware separation
+                let progressCallback: ProgressCallback? = if let handler = eventHandler {
+                    { @Sendable percent in
+                        await handler(.progress(stage: stageName, percent: percent))
+                    }
+                } else {
+                    nil
+                }
+                
+                // Auto-select model based on speaker count
+                let model: SeparationModel = speakers == 3 ? .mossformer3spk : .mossformerWhamr
+                let tracks = try await separate(inputAudio, speakers: speakers, model: model, onProgress: progressCallback)
+                
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: tracks,
@@ -746,7 +777,7 @@ public actor ClearVoice {
                     analysis: result.analysis,
                     metrics: result.metrics
                 )
-                await eventHandler?(.progress(stage: stageName, percent: 100))
+                // Note: 100% progress already emitted by separator
                 
             case .separateUSS(let types):
                 await eventHandler?(.progress(stage: stageName, percent: 0))

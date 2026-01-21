@@ -18,7 +18,15 @@ import ClearVoiceCore
 
 /// MLX MossFormer2 Speaker Separation - supports 2spk, 3spk, and WHAMR models
 /// Chunking: 4s chunks, 25% overlap, triangular blending
-public actor MossFormer2SSProvider: SpeechSeparator {
+///
+/// Supports progress reporting during chunked processing via `separate(_:speakers:onProgress:)`.
+/// For streaming output, use `separateStream(_:)` which yields per-speaker results as chunks complete.
+public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
+    
+    // MARK: - ChunkedProgressProvider Conformance
+    
+    /// MossFormer2SS supports chunked progress during separation
+    public nonisolated var supportsChunkedProgress: Bool { true }
     
     // SpeechSeparator conformance
     public nonisolated var supportedSpeakerCounts: [Int] { [modelType.numSpeakers] }
@@ -136,31 +144,50 @@ public actor MossFormer2SSProvider: SpeechSeparator {
     /// Separate mixed audio into speaker streams
     /// Output is peak-normalized to 1.0 like the original model
     public func separate(_ audio: AudioBuffer, speakers: Int) async throws -> [AudioBuffer] {
+        try await separate(audio, speakers: speakers, onProgress: nil)
+    }
+    
+    /// Separate mixed audio with progress reporting
+    /// - Parameters:
+    ///   - audio: Input audio buffer
+    ///   - speakers: Number of speakers (must match model)
+    ///   - onProgress: Progress callback (0.0 to 100.0) as chunks are processed
+    /// - Returns: Array of separated audio buffers, one per speaker
+    public func separate(
+        _ audio: AudioBuffer,
+        speakers: Int,
+        onProgress: ProgressCallback?
+    ) async throws -> [AudioBuffer] {
         guard speakers == modelType.numSpeakers else {
             throw ClearVoiceError.pipelineConfigurationInvalid("Model supports \(modelType.numSpeakers) speakers, not \(speakers)")
         }
+        
+        await onProgress?(0.0)
         
         let durationSeconds = Float(audio.samples.count) / Float(sampleRate)
         
         // Use chunking for longer audio
         var results: [AudioBuffer]
         if durationSeconds > maxDirectDuration {
-            results = try await processWithChunking(audio)
+            results = try await processWithChunking(audio, onProgress: onProgress)
         } else {
             results = try await processChunk(audio.samples)
         }
         
         // Normalize each speaker's output to peak 1.0 (like original model)
-        return results.map { buffer in
+        let normalized = results.map { buffer in
             let audioMLX = MLXArray(buffer.samples)
-            let normalized = normalizeToPeak(audioMLX, targetPeak: 1.0)
-            eval(normalized)
+            let normalizedMLX = normalizeToPeak(audioMLX, targetPeak: 1.0)
+            eval(normalizedMLX)
             return AudioBuffer(
-                samples: normalized.asArray(Float.self),
+                samples: normalizedMLX.asArray(Float.self),
                 sampleRate: buffer.sampleRate,
                 channels: buffer.channels
             )
         }
+        
+        await onProgress?(100.0)
+        return normalized
     }
     
     /// AudioProcessor conformance - returns first separated track
@@ -171,7 +198,7 @@ public actor MossFormer2SSProvider: SpeechSeparator {
     
     /// Process with chunking using MLXOverlap
     /// Uses triangular weighted overlap-add for each speaker independently
-    private func processWithChunking(_ input: AudioBuffer) async throws -> [AudioBuffer] {
+    private func processWithChunking(_ input: AudioBuffer, onProgress: ProgressCallback? = nil) async throws -> [AudioBuffer] {
         guard let model = model else {
             throw ClearVoiceError.modelNotLoaded("MossFormer2_SS_\(modelType.rawValue)")
         }
@@ -186,6 +213,8 @@ public actor MossFormer2SSProvider: SpeechSeparator {
             stride: chunkingConfig.strideSamples
         )
         
+        let totalChunks = chunks.count
+        
         // Process each chunk through model - collect all speaker outputs
         // Each chunk produces [numSpeakers] outputs
         var speakerChunks: [[(chunk: MLXArray, startIdx: Int)]] = Array(
@@ -193,7 +222,7 @@ public actor MossFormer2SSProvider: SpeechSeparator {
             count: modelType.numSpeakers
         )
         
-        for (chunk, startIdx) in chunks {
+        for (chunkIdx, (chunk, startIdx)) in chunks.enumerated() {
             // Run model: input [1, T] -> outputs [numSpeakers x [1, T]]
             let batchedChunk = chunk.expandedDimensions(axis: 0)
             let separatedSources = model(batchedChunk)
@@ -207,6 +236,10 @@ public actor MossFormer2SSProvider: SpeechSeparator {
             
             // Clear GPU cache between chunks to reduce peak memory
             GPU.clearCache()
+            
+            // Report progress (0-90% for chunking, 90-100% for reassembly)
+            let percent = Double(chunkIdx + 1) / Double(totalChunks) * 90.0
+            await onProgress?(percent)
         }
         
         // Reassemble each speaker's audio using triangular blending

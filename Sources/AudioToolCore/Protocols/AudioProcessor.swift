@@ -136,6 +136,25 @@ public protocol SpeechSeparator: AudioProcessor {
     
     /// Separate speakers from mixed audio
     func separate(_ audio: AudioBuffer, speakers: Int) async throws -> [AudioBuffer]
+    
+    /// Separate speakers with progress reporting
+    /// - Parameters:
+    ///   - audio: Input audio buffer
+    ///   - speakers: Number of speakers to separate
+    ///   - onProgress: Progress callback (0.0 to 100.0) as chunks are processed
+    /// - Returns: Array of separated audio buffers, one per speaker
+    func separate(_ audio: AudioBuffer, speakers: Int, onProgress: ProgressCallback?) async throws -> [AudioBuffer]
+}
+
+/// Default implementation for progress-aware separation
+public extension SpeechSeparator {
+    func separate(_ audio: AudioBuffer, speakers: Int, onProgress: ProgressCallback?) async throws -> [AudioBuffer] {
+        // Default: report 0% at start, separate, then report 100% at end
+        await onProgress?(0.0)
+        let result = try await separate(audio, speakers: speakers)
+        await onProgress?(100.0)
+        return result
+    }
 }
 
 /// Audio Super-Resolution (upscaling)

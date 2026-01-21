@@ -882,4 +882,177 @@ final class StreamingPipelineTests: XCTestCase {
         
         print("✓ Diarization quality comparison completed")
     }
+    
+    // MARK: - Speaker Separation Tests
+    
+    /// Test speaker separation on overlapping speech
+    /// Uses WHAMR model for 2-speaker separation (best for noisy environments)
+    func testSpeakerSeparation_Overlap_HarryPotter() async throws {
+        print("\n=== Speaker Separation on Overlapping Speech ===")
+        
+        let url = try harryPotterURL()
+        let audio8k = try loadAudio(at: url, sampleRate: 8000)  // WHAMR expects 8kHz
+        let audio16k = try loadAudio(at: url, sampleRate: 16000)
+        
+        // First, diarize to find overlapping regions
+        let diarizer = FluidAudioProviders.sortformerLowLatency()
+        try await diarizer.load()
+        
+        let timeline = try await diarizer.diarize(audio16k)
+        print("Speakers detected: \(timeline.speakerCount)")
+        print("Max overlapping: \(timeline.maxOverlappingSpeakers)")
+        
+        let overlappingRanges = timeline.overlappingRanges()
+        print("Overlapping regions: \(overlappingRanges.count)")
+        
+        if overlappingRanges.isEmpty {
+            print("No overlapping speech detected - skipping separation test")
+            throw XCTSkip("No overlapping speech in test audio")
+        }
+        
+        // Get first overlap region
+        let overlapRange = overlappingRanges[0]
+        print("Testing overlap at \(String(format: "%.2f", overlapRange.start))s - \(String(format: "%.2f", overlapRange.end))s")
+        
+        let overlapAudio = audio8k.slice(overlapRange.start..<overlapRange.end)
+        print("Overlap duration: \(String(format: "%.2f", overlapAudio.duration))s")
+        
+        // Skip if overlap is too short
+        guard overlapAudio.duration >= 0.5 else {
+            print("Overlap too short for separation")
+            throw XCTSkip("Overlap region too short")
+        }
+        
+        // Separate using WHAMR model (best for noisy)
+        let separator = MLXProviders.mossformer2SS(model: .twoSpeakerWHAMR)
+        let loadStart = Date()
+        try await separator.load()
+        let loadTime = Date().timeIntervalSince(loadStart)
+        print("WHAMR separator loaded in \(String(format: "%.2f", loadTime))s")
+        
+        let separateStart = Date()
+        let tracks = try await separator.separate(overlapAudio, speakers: 2)
+        let separateTime = Date().timeIntervalSince(separateStart)
+        let rtf = overlapAudio.duration / max(separateTime, 0.001)
+        print("Separated in \(String(format: "%.2f", separateTime))s (RTF: \(String(format: "%.1f", rtf))x)")
+        
+        XCTAssertEqual(tracks.count, 2, "Should produce 2 speaker tracks")
+        for (idx, track) in tracks.enumerated() {
+            XCTAssertGreaterThan(track.samples.count, 0, "Track \(idx) should have samples")
+            let maxAmp = maxAmplitude(track)
+            print("Track \(idx): \(track.samples.count) samples, max amp: \(String(format: "%.4f", maxAmp))")
+            XCTAssertGreaterThan(maxAmp, 0.01, "Track \(idx) should have meaningful audio")
+        }
+        
+        print("✓ Speaker separation completed")
+    }
+    
+    /// Actor to collect progress events safely
+    private actor SeparationProgressCollector {
+        private var events: [Double] = []
+        
+        func record(_ percent: Double) {
+            events.append(percent)
+        }
+        
+        func snapshot() -> [Double] { events }
+    }
+    
+    /// Test speaker separation progress reporting
+    func testSpeakerSeparationProgressReporting() async throws {
+        print("\n=== Speaker Separation Progress Reporting ===")
+        
+        let url = try harryPotterURL()
+        let audio8k = try loadAudio(at: url, sampleRate: 8000)
+        
+        // Use first 10 seconds of audio (enough for chunking to trigger)
+        let testDuration = min(10.0, audio8k.duration)
+        let testAudio = audio8k.slice(0.0..<testDuration)
+        print("Test audio: \(String(format: "%.1f", testDuration))s")
+        
+        let separator = MLXProviders.mossformer2SS(model: .twoSpeakerWHAMR)
+        try await separator.load()
+        
+        // Collect progress events using actor
+        let collector = SeparationProgressCollector()
+        let progressCallback: ProgressCallback = { percent in
+            await collector.record(percent)
+        }
+        
+        let tracks = try await separator.separate(testAudio, speakers: 2, onProgress: progressCallback)
+        
+        let progressEvents = await collector.snapshot()
+        print("Progress events: \(progressEvents.count)")
+        if !progressEvents.isEmpty {
+            print("First: \(String(format: "%.1f", progressEvents.first!))%, Last: \(String(format: "%.1f", progressEvents.last!))%")
+        }
+        
+        XCTAssertEqual(tracks.count, 2, "Should produce 2 speaker tracks")
+        XCTAssertGreaterThan(progressEvents.count, 0, "Should emit progress events")
+        XCTAssertTrue(progressEvents.contains { $0 >= 100.0 }, "Should reach 100%")
+        
+        // Verify monotonic progress
+        for i in 1..<progressEvents.count {
+            XCTAssertGreaterThanOrEqual(progressEvents[i], progressEvents[i-1], 
+                "Progress should be monotonically increasing")
+        }
+        
+        print("✓ Progress reporting test completed")
+    }
+    
+    /// Test conditional speaker separation based on overlap count
+    func testConditionalSpeakerSeparation_HarryPotter() async throws {
+        print("\n=== Conditional Speaker Separation Pipeline ===")
+        
+        let url = try harryPotterURL()
+        let audio16k = try loadAudio(at: url, sampleRate: 16000)
+        
+        let vad = FluidAudioProviders.sileroVAD(threshold: 0.5)
+        let diarizer = FluidAudioProviders.sortformerLowLatency()
+        
+        try await vad.load()
+        try await diarizer.load()
+        
+        let voice = ClearVoice(
+            configuration: .default,
+            vad: vad,
+            diarization: diarizer
+        )
+        
+        // Register separator for 2-speaker WHAMR
+        let separator = MLXProviders.mossformer2SS(model: .twoSpeakerWHAMR)
+        try await separator.load()
+        await voice.register(separator: separator, for: .mossformerWhamr)
+        
+        let tracker = ProgressTracker()
+        let result = try await voice.pipeline()
+            .detect(.silero)
+            .diarize()
+            .separateOverlappingSpeakers(useOriginal: true)
+            .onEvent { event in
+                await tracker.record(event: event)
+            }
+            .process(audio: audio16k)
+        
+        let snapshot = await tracker.snapshot()
+        
+        print("VAD segments: \(result.analysis?.speechSegments.count ?? 0)")
+        print("Speakers: \(result.analysis?.speakers.speakerCount ?? 0)")
+        print("Max overlap: \(result.analysis?.speakers.maxOverlappingSpeakers ?? 0)")
+        
+        if let tracks = result.separatedTracks {
+            print("Separated tracks: \(tracks.count)")
+            for (idx, track) in tracks.enumerated() {
+                print("  Track \(idx): \(String(format: "%.2f", track.duration))s")
+            }
+        } else {
+            print("No separation performed (overlap count may be < 2 or >= 4)")
+        }
+        
+        // Verify progress events
+        let separationProgress = snapshot.progressEvents.filter { $0.stage == "separation" }
+        print("Separation progress events: \(separationProgress.count)")
+        
+        print("✓ Conditional separation pipeline completed")
+    }
 }
