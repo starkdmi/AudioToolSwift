@@ -36,6 +36,7 @@ public actor ClearVoice {
     internal var synthesizerProviders: [String: any SpeechSynthesizer] = [:]
     internal var translatorProviders: [TranslationModel: any TextTranslator] = [:]
     internal var textPreprocessorProviders: [String: any TextPreprocessor] = [:]
+    internal var embeddingExtractorProvider: (any SpeakerEmbeddingExtractor)?
     
     // MARK: - Initialization
     
@@ -125,6 +126,11 @@ public actor ClearVoice {
     /// Register a text preprocessor provider (e.g., RUAccent for Russian stress marking)
     public func register(preprocessor: any TextPreprocessor, for model: TextPreprocessorModel) {
         self.textPreprocessorProviders[model.modelName] = preprocessor
+    }
+    
+    /// Register a speaker embedding extractor provider (e.g., WeSpeaker for voice matching)
+    public func register(embeddingExtractor: any SpeakerEmbeddingExtractor) {
+        self.embeddingExtractorProvider = embeddingExtractor
     }
     
     // MARK: - Audio I/O
@@ -626,6 +632,148 @@ public actor ClearVoice {
             throw ClearVoiceError.modelNotLoaded("Classifier")
         }
         return try await classifier.classify(audio)
+    }
+    
+    // MARK: - Speaker Embedding Extraction
+    
+    /// Extract speaker embedding from audio
+    ///
+    /// Uses WeSpeaker (or other registered extractor) to produce a 256-dimensional
+    /// L2-normalized embedding vector that can be used for:
+    /// - Speaker verification (is this the same speaker?)
+    /// - Voice matching (find similar voices)
+    /// - Speaker re-identification (for 5+ speaker scenarios)
+    ///
+    /// - Parameter audio: Audio buffer (will be resampled to 16kHz if needed)
+    /// - Returns: L2-normalized embedding vector (typically 256 dimensions)
+    /// - Throws: `ClearVoiceError.modelNotLoaded` if no embedding extractor registered
+    ///
+    /// Example:
+    /// ```swift
+    /// let voice = ClearVoice()
+    /// voice.register(embeddingExtractor: speakerEmbeddingProvider)
+    /// 
+    /// let embedding1 = try await voice.extractSpeakerEmbedding(audio1)
+    /// let embedding2 = try await voice.extractSpeakerEmbedding(audio2)
+    /// let similarity = cosineSimilarity(embedding1, embedding2)
+    /// ```
+    public func extractSpeakerEmbedding(
+        _ audio: ClearVoiceCore.AudioBuffer
+    ) async throws -> [Float] {
+        guard let extractor = embeddingExtractorProvider else {
+            throw ClearVoiceError.modelNotLoaded("SpeakerEmbeddingExtractor")
+        }
+        return try await extractor.extractEmbedding(audio)
+    }
+    
+    /// Extract speaker embeddings from multiple audio segments
+    ///
+    /// Batch version of `extractSpeakerEmbedding(_:)` for efficiency.
+    ///
+    /// - Parameter audioSegments: Array of audio buffers
+    /// - Returns: Array of embedding vectors
+    public func extractSpeakerEmbeddings(
+        _ audioSegments: [ClearVoiceCore.AudioBuffer]
+    ) async throws -> [[Float]] {
+        guard let extractor = embeddingExtractorProvider else {
+            throw ClearVoiceError.modelNotLoaded("SpeakerEmbeddingExtractor")
+        }
+        return try await extractor.extractEmbeddings(audioSegments)
+    }
+    
+    /// Identify separated tracks using embedding similarity
+    ///
+    /// This is the fallback method for 5+ speaker scenarios where Sortformer
+    /// cannot be used. It compares embeddings from separated tracks against
+    /// reference embeddings from the diarization timeline.
+    ///
+    /// ## Algorithm
+    /// 1. Extract embedding from each separated track
+    /// 2. Compare against reference embeddings using cosine similarity
+    /// 3. Assign best-matching speaker ID to each track
+    ///
+    /// - Parameters:
+    ///   - tracks: Separated audio tracks to identify
+    ///   - referenceEmbeddings: Map of speaker ID to reference embedding
+    ///   - threshold: Minimum similarity threshold (default 0.7)
+    /// - Returns: Array of identification results with speaker IDs and confidence
+    ///
+    /// Example:
+    /// ```swift
+    /// // Build reference embeddings from non-overlapping segments
+    /// var referenceEmbeddings: [SpeakerID: [Float]] = [:]
+    /// for speaker in timeline.speakerIDs {
+    ///     let segment = timeline.longestNonOverlappingSegment(for: speaker)
+    ///     let audio = fullAudio.slice(segment.timeRange)
+    ///     referenceEmbeddings[speaker] = try await voice.extractSpeakerEmbedding(audio)
+    /// }
+    ///
+    /// // Identify separated tracks
+    /// let results = try await voice.identifyByEmbedding(
+    ///     tracks: separatedTracks,
+    ///     referenceEmbeddings: referenceEmbeddings
+    /// )
+    /// ```
+    public func identifyByEmbedding(
+        tracks: [ClearVoiceCore.AudioBuffer],
+        referenceEmbeddings: [SpeakerID: [Float]],
+        threshold: Float = 0.7
+    ) async throws -> [EmbeddingIdentificationResult] {
+        guard let extractor = embeddingExtractorProvider else {
+            throw ClearVoiceError.modelNotLoaded("SpeakerEmbeddingExtractor")
+        }
+        
+        // Extract embeddings for all tracks
+        let trackEmbeddings = try await extractor.extractEmbeddings(tracks)
+        
+        var results: [EmbeddingIdentificationResult] = []
+        
+        for (_, trackEmbedding) in trackEmbeddings.enumerated() {
+            // Find best matching reference speaker
+            var bestMatch: SpeakerID?
+            var bestSimilarity: Float = -1.0
+            
+            for (speakerID, refEmbedding) in referenceEmbeddings {
+                let similarity = cosineSimilarity(trackEmbedding, refEmbedding)
+                if similarity > bestSimilarity {
+                    bestSimilarity = similarity
+                    bestMatch = speakerID
+                }
+            }
+            
+            // Use "unknown" if no match or below threshold
+            let matchedSpeaker = (bestSimilarity >= threshold && bestMatch != nil)
+                ? bestMatch!
+                : SpeakerID("unknown")
+            
+            results.append(EmbeddingIdentificationResult(
+                speakerID: matchedSpeaker,
+                similarity: max(0, bestSimilarity),
+                embedding: trackEmbedding
+            ))
+        }
+        
+        return results
+    }
+    
+    /// Compute cosine similarity between two embedding vectors
+    private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return 0.0 }
+        
+        var dotProduct: Float = 0.0
+        var normA: Float = 0.0
+        var normB: Float = 0.0
+        
+        for i in 0..<a.count {
+            dotProduct += a[i] * b[i]
+            normA += a[i] * a[i]
+            normB += b[i] * b[i]
+        }
+        
+        let denominator = sqrt(normA) * sqrt(normB)
+        guard denominator > 0 else { return 0.0 }
+        
+        return dotProduct / denominator
     }
     
     // MARK: - Speech Synthesis

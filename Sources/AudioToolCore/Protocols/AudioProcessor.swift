@@ -366,3 +366,61 @@ extension TranslationModel: ModelIdentifier {
         }
     }
 }
+
+// MARK: - Speaker Embedding Extraction
+
+/// Protocol for extracting speaker embeddings from audio
+///
+/// Used for speaker verification, voice matching, and re-identification
+/// when Sortformer is not available (e.g., 5+ speakers).
+public protocol SpeakerEmbeddingExtractor: AudioProcessor {
+    /// Embedding dimension (typically 256 for WeSpeaker)
+    var embeddingDimension: Int { get }
+    
+    /// Extract speaker embedding from audio samples
+    /// - Parameter audio: Audio buffer (16kHz mono expected)
+    /// - Returns: L2-normalized embedding vector
+    func extractEmbedding(_ audio: AudioBuffer) async throws -> [Float]
+    
+    /// Extract embeddings from multiple audio segments
+    /// - Parameter segments: Array of audio buffers
+    /// - Returns: Array of embedding vectors
+    func extractEmbeddings(_ segments: [AudioBuffer]) async throws -> [[Float]]
+}
+
+/// Default implementation for batch embedding extraction
+public extension SpeakerEmbeddingExtractor {
+    func extractEmbeddings(_ segments: [AudioBuffer]) async throws -> [[Float]] {
+        var embeddings: [[Float]] = []
+        embeddings.reserveCapacity(segments.count)
+        for segment in segments {
+            let embedding = try await extractEmbedding(segment)
+            embeddings.append(embedding)
+        }
+        return embeddings
+    }
+}
+
+/// Result of speaker identification using embeddings
+public struct EmbeddingIdentificationResult: Sendable, Equatable {
+    /// The matched speaker ID
+    public let speakerID: SpeakerID
+    
+    /// Cosine similarity score (0.0 - 1.0, higher is better match)
+    public let similarity: Float
+    
+    /// The embedding vector of the identified track
+    public let embedding: [Float]
+    
+    public init(speakerID: SpeakerID, similarity: Float, embedding: [Float]) {
+        self.speakerID = speakerID
+        self.similarity = similarity
+        self.embedding = embedding
+    }
+    
+    /// Check if the match is confident enough
+    /// - Parameter threshold: Minimum similarity threshold (default 0.7 for cosine similarity)
+    public func isConfident(threshold: Float = 0.7) -> Bool {
+        similarity >= threshold
+    }
+}

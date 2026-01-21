@@ -37,7 +37,7 @@ import AVFoundation
 ///
 /// ## Thread Safety
 /// This actor provides thread-safe access to embedding extraction.
-public actor SpeakerEmbeddingProvider {
+public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
     
     // MARK: - Configuration
     
@@ -91,6 +91,12 @@ public actor SpeakerEmbeddingProvider {
     
     /// Expected sample rate for input audio
     public nonisolated let sampleRate: Int = 16000
+    
+    /// Input channels (mono)
+    public nonisolated let inputChannels: Int = 1
+    
+    /// Output channels (mono)
+    public nonisolated let outputChannels: Int = 1
     
     /// Embedding dimension (WeSpeaker produces 256-dim embeddings)
     public nonisolated let embeddingDimension: Int = 256
@@ -304,6 +310,63 @@ public actor SpeakerEmbeddingProvider {
         }
         
         return embeddings
+    }
+    
+    // MARK: - SpeakerEmbeddingExtractor Protocol Conformance
+    
+    /// Extract speaker embedding from AudioBuffer
+    ///
+    /// Conforms to `SpeakerEmbeddingExtractor` protocol.
+    /// Delegates to the `extractEmbedding(_ audio: [Float])` method.
+    ///
+    /// - Parameter audio: Audio buffer (16kHz mono expected)
+    /// - Returns: 256-dimensional L2-normalized embedding vector
+    public func extractEmbedding(_ audio: ClearVoiceCore.AudioBuffer) async throws -> [Float] {
+        // Resample to 16kHz if needed
+        let samples: [Float]
+        if audio.sampleRate != sampleRate {
+            samples = resampleAudioSamples(audio.samples, from: audio.sampleRate, to: sampleRate)
+        } else {
+            samples = audio.samples
+        }
+        
+        return try await extractEmbedding(samples)
+    }
+    
+    /// Resample audio samples from source rate to target rate
+    private func resampleAudioSamples(_ samples: [Float], from sourceSampleRate: Int, to targetSampleRate: Int) -> [Float] {
+        guard sourceSampleRate != targetSampleRate else { return samples }
+        
+        let resampleRatio = Double(targetSampleRate) / Double(sourceSampleRate)
+        let newLength = Int(Double(samples.count) * resampleRatio)
+        var resampled = [Float](repeating: 0, count: newLength)
+        
+        for i in 0..<newLength {
+            let sourceIndex = Double(i) / resampleRatio
+            let index = Int(sourceIndex)
+            let fraction = Float(sourceIndex - Double(index))
+            
+            if index < samples.count - 1 {
+                resampled[i] = samples[index] * (1 - fraction) + samples[index + 1] * fraction
+            } else if index < samples.count {
+                resampled[i] = samples[index]
+            }
+        }
+        
+        return resampled
+    }
+    
+    /// Process audio buffer (AudioProcessor protocol requirement)
+    ///
+    /// Note: Speaker embedding extraction is not a typical audio processing operation.
+    /// This method throws an error as embeddings should be extracted via `extractEmbedding()`.
+    ///
+    /// - Parameter input: Input audio buffer
+    /// - Throws: `ClearVoiceError.resourceUnavailable` - use `extractEmbedding()` instead
+    public func process(_ input: ClearVoiceCore.AudioBuffer) async throws -> ClearVoiceCore.AudioBuffer {
+        throw ClearVoiceError.resourceUnavailable(
+            "SpeakerEmbeddingProvider does not process audio. Use extractEmbedding() instead."
+        )
     }
     
     // MARK: - Audio Preprocessing
