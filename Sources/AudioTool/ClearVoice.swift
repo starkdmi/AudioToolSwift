@@ -87,6 +87,11 @@ public actor ClearVoice {
         self.enhancerProviders[model] = enhancer
     }
     
+    /// Register a diarization provider
+    public func register(diarization: any DiarizationProvider) {
+        self.diarizationProvider = diarization
+    }
+    
     /// Register a separator provider
     public func register(separator: any SpeechSeparator, for model: SeparationModel) {
         self.separatorProviders[model] = separator
