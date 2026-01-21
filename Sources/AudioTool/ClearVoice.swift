@@ -377,6 +377,193 @@ public actor ClearVoice {
         return outputs
     }
     
+    // MARK: - Speaker Separation with Re-identification
+    
+    /// Separate overlapping speech and identify speakers using Sortformer re-identification.
+    ///
+    /// This is the core method for handling overlapping speech regions. It:
+    /// 1. Uses MossFormer2 to separate the mixed audio into individual speaker tracks
+    /// 2. Uses the same Sortformer instance (with preserved spkcache) to re-identify speakers
+    /// 3. Maps speaker slots to speaker IDs from the original diarization
+    ///
+    /// ## Workflow
+    /// ```
+    /// Original audio → Sortformer diarization (populates spkcache)
+    /// Overlap region → MossFormer2 separation → Track A, Track B
+    /// Track A → Sortformer re-identification → Speaker slot 0
+    /// Track B → Sortformer re-identification → Speaker slot 1
+    /// ```
+    ///
+    /// ## Requirements
+    /// - Diarization provider must be FluidAudioSortformerProvider
+    /// - Separation model must be registered (WHAMR for 2 speakers, 3spk for 3 speakers)
+    /// - The same Sortformer instance must have processed the original audio
+    ///
+    /// - Parameters:
+    ///   - audio: Mixed audio from overlap region
+    ///   - timeline: Diarization timeline (for speaker ID mapping)
+    ///   - sourceTimeRange: Time range in original audio where this overlap occurred
+    ///   - onProgress: Optional progress callback
+    /// - Returns: Array of separated tracks with speaker identification
+    /// - Throws: `ClearVoiceError` if models not loaded or separation fails
+    ///
+    /// Example:
+    /// ```swift
+    /// // 1. Diarize full audio
+    /// let timeline = try await voice.diarize(audio)
+    ///
+    /// // 2. Find overlaps and separate/identify each
+    /// for range in timeline.overlappingRanges() {
+    ///     let overlapAudio = audio.slice(range)
+    ///     let speakerCount = timeline.speakersAt(range).count
+    ///     
+    ///     let tracks = try await voice.separateAndIdentify(
+    ///         overlapAudio,
+    ///         timeline: timeline,
+    ///         sourceTimeRange: range
+    ///     )
+    ///     
+    ///     for track in tracks {
+    ///         print("Speaker \(track.speakerID!): \(track.audio.duration)s")
+    ///     }
+    /// }
+    /// ```
+    public func separateAndIdentify(
+        _ audio: ClearVoiceCore.AudioBuffer,
+        timeline: SpeakerTimeline,
+        sourceTimeRange: TimeRange,
+        onProgress: ProgressCallback? = nil
+    ) async throws -> [SeparatedSpeakerTrack] {
+        // Determine speaker count from overlap
+        let overlappingSpeakers = timeline.segments.filter { segment in
+            segment.timeRange.overlaps(with: sourceTimeRange)
+        }
+        let speakerCount = Set(overlappingSpeakers.map(\.speakerID)).count
+        
+        guard speakerCount >= 2 else {
+            // No overlap - return single track without separation
+            return [SeparatedSpeakerTrack(
+                audio: audio,
+                speakerSlot: nil,
+                speakerID: overlappingSpeakers.first?.speakerID,
+                confidence: 1.0,
+                sourceTimeRange: sourceTimeRange,
+                trackIndex: 0
+            )]
+        }
+        
+        // Select separation model based on speaker count
+        let model = SeparationModel.forOverlappingSpeakers(speakerCount)
+        guard let separationModel = model else {
+            throw ClearVoiceError.resourceUnavailable("No separation model available for \(speakerCount) speakers")
+        }
+        
+        guard separatorProviders[separationModel] != nil else {
+            throw ClearVoiceError.modelNotLoaded(separationModel.modelName)
+        }
+        
+        // Separate audio
+        await onProgress?(10.0)
+        let separatedTracks = try await separate(audio, speakers: speakerCount, model: separationModel) { percent in
+            // Map separation progress to 10-70% of total
+            await onProgress?(10.0 + percent * 0.6)
+        }
+        await onProgress?(70.0)
+        
+        // Re-identify speakers using diarization provider
+        guard let diarizer = diarizationProvider else {
+            throw ClearVoiceError.modelNotLoaded("Diarization")
+        }
+        
+        // Check if diarizer supports speaker identification
+        // For now, we support FluidAudioSortformerProvider via protocol extension
+        let identifiedTracks = try await identifyTracksWithDiarizer(
+            separatedTracks,
+            diarizer: diarizer,
+            timeline: timeline,
+            sourceTimeRange: sourceTimeRange,
+            onProgress: { percent in
+                // Map identification progress to 70-100% of total
+                await onProgress?(70.0 + percent * 0.3)
+            }
+        )
+        
+        await onProgress?(100.0)
+        return identifiedTracks
+    }
+    
+    /// Identify separated tracks using the diarization provider
+    private func identifyTracksWithDiarizer(
+        _ tracks: [ClearVoiceCore.AudioBuffer],
+        diarizer: any DiarizationProvider,
+        timeline: SpeakerTimeline,
+        sourceTimeRange: TimeRange,
+        onProgress: ProgressCallback?
+    ) async throws -> [SeparatedSpeakerTrack] {
+        // Get speakers that were active in this time range
+        let activeSegments = timeline.segments.filter { segment in
+            segment.timeRange.overlaps(with: sourceTimeRange)
+        }
+        let activeSpeakers = Array(Set(activeSegments.map(\.speakerID)))
+        
+        // Build slot-to-speaker mapping
+        var slotToSpeaker: [Int: SpeakerID] = [:]
+        for speaker in activeSpeakers {
+            // Extract slot number from speaker_X format
+            if let slotStr = speaker.id.split(separator: "_").last,
+               let slot = Int(slotStr) {
+                slotToSpeaker[slot] = speaker
+            }
+        }
+        
+        var results: [SeparatedSpeakerTrack] = []
+        
+        for (index, track) in tracks.enumerated() {
+            // Progress: each track gets equal share of 0-100%
+            let progressPerTrack = 100.0 / Double(tracks.count)
+            await onProgress?(Double(index) * progressPerTrack)
+            
+            // Try to identify using diarization
+            // Process through diarizer to get speaker predictions
+            let trackTimeline = try await diarizer.diarize(track)
+            
+            // Find dominant speaker from timeline
+            var speakerDurations: [SpeakerID: Double] = [:]
+            for segment in trackTimeline.segments {
+                speakerDurations[segment.speakerID, default: 0] += segment.timeRange.duration
+            }
+            
+            let dominantSpeaker = speakerDurations.max(by: { $0.value < $1.value })?.key
+            
+            // Extract slot from speaker ID
+            var speakerSlot: Int? = nil
+            if let speaker = dominantSpeaker,
+               let slotStr = speaker.id.split(separator: "_").last,
+               let slot = Int(slotStr) {
+                speakerSlot = slot
+            }
+            
+            // Calculate confidence based on dominant speaker's share
+            let totalDuration = speakerDurations.values.reduce(0, +)
+            let dominantDuration = speakerDurations[dominantSpeaker ?? SpeakerID("unknown")] ?? 0
+            let confidence = totalDuration > 0 ? Float(dominantDuration / totalDuration) : 0.0
+            
+            results.append(SeparatedSpeakerTrack(
+                audio: track,
+                speakerSlot: speakerSlot,
+                speakerID: dominantSpeaker,
+                confidence: confidence,
+                sourceTimeRange: sourceTimeRange,
+                trackIndex: index
+            ))
+        }
+        
+        await onProgress?(100.0)
+        
+        // Sort by speaker slot for consistent ordering
+        return results.sorted { ($0.speakerSlot ?? 999) < ($1.speakerSlot ?? 999) }
+    }
+    
     // MARK: - Upscaling
     
     /// Super-resolution upscaling

@@ -10,6 +10,66 @@ import Foundation
 @preconcurrency import FluidAudio
 import ClearVoiceCore
 
+// MARK: - Speaker Identification Types
+
+/// Result of speaker re-identification using preserved Sortformer state
+///
+/// When running a separated audio track through a Sortformer instance that has
+/// previously processed the original audio, the spkcache contains learned speaker
+/// characteristics. The model can then identify which speaker slot the track belongs to.
+///
+/// Example:
+/// ```swift
+/// // 1. Run initial diarization (populates spkcache)
+/// let timeline = try await sortformer.diarize(mixedAudio)
+///
+/// // 2. Separate overlapping speakers
+/// let tracks = try await separator.separate(overlapRegion, speakers: 2)
+///
+/// // 3. Re-identify each track using same Sortformer instance
+/// let id1 = try await sortformer.identifySpeaker(tracks[0])
+/// // id1.speakerSlot == 0, id1.confidence == 0.92
+/// ```
+public struct SpeakerIdentification: Sendable, Equatable {
+    /// The speaker slot this audio belongs to (0-3 for Sortformer)
+    public let speakerSlot: Int
+    
+    /// Confidence score for the identified slot (probability)
+    public let confidence: Float
+    
+    /// Raw probabilities for all speaker slots [numSpeakers]
+    /// For Sortformer: [4] with probabilities for slots 0-3
+    public let allProbabilities: [Float]
+    
+    /// Average probability across all frames (for short segments)
+    /// This is used when the audio produces multiple frames
+    public let averageProbabilities: [Float]?
+    
+    /// Number of frames analyzed
+    public let frameCount: Int
+    
+    public init(
+        speakerSlot: Int,
+        confidence: Float,
+        allProbabilities: [Float],
+        averageProbabilities: [Float]? = nil,
+        frameCount: Int = 1
+    ) {
+        self.speakerSlot = speakerSlot
+        self.confidence = confidence
+        self.allProbabilities = allProbabilities
+        self.averageProbabilities = averageProbabilities
+        self.frameCount = frameCount
+    }
+    
+    /// Check if identification is confident enough to trust
+    /// - Parameter threshold: Minimum confidence threshold (default 0.5)
+    /// - Returns: True if confidence exceeds threshold
+    public func isConfident(threshold: Float = 0.5) -> Bool {
+        confidence >= threshold
+    }
+}
+
 // MARK: - FluidAudio Sortformer Provider
 
 /// Sortformer speaker diarization provider using FluidAudio's SortformerDiarizer
@@ -275,5 +335,209 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, ChunkedProgressP
     /// Reset streaming state for new audio session
     public func resetStreamingState() {
         diarizer?.reset()
+    }
+    
+    // MARK: - Speaker Identification
+    
+    /// Identify which speaker slot a separated audio track belongs to.
+    ///
+    /// This method uses the preserved spkcache from previous diarization to identify
+    /// which speaker slot a new audio segment belongs to. The spkcache contains learned
+    /// speaker characteristics from the initial diarization pass.
+    ///
+    /// **Important:** This method must be called on the same Sortformer instance that
+    /// performed the initial diarization, as it relies on the preserved internal state.
+    ///
+    /// ## Workflow
+    /// 1. Run `diarize()` on full audio → populates spkcache with speaker characteristics
+    /// 2. Separate overlapping regions using MossFormer2
+    /// 3. Call `identifySpeaker()` on each separated track → returns slot assignment
+    ///
+    /// ## Resampling
+    /// The input audio is automatically resampled to 16kHz if needed.
+    /// For separated tracks from WHAMR (8kHz), they will be upsampled.
+    ///
+    /// - Parameter audio: Audio segment to identify (will be resampled to 16kHz)
+    /// - Returns: Speaker identification with slot, confidence, and probabilities
+    /// - Throws: `ClearVoiceError.modelNotLoaded` if Sortformer not initialized
+    ///
+    /// Example:
+    /// ```swift
+    /// // After diarization and separation...
+    /// let identification = try await sortformer.identifySpeaker(separatedTrack)
+    /// print("Track belongs to speaker slot \(identification.speakerSlot)")
+    /// print("Confidence: \(identification.confidence)")
+    /// ```
+    public func identifySpeaker(_ audio: AudioBuffer) async throws -> SpeakerIdentification {
+        guard let diarizer = diarizer, diarizer.isAvailable else {
+            throw ClearVoiceError.modelNotLoaded("FluidAudio Sortformer")
+        }
+        
+        // Resample to 16kHz if needed (e.g., from 8kHz WHAMR output)
+        let inputSamples: [Float]
+        if audio.sampleRate != sampleRate {
+            inputSamples = resampleAudio(audio.samples, fromRate: audio.sampleRate, toRate: sampleRate)
+        } else {
+            inputSamples = audio.samples
+        }
+        
+        // Process the audio through Sortformer
+        // Note: We use processSamples which preserves spkcache state
+        // The diarizer's internal state (spkcache) from previous diarization is maintained
+        let result = try diarizer.processSamples(inputSamples)
+        
+        guard let chunkResult = result else {
+            // Audio too short for full chunk - use batch processing with state preservation
+            return try identifySpeakerBatch(inputSamples)
+        }
+        
+        // Aggregate probabilities across all frames
+        let numSpeakers = 4
+        let frameCount = chunkResult.frameCount
+        
+        // Calculate average probabilities across all frames
+        var avgProbs = [Float](repeating: 0, count: numSpeakers)
+        for frame in 0..<frameCount {
+            for speaker in 0..<numSpeakers {
+                let prob = chunkResult.getSpeakerPrediction(speaker: speaker, frame: frame)
+                avgProbs[speaker] += prob
+            }
+        }
+        
+        // Normalize by frame count
+        if frameCount > 0 {
+            for i in 0..<numSpeakers {
+                avgProbs[i] /= Float(frameCount)
+            }
+        }
+        
+        // Find dominant speaker
+        let maxProb = avgProbs.max() ?? 0
+        let speakerSlot = avgProbs.firstIndex(of: maxProb) ?? 0
+        
+        return SpeakerIdentification(
+            speakerSlot: speakerSlot,
+            confidence: maxProb,
+            allProbabilities: avgProbs,
+            averageProbabilities: avgProbs,
+            frameCount: frameCount
+        )
+    }
+    
+    /// Batch identification for short audio segments
+    ///
+    /// When audio is too short for streaming chunks, use batch processing
+    /// while preserving the spkcache state.
+    private func identifySpeakerBatch(_ samples: [Float]) throws -> SpeakerIdentification {
+        guard let diarizer = diarizer else {
+            throw ClearVoiceError.modelNotLoaded("FluidAudio Sortformer")
+        }
+        
+        // For very short audio, processComplete would reset state
+        // Instead, we pad the audio to minimum length and use streaming mode
+        let numSpeakers = 4
+        let minDuration = 0.5 // Minimum 0.5 seconds for reliable identification
+        let minSamples = Int(minDuration * Double(sampleRate))
+        
+        if samples.count < minSamples {
+            // Pad with silence
+            var paddedSamples = samples
+            paddedSamples.append(contentsOf: [Float](repeating: 0, count: minSamples - samples.count))
+            
+            if let result = try diarizer.processSamples(paddedSamples) {
+                let frameCount = result.frameCount
+                var avgProbs = [Float](repeating: 0, count: numSpeakers)
+                
+                for frame in 0..<frameCount {
+                    for speaker in 0..<numSpeakers {
+                        avgProbs[speaker] += result.getSpeakerPrediction(speaker: speaker, frame: frame)
+                    }
+                }
+                
+                if frameCount > 0 {
+                    for i in 0..<numSpeakers {
+                        avgProbs[i] /= Float(frameCount)
+                    }
+                }
+                
+                let maxProb = avgProbs.max() ?? 0
+                let speakerSlot = avgProbs.firstIndex(of: maxProb) ?? 0
+                
+                return SpeakerIdentification(
+                    speakerSlot: speakerSlot,
+                    confidence: maxProb,
+                    allProbabilities: avgProbs,
+                    averageProbabilities: avgProbs,
+                    frameCount: frameCount
+                )
+            }
+        }
+        
+        // Fallback: Return low-confidence identification
+        return SpeakerIdentification(
+            speakerSlot: 0,
+            confidence: 0,
+            allProbabilities: [Float](repeating: 0.25, count: numSpeakers),
+            averageProbabilities: nil,
+            frameCount: 0
+        )
+    }
+    
+    /// Identify multiple separated tracks and return sorted by speaker slot
+    ///
+    /// Convenience method for identifying all tracks from a separation operation.
+    ///
+    /// - Parameter tracks: Array of separated audio tracks
+    /// - Returns: Array of (track, identification) pairs sorted by speaker slot
+    /// - Throws: `ClearVoiceError.modelNotLoaded` if Sortformer not initialized
+    public func identifySpeakers(_ tracks: [AudioBuffer]) async throws -> [(audio: AudioBuffer, identification: SpeakerIdentification)] {
+        var results: [(audio: AudioBuffer, identification: SpeakerIdentification)] = []
+        
+        for track in tracks {
+            let identification = try await identifySpeaker(track)
+            results.append((track, identification))
+        }
+        
+        // Sort by speaker slot for consistent ordering
+        return results.sorted { $0.identification.speakerSlot < $1.identification.speakerSlot }
+    }
+    
+    // MARK: - Private Helpers
+    
+    /// Resample audio samples using linear interpolation
+    ///
+    /// Simple but effective resampling for speaker identification purposes.
+    /// Uses linear interpolation which is sufficient for re-identification
+    /// where we're comparing spectral characteristics, not preserving fidelity.
+    ///
+    /// - Parameters:
+    ///   - samples: Input audio samples
+    ///   - fromRate: Source sample rate
+    ///   - toRate: Target sample rate
+    /// - Returns: Resampled audio samples
+    private nonisolated func resampleAudio(_ samples: [Float], fromRate: Int, toRate: Int) -> [Float] {
+        guard fromRate != toRate else { return samples }
+        guard !samples.isEmpty else { return [] }
+        
+        let ratio = Double(toRate) / Double(fromRate)
+        let newLength = Int(Double(samples.count) * ratio)
+        
+        guard newLength > 0 else { return [] }
+        
+        var resampled = [Float](repeating: 0, count: newLength)
+        
+        for i in 0..<newLength {
+            let sourceIndex = Double(i) / ratio
+            let index = Int(sourceIndex)
+            let fraction = Float(sourceIndex - Double(index))
+            
+            if index < samples.count - 1 {
+                resampled[i] = samples[index] * (1 - fraction) + samples[index + 1] * fraction
+            } else if index < samples.count {
+                resampled[i] = samples[index]
+            }
+        }
+        
+        return resampled
     }
 }

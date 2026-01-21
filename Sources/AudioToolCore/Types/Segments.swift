@@ -203,6 +203,102 @@ public struct SoundClassification: Sendable, Hashable {
     }
 }
 
+// MARK: - Speaker Separation
+
+/// Result of separating overlapping speech with speaker identification
+///
+/// After separating an overlapping region using MossFormer2 or similar,
+/// this type represents a single separated track with its identified speaker.
+///
+/// ## Usage Flow
+/// 1. Run diarization to detect overlap regions
+/// 2. Extract overlap region audio
+/// 3. Run separation model → `[AudioBuffer]`
+/// 4. Re-identify each track → `[SeparatedSpeakerTrack]`
+///
+/// Example:
+/// ```swift
+/// let overlaps = timeline.overlappingRanges()
+/// for range in overlaps {
+///     let overlapAudio = audio.slice(range)
+///     let tracks = try await separator.separate(overlapAudio, speakers: 2)
+///     let identifiedTracks = try await sortformer.identifySpeakers(tracks)
+///     
+///     for (track, id) in identifiedTracks {
+///         let result = SeparatedSpeakerTrack(
+///             audio: track,
+///             speakerSlot: id.speakerSlot,
+///             speakerID: timeline.speakerID(forSlot: id.speakerSlot),
+///             confidence: id.confidence,
+///             sourceTimeRange: range
+///         )
+///     }
+/// }
+/// ```
+public struct SeparatedSpeakerTrack: Sendable, Identifiable {
+    public let id: UUID
+    
+    /// The separated audio for this speaker
+    public let audio: AudioBuffer
+    
+    /// The Sortformer speaker slot (0-3) this track was identified as
+    /// - Note: May be nil if identification failed or wasn't performed
+    public let speakerSlot: Int?
+    
+    /// The speaker ID from diarization (e.g., "speaker_0")
+    /// - Note: May be nil if speaker mapping isn't available
+    public let speakerID: SpeakerID?
+    
+    /// Confidence score for the speaker identification (0.0 - 1.0)
+    public let confidence: Float
+    
+    /// The time range in the original audio where this overlap occurred
+    public let sourceTimeRange: TimeRange
+    
+    /// Track index in the separation output (0, 1, 2...)
+    public let trackIndex: Int
+    
+    public init(
+        id: UUID = UUID(),
+        audio: AudioBuffer,
+        speakerSlot: Int?,
+        speakerID: SpeakerID?,
+        confidence: Float,
+        sourceTimeRange: TimeRange,
+        trackIndex: Int = 0
+    ) {
+        self.id = id
+        self.audio = audio
+        self.speakerSlot = speakerSlot
+        self.speakerID = speakerID
+        self.confidence = confidence
+        self.sourceTimeRange = sourceTimeRange
+        self.trackIndex = trackIndex
+    }
+    
+    /// Check if identification is confident enough to use
+    /// - Parameter threshold: Minimum confidence threshold (default 0.5)
+    /// - Returns: True if speaker identification confidence exceeds threshold
+    public func isConfidentlyIdentified(threshold: Float = 0.5) -> Bool {
+        speakerSlot != nil && confidence >= threshold
+    }
+}
+
+/// Options for handling overlapping speech in pipelines
+public enum OverlapHandling: Sendable, Equatable {
+    /// Skip overlap regions (default behavior)
+    case skip
+    
+    /// Separate overlapping speakers but don't identify them
+    case separate
+    
+    /// Separate and identify speakers using Sortformer re-identification
+    case separateAndIdentify
+    
+    /// Separate, identify, and merge back into timeline
+    case separateIdentifyAndMerge
+}
+
 // MARK: - Translation
 
 /// Translation result
