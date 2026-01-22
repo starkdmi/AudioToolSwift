@@ -1117,6 +1117,20 @@ final class StreamingPipelineTests: XCTestCase {
         XCTAssertNotNil(result.analysis, "Should have diarization")
         XCTAssertNotNil(result.diarizedTranscription, "Should have merged result")
         
+        // Print raw transcription
+        if let transcription = result.transcription {
+            print("\n--- Raw Transcription ---")
+            print("Full text (\(transcription.text.count) chars):")
+            print(transcription.text)
+            print("\nWord segments: \(transcription.segments.count)")
+            if !transcription.segments.isEmpty {
+                print("First 5 segments:")
+                for segment in transcription.segments.prefix(5) {
+                    print("  [\(String(format: "%.2f", segment.timeRange.start))-\(String(format: "%.2f", segment.timeRange.end))]: \"\(segment.text)\"")
+                }
+            }
+        }
+        
         if let diarizedTranscription = result.diarizedTranscription {
             print("\n--- Diarized Transcription ---")
             print("Total segments: \(diarizedTranscription.segments.count)")
@@ -1142,6 +1156,11 @@ final class StreamingPipelineTests: XCTestCase {
             print("Speakers: \(analysis.speakers.speakerCount)")
             print("Segments: \(analysis.speakers.segments.count)")
             print("Max overlap: \(analysis.speakers.maxOverlappingSpeakers)")
+            
+            print("\nFirst 10 diarization segments:")
+            for (idx, segment) in analysis.speakers.segments.prefix(10).enumerated() {
+                print("  [\(idx)] \(segment.speakerID.id): [\(String(format: "%.2f", segment.timeRange.start))-\(String(format: "%.2f", segment.timeRange.end))]s conf=\(String(format: "%.2f", segment.confidence))")
+            }
         }
         
         print("\n✓ Parallel transcription + diarization completed")
@@ -1197,10 +1216,52 @@ final class StreamingPipelineTests: XCTestCase {
         XCTAssertNotNil(result.analysis)
         XCTAssertNotNil(result.diarizedTranscription)
         
+        // Print raw transcription
+        if let transcription = result.transcription {
+            print("\n--- Raw Transcription ---")
+            print("Full text (\(transcription.text.count) chars):")
+            print(transcription.text)
+            print("\nWord segments: \(transcription.segments.count)")
+        }
+        
+        // Print diarization details
+        if let analysis = result.analysis {
+            print("\n--- Diarization Summary ---")
+            print("Speakers: \(analysis.speakers.speakerCount)")
+            print("Segments: \(analysis.speakers.segments.count)")
+            print("\nFirst 10 diarization segments:")
+            for (idx, segment) in analysis.speakers.segments.prefix(10).enumerated() {
+                print("  [\(idx)] \(segment.speakerID.id): [\(String(format: "%.2f", segment.timeRange.start))-\(String(format: "%.2f", segment.timeRange.end))]s")
+            }
+        }
+        
         if let diarizedTranscription = result.diarizedTranscription {
+            print("\n--- Diarized Transcription ---")
             print("Segments: \(diarizedTranscription.segments.count)")
             print("Speakers: \(diarizedTranscription.speakerCount)")
             print("Overlaps: \(diarizedTranscription.uncertainSegments().count)")
+            
+            // Print first 15 segments with speaker attribution
+            print("\nFirst 15 diarized segments:")
+            for (idx, segment) in diarizedTranscription.segments.prefix(15).enumerated() {
+                let speaker = segment.speakerID?.id ?? "?"
+                let timeRange = "[\(String(format: "%.2f", segment.timeRange.start))-\(String(format: "%.2f", segment.timeRange.end))]"
+                let confidence = String(format: "%.0f%%", segment.attributionConfidence * 100)
+                let overlap = segment.isOverlapRegion ? " [OVERLAP]" : ""
+                print("  [\(idx)] \(speaker) \(timeRange) (\(confidence)): \"\(segment.text)\"\(overlap)")
+            }
+            
+            // Group by speaker and show sample from each
+            print("\nSample from each speaker:")
+            var seenSpeakers = Set<String>()
+            for segment in diarizedTranscription.segments {
+                let speakerID = segment.speakerID?.id ?? "?"
+                if !seenSpeakers.contains(speakerID) && speakerID != "?" {
+                    seenSpeakers.insert(speakerID)
+                    let timeRange = "[\(String(format: "%.2f", segment.timeRange.start))-\(String(format: "%.2f", segment.timeRange.end))]"
+                    print("  \(speakerID) \(timeRange): \"\(segment.text)\"")
+                }
+            }
         }
         
         print("✓ Parallel transcription + diarization (Pyannote) completed")

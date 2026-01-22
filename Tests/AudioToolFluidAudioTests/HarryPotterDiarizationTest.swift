@@ -85,4 +85,50 @@ final class HarryPotterDiarizationTest: XCTestCase {
         print("✓ Harry Potter diarization test passed")
         print("  Detected \(result.speakerCount) of expected ~10 speakers")
     }
+    
+    /// Compare URL vs AudioBuffer diarization to check for differences
+    func testCompareURLvsAudioBuffer() async throws {
+        print("\n=== URL vs AudioBuffer Comparison ===\n")
+        
+        let testURL = URL(fileURLWithPath: "\(Self.projectRoot)/Docs/harry_potter.wav")
+        
+        // Load audio
+        let loader = AudioLoader(config: AudioLoader.Configuration(
+            targetSampleRate: 16000,
+            normalizationMode: .none
+        ))
+        let audio = try loader.loadMono(from: testURL)
+        eval(audio)
+        let samples = audio.asArray(Float.self)
+        let audioBuffer = AudioBuffer(samples: samples, sampleRate: 16000, channels: 1)
+        
+        print("Samples: \(samples.count), Duration: \(String(format: "%.1f", Double(samples.count)/16000.0))s")
+        print("Sample range: min=\(String(format: "%.4f", samples.min()!)), max=\(String(format: "%.4f", samples.max()!))\n")
+        
+        // Test 1: URL-based with default threshold
+        print("--- Test 1: URL-based (default threshold) ---")
+        let diarizer1 = FluidAudioProviders.pyannote()
+        try await diarizer1.load()
+        let result1 = try await diarizer1.diarize(url: testURL)
+        print("Speakers: \(result1.speakerCount), Segments: \(result1.segments.count)")
+        
+        // Test 2: AudioBuffer with default threshold
+        print("\n--- Test 2: AudioBuffer (default threshold) ---")
+        let diarizer2 = FluidAudioProviders.pyannote()
+        try await diarizer2.load()
+        let result2 = try await diarizer2.diarize(audioBuffer)
+        print("Speakers: \(result2.speakerCount), Segments: \(result2.segments.count)")
+        
+        // Test 3: AudioBuffer with threshold=0.6
+        print("\n--- Test 3: AudioBuffer (threshold=0.6) ---")
+        let diarizer3 = FluidAudioProviders.pyannote(threshold: 0.6)
+        try await diarizer3.load()
+        let result3 = try await diarizer3.diarize(audioBuffer)
+        print("Speakers: \(result3.speakerCount), Segments: \(result3.segments.count)")
+        
+        print("\n=== Summary ===")
+        print("URL (default):        \(result1.speakerCount) speakers")
+        print("AudioBuffer (default): \(result2.speakerCount) speakers")
+        print("AudioBuffer (0.6):     \(result3.speakerCount) speakers")
+    }
 }
