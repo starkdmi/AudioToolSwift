@@ -59,9 +59,9 @@ public actor FluidAudioTranscriber: Transcriber {
     
     // MARK: - Transcriber Conformance
     
-    /// Transcribe audio to text
+    /// Transcribe audio to text with word-level timing
     /// - Parameter audio: Input audio buffer (16kHz mono expected)
-    /// - Returns: Transcription with text
+    /// - Returns: Transcription with text and word-level segments
     public func transcribe(_ audio: AudioBuffer) async throws -> Transcription {
         guard let manager = asrManager else {
             throw ClearVoiceError.modelNotLoaded("FluidAudio ASR")
@@ -69,24 +69,42 @@ public actor FluidAudioTranscriber: Transcriber {
         
         let result = try await manager.transcribe(audio.samples)
         
-        // FluidAudio ASRResult has .text property
-        // Segments with timestamps may require additional configuration
+        // Convert FluidAudio tokenTimings -> word-level segments
+        let segments = buildSegmentsFromTokenTimings(result.tokenTimings)
+        
         return Transcription(
             text: result.text,
-            segments: [],  // Basic implementation - segments require additional API
+            segments: segments,
             language: nil  // Language detection not exposed in basic API
         )
+    }
+    
+    /// Build TranscriptionSegments from FluidAudio token timings
+    private func buildSegmentsFromTokenTimings(_ tokenTimings: [TokenTiming]?) -> [TranscriptionSegment] {
+        guard let tokenTimings = tokenTimings, !tokenTimings.isEmpty else {
+            return []
+        }
+        
+        let wordTimings = WordTimingMerger.mergeTokensIntoWords(tokenTimings)
+        return wordTimings.map { word in
+            TranscriptionSegment(
+                text: word.word,
+                timeRange: TimeRange(start: word.startTime, end: word.endTime),
+                speakerID: nil,
+                confidence: word.confidence
+            )
+        }
     }
     
     /// Stream transcription segments from audio stream.
     ///
     /// - Important: FluidAudio ASR is batch-oriented and requires complete audio.
     ///   This implementation buffers the entire input stream before processing,
-    ///   so it does not provide true real-time streaming. A single segment is
+    ///   so it does not provide true real-time streaming. Word-level segments are
     ///   emitted after the input stream completes.
     ///
     /// - Parameter audio: Async stream of audio chunks
-    /// - Returns: Stream of transcription segments
+    /// - Returns: Stream of word-level transcription segments
     public nonisolated func streamTranscription(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -106,15 +124,29 @@ public actor FluidAudioTranscriber: Transcriber {
                 do {
                     let result = try await manager.transcribe(allSamples)
                     
-                    // Emit as single segment for basic implementation
-                    let duration = Double(allSamples.count) / 16000.0
-                    let segment = TranscriptionSegment(
-                        text: result.text,
-                        timeRange: TimeRange(start: 0, end: duration),
-                        speakerID: nil,
-                        confidence: 1.0
-                    )
-                    continuation.yield(segment)
+                    // Emit word-level segments if token timings available
+                    if let tokenTimings = result.tokenTimings, !tokenTimings.isEmpty {
+                        let wordTimings = WordTimingMerger.mergeTokensIntoWords(tokenTimings)
+                        for word in wordTimings {
+                            let segment = TranscriptionSegment(
+                                text: word.word,
+                                timeRange: TimeRange(start: word.startTime, end: word.endTime),
+                                speakerID: nil,
+                                confidence: word.confidence
+                            )
+                            continuation.yield(segment)
+                        }
+                    } else {
+                        // Fallback: emit as single segment
+                        let duration = Double(allSamples.count) / 16000.0
+                        let segment = TranscriptionSegment(
+                            text: result.text,
+                            timeRange: TimeRange(start: 0, end: duration),
+                            speakerID: nil,
+                            confidence: 1.0
+                        )
+                        continuation.yield(segment)
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -132,9 +164,9 @@ public actor FluidAudioTranscriber: Transcriber {
     
     // MARK: - Progress-Aware Transcription
     
-    /// Transcribe with progress reporting
+    /// Transcribe with progress reporting and word-level timing
     /// Since FluidAudio ASR is batch-oriented, this reports:
-    /// - 0% at start, 50% when processing starts, 100% when complete
+    /// - 0% at start, 90% when processing completes, 100% after segment building
     /// For real per-segment progress, use streaming API or pre-segmented audio
     public func transcribe(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> Transcription {
         guard let manager = asrManager else {
@@ -150,10 +182,13 @@ public actor FluidAudioTranscriber: Transcriber {
         // Report near-complete
         await onProgress?(90.0)
         
+        // Convert FluidAudio tokenTimings -> word-level segments
+        let segments = buildSegmentsFromTokenTimings(result.tokenTimings)
+        
         // Build transcription result
         let transcription = Transcription(
             text: result.text,
-            segments: [],  // Basic implementation - segments require additional API
+            segments: segments,
             language: nil  // Language detection not exposed in basic API
         )
         
