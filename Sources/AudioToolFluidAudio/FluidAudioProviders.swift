@@ -75,8 +75,11 @@ public struct FluidAudioProviders {
     /// - >4 speakers scenarios
     /// - Non-English audio
     /// - Fine-tuned clustering control
-    public static func sortformer(config: SortformerConfig = .default) -> FluidAudioSortformerProvider {
-        FluidAudioSortformerProvider(config: config)
+    public static func sortformer(
+        config: SortformerConfig = .default,
+        preprocessNormalization: PreprocessNormalization = .none
+    ) -> FluidAudioSortformerProvider {
+        FluidAudioSortformerProvider(config: config, preprocessNormalization: preprocessNormalization)
     }
     
     // MARK: - Sortformer Latency Presets
@@ -97,9 +100,14 @@ public struct FluidAudioProviders {
     /// - Live audio processing
     /// - Low-latency applications
     ///
+    /// - Parameters:
+    ///   - preprocessNormalization: Audio normalization before processing.
+    ///     Use `.peak(targetDB: -3)` or `.rms(targetDB: -20)` for quiet recordings.
     /// - Returns: Sortformer provider configured for low latency streaming
-    public static func sortformerLowLatency() -> FluidAudioSortformerProvider {
-        FluidAudioSortformerProvider(config: .default)
+    public static func sortformerLowLatency(
+        preprocessNormalization: PreprocessNormalization = .none
+    ) -> FluidAudioSortformerProvider {
+        FluidAudioSortformerProvider(config: .default, preprocessNormalization: preprocessNormalization)
     }
     
     /// Create Sortformer with high latency (~30.4s) configuration for best quality
@@ -121,9 +129,14 @@ public struct FluidAudioProviders {
     /// - Maximum accuracy scenarios
     /// - When latency is not a concern
     ///
+    /// - Parameters:
+    ///   - preprocessNormalization: Audio normalization before processing.
+    ///     Use `.peak(targetDB: -3)` or `.rms(targetDB: -20)` for quiet recordings.
     /// - Returns: Sortformer provider configured for high latency (best quality)
-    public static func sortformerHighLatency() -> FluidAudioSortformerProvider {
-        FluidAudioSortformerProvider(config: .nvidiaHighLatency)
+    public static func sortformerHighLatency(
+        preprocessNormalization: PreprocessNormalization = .none
+    ) -> FluidAudioSortformerProvider {
+        FluidAudioSortformerProvider(config: .nvidiaHighLatency, preprocessNormalization: preprocessNormalization)
     }
     
     /// Create Sortformer with NVIDIA's low latency configuration
@@ -138,9 +151,14 @@ public struct FluidAudioProviders {
     /// - Warning: This configuration may require a specially converted CoreML model.
     ///   Use `sortformerLowLatency()` for the safest default behavior.
     ///
+    /// - Parameters:
+    ///   - preprocessNormalization: Audio normalization before processing.
+    ///     Use `.peak(targetDB: -3)` or `.rms(targetDB: -20)` for quiet recordings.
     /// - Returns: Sortformer provider with NVIDIA's low latency configuration
-    public static func sortformerNVIDIALowLatency() -> FluidAudioSortformerProvider {
-        FluidAudioSortformerProvider(config: .nvidiaLowLatency)
+    public static func sortformerNVIDIALowLatency(
+        preprocessNormalization: PreprocessNormalization = .none
+    ) -> FluidAudioSortformerProvider {
+        FluidAudioSortformerProvider(config: .nvidiaLowLatency, preprocessNormalization: preprocessNormalization)
     }
 }
 

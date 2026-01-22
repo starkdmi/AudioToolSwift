@@ -83,7 +83,7 @@ func printUsage() {
 }
 
 // Validate input (skip for TTS which doesn't need input audio)
-let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix", "voice_match", "voicematch", "match", "chatterbox", "chatterbox_expressive", "chatterbox_vad", "cb_vad", "vad_test"]
+let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix", "voice_match", "voicematch", "match", "chatterbox", "chatterbox_expressive", "chatterbox_vad", "cb_vad", "vad_test", "meeting", "meeting_test", "diarization_test"]
 guard !inputPath.isEmpty || ttsModels.contains(model.lowercased()) else {
     print("Error: Input path required (--input)")
     printUsage()
@@ -755,6 +755,8 @@ Task {
         #endif
         case "streaming_verify", "stream_test", "verify_stream":
             try await runStreamingVerification(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
+        case "meeting", "meeting_test", "diarization_test":
+            await runMeetingTest()
         default:
             print("Unknown model: \(model)")
             print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, streaming_verify, kokoro, voice_mix, voice_match, chatterbox, chatterbox_expressive, transcribe")

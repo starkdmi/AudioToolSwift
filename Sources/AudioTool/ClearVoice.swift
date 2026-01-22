@@ -388,58 +388,30 @@ public actor ClearVoice {
         return outputs
     }
     
-    // MARK: - Speaker Separation with Re-identification
+    // MARK: - Speaker Separation with Re-identification (NOT YET WORKING)
     
-    /// Separate overlapping speech and identify speakers using Sortformer re-identification.
+    /// Separate and identify speakers in overlapping audio
     ///
-    /// This is the core method for handling overlapping speech regions. It:
-    /// 1. Uses MossFormer2 to separate the mixed audio into individual speaker tracks
-    /// 2. Uses the same Sortformer instance (with preserved spkcache) to re-identify speakers
-    /// 3. Maps speaker slots to speaker IDs from the original diarization
+    /// - Warning: **Re-identification is unreliable.** Speaker re-identification after separation
+    /// fails because the diarizer's speaker cache (spkcache) is contaminated with mixture audio
+    /// during overlap periods. The separated clean audio doesn't match the contaminated cache.
     ///
-    /// ## Workflow
-    /// ```
-    /// Original audio → Sortformer diarization (populates spkcache)
-    /// Overlap region → MossFormer2 separation → Track A, Track B
-    /// Track A → Sortformer re-identification → Speaker slot 0
-    /// Track B → Sortformer re-identification → Speaker slot 1
-    /// ```
+    /// Current status: Separation works, but speaker IDs may be incorrect.
+    /// Use `separate(_:speakers:model:)` directly and assign speakers manually.
     ///
-    /// ## Requirements
-    /// - Diarization provider must be FluidAudioSortformerProvider
-    /// - Separation model must be registered (WHAMR for 2 speakers, 3spk for 3 speakers)
-    /// - The same Sortformer instance must have processed the original audio
+    /// ## The Problem
+    /// During diarization, the spkcache learns speaker characteristics from:
+    /// - Single-speaker segments: Clean embeddings ✓
+    /// - Overlapping segments: **Mixture** embeddings ✗ (contaminated)
     ///
-    /// - Parameters:
-    ///   - audio: Mixed audio from overlap region
-    ///   - timeline: Diarization timeline (for speaker ID mapping)
-    ///   - sourceTimeRange: Time range in original audio where this overlap occurred
-    ///   - onProgress: Optional progress callback
-    /// - Returns: Array of separated tracks with speaker identification
-    /// - Throws: `ClearVoiceError` if models not loaded or separation fails
+    /// After separation, we have clean single-speaker audio, but the reference embeddings
+    /// in spkcache are contaminated with mixture during those exact time periods.
     ///
-    /// Example:
-    /// ```swift
-    /// // 1. Diarize full audio
-    /// let timeline = try await voice.diarize(audio)
-    ///
-    /// // 2. Find overlaps and separate/identify each
-    /// for range in timeline.overlappingRanges() {
-    ///     let overlapAudio = audio.slice(range)
-    ///     let speakerCount = timeline.speakersAt(range).count
-    ///     
-    ///     let tracks = try await voice.separateAndIdentify(
-    ///         overlapAudio,
-    ///         timeline: timeline,
-    ///         sourceTimeRange: range
-    ///     )
-    ///     
-    ///     for track in tracks {
-    ///         print("Speaker \(track.speakerID!): \(track.audio.duration)s")
-    ///     }
-    /// }
-    /// ```
-    public func separateAndIdentify(
+    /// ## Possible Solutions (not yet implemented)
+    /// - Extract speaker embeddings from non-overlapping segments only
+    /// - Use a separate embedding model (WeSpeaker) with clean reference samples
+    /// - Modify FluidAudio to support spkcache save/restore
+    private func separateAndIdentify(
         _ audio: ClearVoiceCore.AudioBuffer,
         timeline: SpeakerTimeline,
         sourceTimeRange: TimeRange,
@@ -529,9 +501,9 @@ public actor ClearVoice {
         
         var results: [SeparatedSpeakerTrack] = []
         
-        // Check if diarizer supports direct speaker identification (preserves spkcache)
+        // Check if diarizer supports direct speaker identification
         if let identifier = diarizer as? SpeakerIdentifier {
-            // Use identifySpeaker() which preserves internal state
+            // Try identifySpeaker() first
             for (index, track) in tracks.enumerated() {
                 let progressPerTrack = 100.0 / Double(tracks.count)
                 await onProgress?(Double(index) * progressPerTrack)
@@ -548,6 +520,18 @@ public actor ClearVoice {
                     sourceTimeRange: sourceTimeRange,
                     trackIndex: index
                 ))
+            }
+            
+            // Check if identification worked:
+            // 1. All tracks should be matched to active speakers
+            // 2. No duplicate assignments (multiple tracks assigned to same speaker)
+            // NOTE: Re-identification is unreliable because the diarizer's spkcache
+            // is contaminated with mixture audio during overlap periods.
+            // For now, we just return what Sortformer gives, even if incomplete.
+            let matchedCount = results.filter { $0.speakerID != nil }.count
+            if matchedCount < tracks.count {
+                // Some tracks couldn't be identified - this is expected with current limitations
+                // Log for debugging but don't try unprofessional heuristics
             }
         } else {
             // Fallback: Use diarize() (may reset state, less accurate)
@@ -1198,19 +1182,25 @@ public actor ClearVoice {
                             allIdentifiedTracks.append(separatedTrack)
                         }
                     } else {
-                        // Separate and identify
-                        let identifiedTracks = try await separateAndIdentify(
-                            overlapAudio,
-                            timeline: timeline,
-                            sourceTimeRange: overlapRange
-                        )
+                        // .separateAndIdentify or .separateIdentifyAndMerge requested
+                        // Note: Re-identification is currently unreliable because spkcache is
+                        // contaminated with mixture audio during overlap periods.
+                        // For now, we just separate without reliable speaker identification.
+                        let model = SeparationModel.forOverlappingSpeakers(speakerCount)!
+                        let tracks = try await separate(overlapAudio, speakers: speakerCount, model: model)
                         
-                        // Emit track identified events
-                        for track in identifiedTracks {
-                            await eventHandler?(.trackIdentified(track: track))
+                        for (trackIdx, track) in tracks.enumerated() {
+                            let separatedTrack = SeparatedSpeakerTrack(
+                                audio: track,
+                                speakerSlot: nil,
+                                speakerID: nil,  // Cannot reliably identify - see note above
+                                confidence: 0,
+                                sourceTimeRange: overlapRange,
+                                trackIndex: trackIdx
+                            )
+                            allIdentifiedTracks.append(separatedTrack)
+                            await eventHandler?(.trackIdentified(track: separatedTrack))
                         }
-                        
-                        allIdentifiedTracks.append(contentsOf: identifiedTracks)
                     }
                     
                     let overlapProgress = Double(idx + 1) / Double(overlaps.count) * 100.0

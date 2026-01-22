@@ -687,3 +687,43 @@ public enum AudioSource: Sendable {
     // case microphone
     // case stream(AsyncStream<AudioBuffer>)
 }
+
+// MARK: - Preprocessing Normalization
+
+/// Audio preprocessing normalization modes
+///
+/// Some models (like Sortformer) don't normalize audio internally and expect
+/// input at reasonable recording levels. For quiet recordings (e.g., meeting
+/// recordings at -45 LUFS), preprocessing normalization can improve results.
+///
+/// ## Usage
+/// ```swift
+/// // For quiet meeting recordings
+/// let provider = FluidAudioProviders.sortformerLowLatency(
+///     preprocessNormalization: .peak(targetDB: -3)
+/// )
+///
+/// // For broadcast-level normalization
+/// let provider = FluidAudioProviders.sortformerLowLatency(
+///     preprocessNormalization: .rms(targetDB: -20)
+/// )
+/// ```
+public enum PreprocessNormalization: Sendable, Hashable {
+    /// No preprocessing normalization (default)
+    /// Use when input audio is already at reasonable levels
+    case none
+    
+    /// Peak normalization - scale so maximum sample reaches target dB
+    /// - Parameter targetDB: Target peak level in dB (e.g., -3.0 for -3 dBFS)
+    ///
+    /// Fast and simple. Good for avoiding clipping but doesn't account
+    /// for perceived loudness.
+    case peak(targetDB: Float)
+    
+    /// RMS normalization - scale based on root-mean-square energy
+    /// - Parameter targetDB: Target RMS level in dB (e.g., -20.0)
+    ///
+    /// Better for matching perceived loudness across different recordings.
+    /// Typical speech is around -20 to -16 dBFS RMS.
+    case rms(targetDB: Float)
+}

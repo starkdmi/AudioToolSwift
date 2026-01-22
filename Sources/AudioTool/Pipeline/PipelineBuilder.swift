@@ -153,38 +153,41 @@ public struct PipelineBuilder: Sendable {
     ///
     /// ## Events Emitted
     /// - `.overlapDetected(timeRange:speakerCount:)` for each overlap region
-    /// - `.trackIdentified(track:)` for each successfully identified track
+    /// - `.trackIdentified(track:)` for each separated track
+    ///
+    /// - Note: Speaker re-identification after separation is not yet implemented.
+    ///   Tracks are returned without speaker IDs. Use `.separate` mode (default).
     ///
     /// Example:
     /// ```swift
     /// let result = try await voice.pipeline()
     ///     .detect(.silero)
     ///     .diarize()
-    ///     .separateOverlap(.separateAndIdentify)
+    ///     .separateOverlap(.separate)
     ///     .transcribe(.parakeet)
     ///     .onEvent { event in
     ///         switch event {
     ///         case .overlapDetected(let range, let count):
     ///             print("Overlap at \(range): \(count) speakers")
     ///         case .trackIdentified(let track):
-    ///             print("Track identified: Speaker \(track.speakerSlot!)")
+    ///             print("Separated track \(track.trackIndex)")
     ///         default: break
     ///         }
     ///     }
     ///     .process(audio: audio)
     ///
-    /// // Access identified tracks
+    /// // Access separated tracks (without speaker IDs)
     /// for track in result.identifiedTracks ?? [] {
-    ///     print("Speaker \(track.speakerID!): \(track.audio.duration)s")
+    ///     print("Track \(track.trackIndex): \(track.audio.duration)s")
     /// }
     /// ```
     ///
     /// - Parameters:
-    ///   - handling: How to handle overlaps (default: `.separateAndIdentify`)
+    ///   - handling: How to handle overlaps (default: `.separate`)
     ///   - useOriginal: Use original audio (true) or enhanced audio (false)
     /// - Returns: Updated pipeline builder
     public func separateOverlap(
-        _ handling: OverlapHandling = .separateAndIdentify,
+        _ handling: OverlapHandling = .separate,
         useOriginal: Bool = true
     ) -> PipelineBuilder {
         var builder = self

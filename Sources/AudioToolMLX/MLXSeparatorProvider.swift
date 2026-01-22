@@ -142,7 +142,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     }
     
     /// Separate mixed audio into speaker streams
-    /// Output is peak-normalized to 1.0 like the original model
+    /// Output is RMS-normalized to match input energy (ClearVoice PyTorch behavior)
     public func separate(_ audio: AudioBuffer, speakers: Int) async throws -> [AudioBuffer] {
         try await separate(audio, speakers: speakers, onProgress: nil)
     }
@@ -174,13 +174,26 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
             results = try await processChunk(audio.samples)
         }
         
-        // Normalize each speaker's output to peak 1.0 (like original model)
+        // RMS normalization: match output energy to input energy (ClearVoice PyTorch behavior)
+        // This preserves the relative loudness of each separated source
+        let inputRMS = sqrt(audio.samples.map { $0 * $0 }.reduce(0, +) / Float(audio.samples.count))
+        
         let normalized = results.map { buffer in
-            let audioMLX = MLXArray(buffer.samples)
-            let normalizedMLX = normalizeToPeak(audioMLX, targetPeak: 1.0)
-            eval(normalizedMLX)
+            let samples = buffer.samples
+            let outputRMS = sqrt(samples.map { $0 * $0 }.reduce(0, +) / Float(samples.count))
+            
+            // Scale output to match input RMS (energy preservation)
+            let scale = outputRMS > 1e-8 ? inputRMS / outputRMS : 1.0
+            var scaled = samples.map { $0 * scale }
+            
+            // Clip if needed to prevent overflow
+            let maxVal = scaled.map { abs($0) }.max() ?? 0.0
+            if maxVal > 1.0 {
+                scaled = scaled.map { $0 / maxVal }
+            }
+            
             return AudioBuffer(
-                samples: normalizedMLX.asArray(Float.self),
+                samples: scaled,
                 sampleRate: buffer.sampleRate,
                 channels: buffer.channels
             )

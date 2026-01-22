@@ -308,17 +308,24 @@ public struct SeparatedSpeakerTrack: Sendable, Identifiable {
 }
 
 /// Options for handling overlapping speech in pipelines
+///
+/// - Note: Speaker re-identification after separation is currently not reliable.
+///   The diarizer's speaker cache is contaminated with mixture audio during overlap
+///   periods, so matching separated clean audio back to original speakers fails.
+///   All modes except `.skip` will separate audio but return tracks without speaker IDs.
 public enum OverlapHandling: Sendable, Equatable {
     /// Skip overlap regions (default behavior)
     case skip
     
-    /// Separate overlapping speakers but don't identify them
+    /// Separate overlapping speakers into individual tracks (without speaker identification)
     case separate
     
-    /// Separate and identify speakers using Sortformer re-identification
+    /// Separate speakers (re-identification not yet implemented - tracks returned without speaker IDs)
+    @available(*, deprecated, message: "Re-identification not yet implemented. Use .separate instead.")
     case separateAndIdentify
     
-    /// Separate, identify, and merge back into timeline
+    /// Separate speakers (re-identification not yet implemented - tracks returned without speaker IDs)
+    @available(*, deprecated, message: "Re-identification not yet implemented. Use .separate instead.")
     case separateIdentifyAndMerge
 }
 

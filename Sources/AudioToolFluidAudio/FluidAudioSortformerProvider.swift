@@ -65,6 +65,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     
     private var diarizer: SortformerDiarizer?
     private let config: SortformerConfig
+    private let preprocessNormalization: PreprocessNormalization
     
     // MARK: - Public Properties
     
@@ -88,9 +89,15 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     // MARK: - Initialization
     
     /// Initialize Sortformer diarization provider
-    /// - Parameter config: Sortformer configuration (default for low latency)
-    public init(config: SortformerConfig = .default) {
+    /// - Parameters:
+    ///   - config: Sortformer configuration (default for low latency)
+    ///   - preprocessNormalization: Audio normalization before processing (default: .none)
+    public init(
+        config: SortformerConfig = .default,
+        preprocessNormalization: PreprocessNormalization = .none
+    ) {
         self.config = config
+        self.preprocessNormalization = preprocessNormalization
     }
     
     /// Load the Sortformer models (downloads from HuggingFace if needed)
@@ -207,8 +214,11 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
             throw ClearVoiceError.modelNotLoaded("FluidAudio Sortformer")
         }
         
+        // Apply preprocessing normalization if configured
+        let processedSamples = applyPreprocessNormalization(samples)
+        
         // Use batch processing for complete audio
-        let timeline = try diarizer.processComplete(samples)
+        let timeline = try diarizer.processComplete(processedSamples)
         
         // Convert Sortformer timeline to ClearVoice DiarizedSegment format
         // Sortformer timeline.segments is [[SortformerSegment]] - array per speaker
@@ -228,6 +238,44 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         segments.sort { $0.timeRange.start < $1.timeRange.start }
         
         return SpeakerTimeline(segments: segments)
+    }
+    
+    /// Apply preprocessing normalization to audio samples
+    private func applyPreprocessNormalization(_ samples: [Float]) -> [Float] {
+        switch preprocessNormalization {
+        case .none:
+            return samples
+            
+        case .peak(let targetDB):
+            // Peak normalization: scale so max sample reaches targetDB
+            let maxSample = samples.map { abs($0) }.max() ?? 0.0
+            guard maxSample > 0 else { return samples }
+            
+            // Convert targetDB to linear scale (targetDB is relative to 1.0)
+            let targetLinear = pow(10.0, targetDB / 20.0)
+            let scale = targetLinear / maxSample
+            return samples.map { $0 * scale }
+            
+        case .rms(let targetDB):
+            // RMS normalization: scale based on root-mean-square energy
+            let sumSquares = samples.reduce(0.0) { $0 + $1 * $1 }
+            let rms = sqrt(sumSquares / Float(samples.count))
+            guard rms > 0 else { return samples }
+            
+            // Convert targetDB to linear scale
+            let targetLinear = pow(10.0, targetDB / 20.0)
+            let scale = targetLinear / rms
+            
+            // Apply scaling but prevent clipping
+            var normalized = samples.map { $0 * scale }
+            let maxAfter = normalized.map { abs($0) }.max() ?? 0.0
+            if maxAfter > 1.0 {
+                // Reduce gain to prevent clipping
+                let clipScale = 0.99 / maxAfter
+                normalized = normalized.map { $0 * clipScale }
+            }
+            return normalized
+        }
     }
     
     // MARK: - AudioProcessor Conformance
