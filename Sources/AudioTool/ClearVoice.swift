@@ -1487,10 +1487,39 @@ public actor ClearVoice {
                 if !stagesToRun.isEmpty {
                     var subBuilder = PipelineBuilder(voice: self)
                     subBuilder.stages = stagesToRun
-                    result = try await executePipeline(subBuilder, audio: context.currentAudio, eventHandler: eventHandler)
+                    let subResult = try await executePipeline(subBuilder, audio: context.currentAudio, eventHandler: eventHandler)
+                    
+                    // Merge AnalysisResult components (preserve VAD segments and diarization speakers)
+                    let mergedAnalysis: AnalysisResult?
+                    if let subAnalysis = subResult.analysis {
+                        if let existingAnalysis = result.analysis {
+                            mergedAnalysis = AnalysisResult(
+                                segments: existingAnalysis.segments.isEmpty ? subAnalysis.segments : existingAnalysis.segments,
+                                speakers: existingAnalysis.speakers.segments.isEmpty ? subAnalysis.speakers : existingAnalysis.speakers
+                            )
+                        } else {
+                            mergedAnalysis = subAnalysis
+                        }
+                    } else {
+                        mergedAnalysis = result.analysis
+                    }
+                    
+                    // Merge results, preserving existing values when sub-pipeline doesn't produce them
+                    result = PipelineResult(
+                        audio: subResult.audio ?? result.audio,
+                        separatedTracks: subResult.separatedTracks ?? result.separatedTracks,
+                        identifiedTracks: subResult.identifiedTracks ?? result.identifiedTracks,
+                        ussSeparated: subResult.ussSeparated ?? result.ussSeparated,
+                        transcription: subResult.transcription ?? result.transcription,
+                        diarizedTranscription: subResult.diarizedTranscription ?? result.diarizedTranscription,
+                        classifications: subResult.classifications ?? result.classifications,
+                        analysis: mergedAnalysis,
+                        metrics: result.metrics
+                    )
+                    
                     if let audio = result.audio {
                         context = PipelineContext(
-                            analysis: result.analysis ?? context.analysis,
+                            analysis: mergedAnalysis ?? context.analysis,
                             currentAudio: audio,
                             originalAudio: context.originalAudio
                         )
