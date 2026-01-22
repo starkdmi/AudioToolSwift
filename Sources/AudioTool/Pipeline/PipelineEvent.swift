@@ -36,6 +36,9 @@ public enum PipelineEvent: Sendable {
     /// Transcription segment recognized
     case transcriptionSegment(TranscriptionSegment)
     
+    /// Diarized transcription segment (with speaker attribution)
+    case diarizedTranscriptionSegment(DiarizedTranscriptSegment)
+    
     /// Sound classified
     case classificationResult(SoundClassification)
     
@@ -89,6 +92,10 @@ public struct PipelineResult: Sendable {
     /// Transcription result (if transcription was used)
     public let transcription: Transcription?
     
+    /// Diarized transcription (transcription merged with speaker timeline)
+    /// Created by `.mergeTranscriptionWithDiarization()` stage
+    public let diarizedTranscription: DiarizedTranscription?
+    
     /// Sound classifications (if classification was used)
     public let classifications: [SoundClassification]?
     
@@ -104,6 +111,7 @@ public struct PipelineResult: Sendable {
         identifiedTracks: [SeparatedSpeakerTrack]? = nil,
         ussSeparated: [USSSoundType: AudioBuffer]? = nil,
         transcription: Transcription? = nil,
+        diarizedTranscription: DiarizedTranscription? = nil,
         classifications: [SoundClassification]? = nil,
         analysis: AnalysisResult? = nil,
         metrics: PipelineMetrics = PipelineMetrics()
@@ -113,6 +121,7 @@ public struct PipelineResult: Sendable {
         self.identifiedTracks = identifiedTracks
         self.ussSeparated = ussSeparated
         self.transcription = transcription
+        self.diarizedTranscription = diarizedTranscription
         self.classifications = classifications
         self.analysis = analysis
         self.metrics = metrics

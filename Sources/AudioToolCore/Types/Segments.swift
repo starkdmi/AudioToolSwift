@@ -385,6 +385,136 @@ public struct SpeakerIdentification: Sendable, Equatable {
     }
 }
 
+// MARK: - Diarized Transcription
+
+/// Complete transcription result with speaker attribution
+///
+/// Created by merging a `Transcription` with a `SpeakerTimeline` using timestamp alignment.
+/// Each segment is assigned to the speaker with the most overlap at that time range.
+///
+/// Example:
+/// ```swift
+/// let result = try await voice.pipeline()
+///     .parallel {[
+///         PipelineBuilder().transcribe(.whisperLarge),
+///         PipelineBuilder().diarize()
+///     ]}
+///     .mergeTranscriptionWithDiarization()
+///     .process(audio: audio)
+///
+/// for segment in result.diarizedTranscription?.segments ?? [] {
+///     print("\(segment.speakerID?.id ?? "?"): \(segment.text)")
+/// }
+/// ```
+public struct DiarizedTranscription: Sendable {
+    /// Full transcription text
+    public let text: String
+    
+    /// Segments with speaker attribution
+    public let segments: [DiarizedTranscriptSegment]
+    
+    /// Detected language (if available)
+    public let language: String?
+    
+    /// Translation (if translation was requested)
+    public let translation: String?
+    
+    /// Number of unique speakers in the transcription
+    public var speakerCount: Int {
+        Set(segments.compactMap(\.speakerID)).count
+    }
+    
+    /// Get segments for a specific speaker
+    public func segments(for speaker: SpeakerID) -> [DiarizedTranscriptSegment] {
+        segments.filter { $0.speakerID == speaker }
+    }
+    
+    /// Get segments where speaker attribution is uncertain (overlap regions)
+    public func uncertainSegments() -> [DiarizedTranscriptSegment] {
+        segments.filter { $0.isOverlapRegion }
+    }
+    
+    public init(
+        text: String,
+        segments: [DiarizedTranscriptSegment],
+        language: String? = nil,
+        translation: String? = nil
+    ) {
+        self.text = text
+        self.segments = segments
+        self.language = language
+        self.translation = translation
+    }
+}
+
+/// Single transcription segment with speaker attribution
+///
+/// Contains the original transcription data plus speaker assignment from diarization.
+public struct DiarizedTranscriptSegment: Sendable, Identifiable, Hashable {
+    public let id: UUID
+    
+    /// Transcribed text
+    public let text: String
+    
+    /// Time range in the original audio
+    public let timeRange: TimeRange
+    
+    /// Assigned speaker (nil if unattributed or in overlap region)
+    public let speakerID: SpeakerID?
+    
+    /// All speakers active during this segment (for overlap detection)
+    /// If count > 1, this segment spans an overlap region
+    public let activeSpeakers: [SpeakerID]
+    
+    /// Transcription confidence (from ASR)
+    public let transcriptionConfidence: Float
+    
+    /// Speaker attribution confidence (from diarization overlap calculation)
+    /// Lower confidence indicates the segment spans multiple speakers' regions
+    public let attributionConfidence: Float
+    
+    /// Whether this segment is in an overlap region (multiple speakers active)
+    public var isOverlapRegion: Bool {
+        activeSpeakers.count > 1
+    }
+    
+    /// Translated text (if translation was requested)
+    public let translation: String?
+    
+    public init(
+        id: UUID = UUID(),
+        text: String,
+        timeRange: TimeRange,
+        speakerID: SpeakerID?,
+        activeSpeakers: [SpeakerID] = [],
+        transcriptionConfidence: Float,
+        attributionConfidence: Float,
+        translation: String? = nil
+    ) {
+        self.id = id
+        self.text = text
+        self.timeRange = timeRange
+        self.speakerID = speakerID
+        self.activeSpeakers = activeSpeakers.isEmpty && speakerID != nil ? [speakerID!] : activeSpeakers
+        self.transcriptionConfidence = transcriptionConfidence
+        self.attributionConfidence = attributionConfidence
+        self.translation = translation
+    }
+    
+    // Hashable conformance (exclude UUID for value-based comparison)
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(text)
+        hasher.combine(timeRange)
+        hasher.combine(speakerID)
+    }
+    
+    public static func == (lhs: DiarizedTranscriptSegment, rhs: DiarizedTranscriptSegment) -> Bool {
+        lhs.text == rhs.text &&
+        lhs.timeRange == rhs.timeRange &&
+        lhs.speakerID == rhs.speakerID
+    }
+}
+
 // MARK: - Translation
 
 /// Translation result

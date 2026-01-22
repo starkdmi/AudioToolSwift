@@ -628,6 +628,93 @@ public actor ClearVoice {
         return try await transcriber.transcribe(input, onProgress: onProgress)
     }
     
+    // MARK: - Transcription + Diarization Merge
+    
+    /// Merge transcription with speaker timeline to create speaker-attributed transcription
+    ///
+    /// For each transcription segment, finds the speaker with the most overlap at that timestamp.
+    /// If multiple speakers are active (overlap region), marks the segment accordingly.
+    ///
+    /// - Parameters:
+    ///   - transcription: ASR transcription result
+    ///   - timeline: Speaker diarization timeline
+    /// - Returns: Transcription with speaker attribution
+    public func mergeTranscriptionWithTimeline(
+        transcription: Transcription,
+        timeline: SpeakerTimeline
+    ) -> DiarizedTranscription {
+        var diarizedSegments: [DiarizedTranscriptSegment] = []
+        
+        for segment in transcription.segments {
+            // Find all speakers active during this segment
+            let activeDiarizedSegments = timeline.segments.filter { diarizedSegment in
+                diarizedSegment.timeRange.overlaps(with: segment.timeRange)
+            }
+            
+            // Calculate overlap duration for each speaker
+            var speakerOverlaps: [(speaker: SpeakerID, duration: Double, confidence: Float)] = []
+            for diarizedSegment in activeDiarizedSegments {
+                if let intersection = diarizedSegment.timeRange.intersection(with: segment.timeRange) {
+                    speakerOverlaps.append((
+                        speaker: diarizedSegment.speakerID,
+                        duration: intersection.duration,
+                        confidence: diarizedSegment.confidence
+                    ))
+                }
+            }
+            
+            // Group by speaker and sum durations (a speaker may have multiple segments in range)
+            var speakerTotalDurations: [SpeakerID: (duration: Double, maxConfidence: Float)] = [:]
+            for overlap in speakerOverlaps {
+                let existing = speakerTotalDurations[overlap.speaker] ?? (0, 0)
+                speakerTotalDurations[overlap.speaker] = (
+                    existing.duration + overlap.duration,
+                    max(existing.maxConfidence, overlap.confidence)
+                )
+            }
+            
+            // Pick speaker with most overlap
+            let bestMatch = speakerTotalDurations.max { $0.value.duration < $1.value.duration }
+            let activeSpeakers = Array(speakerTotalDurations.keys).sorted { $0.id < $1.id }
+            
+            // Calculate attribution confidence:
+            // - High if single speaker dominates the segment
+            // - Low if multiple speakers with similar overlap
+            let attributionConfidence: Float
+            if let best = bestMatch, speakerTotalDurations.count == 1 {
+                // Single speaker - use their diarization confidence
+                attributionConfidence = best.value.maxConfidence
+            } else if let best = bestMatch {
+                // Multiple speakers - confidence based on dominance ratio
+                let totalDuration = speakerTotalDurations.values.reduce(0) { $0 + $1.duration }
+                let dominance = Float(best.value.duration / max(totalDuration, 0.001))
+                attributionConfidence = dominance * best.value.maxConfidence
+            } else {
+                // No speaker found
+                attributionConfidence = 0
+            }
+            
+            let diarizedSegment = DiarizedTranscriptSegment(
+                text: segment.text,
+                timeRange: segment.timeRange,
+                speakerID: bestMatch?.key,
+                activeSpeakers: activeSpeakers,
+                transcriptionConfidence: segment.confidence,
+                attributionConfidence: attributionConfidence,
+                translation: nil  // Translation not yet implemented
+            )
+            
+            diarizedSegments.append(diarizedSegment)
+        }
+        
+        return DiarizedTranscription(
+            text: transcription.text,
+            segments: diarizedSegments,
+            language: transcription.language,
+            translation: nil
+        )
+    }
+    
     // MARK: - Classification
     
     /// Classify sounds
@@ -1326,6 +1413,7 @@ public actor ClearVoice {
                     separatedTracks: result.separatedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: result.classifications,
                     analysis: result.analysis,
                     metrics: result.metrics
@@ -1335,6 +1423,43 @@ public actor ClearVoice {
                 for segment in transcription.segments {
                     await eventHandler?(.transcriptionSegment(segment))
                 }
+                await eventHandler?(.progress(stage: stageName, percent: 100))
+            
+            case .mergeTranscriptionWithDiarization:
+                await eventHandler?(.progress(stage: stageName, percent: 0))
+                
+                // Merge transcription with diarization by timestamp alignment
+                guard let transcription = result.transcription else {
+                    throw ClearVoiceError.pipelineConfigurationInvalid(
+                        "mergeTranscriptionWithDiarization requires transcription - add .transcribe() before this stage"
+                    )
+                }
+                guard let analysis = result.analysis ?? context.analysis else {
+                    throw ClearVoiceError.pipelineConfigurationInvalid(
+                        "mergeTranscriptionWithDiarization requires diarization - add .diarize() before this stage"
+                    )
+                }
+                
+                let diarizedTranscription = mergeTranscriptionWithTimeline(
+                    transcription: transcription,
+                    timeline: analysis.speakers
+                )
+                
+                // Emit per-segment events
+                for segment in diarizedTranscription.segments {
+                    await eventHandler?(.diarizedTranscriptionSegment(segment))
+                }
+                
+                result = PipelineResult(
+                    audio: result.audio,
+                    separatedTracks: result.separatedTracks,
+                    ussSeparated: result.ussSeparated,
+                    transcription: result.transcription,
+                    diarizedTranscription: diarizedTranscription,
+                    classifications: result.classifications,
+                    analysis: result.analysis,
+                    metrics: result.metrics
+                )
                 await eventHandler?(.progress(stage: stageName, percent: 100))
                 
             case .classify:
@@ -1379,30 +1504,20 @@ public actor ClearVoice {
                         }
                     }
                     
-                    // Collect results (merge logic could be more sophisticated)
+                    // Collect and merge results from all branches
                     for try await branchResult in group {
-                        if let transcription = branchResult.transcription {
-                            result = PipelineResult(
-                                audio: result.audio,
-                                separatedTracks: result.separatedTracks,
-                                ussSeparated: result.ussSeparated ?? branchResult.ussSeparated,
-                                transcription: transcription,
-                                classifications: result.classifications ?? branchResult.classifications,
-                                analysis: result.analysis,
-                                metrics: result.metrics
-                            )
-                        }
-                        if let classifications = branchResult.classifications {
-                            result = PipelineResult(
-                                audio: result.audio,
-                                separatedTracks: result.separatedTracks,
-                                ussSeparated: result.ussSeparated ?? branchResult.ussSeparated,
-                                transcription: result.transcription,
-                                classifications: classifications,
-                                analysis: result.analysis,
-                                metrics: result.metrics
-                            )
-                        }
+                        // Merge all non-nil results from branches
+                        result = PipelineResult(
+                            audio: branchResult.audio ?? result.audio,
+                            separatedTracks: branchResult.separatedTracks ?? result.separatedTracks,
+                            identifiedTracks: branchResult.identifiedTracks ?? result.identifiedTracks,
+                            ussSeparated: branchResult.ussSeparated ?? result.ussSeparated,
+                            transcription: branchResult.transcription ?? result.transcription,
+                            diarizedTranscription: branchResult.diarizedTranscription ?? result.diarizedTranscription,
+                            classifications: branchResult.classifications ?? result.classifications,
+                            analysis: branchResult.analysis ?? result.analysis,
+                            metrics: result.metrics
+                        )
                     }
                 }
                 
@@ -1442,6 +1557,7 @@ public actor ClearVoice {
             separatedTracks: result.separatedTracks,
             ussSeparated: result.ussSeparated,
             transcription: result.transcription,
+            diarizedTranscription: result.diarizedTranscription,
             classifications: result.classifications,
             analysis: result.analysis,
             metrics: metrics

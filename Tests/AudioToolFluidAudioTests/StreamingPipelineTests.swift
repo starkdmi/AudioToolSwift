@@ -1055,4 +1055,219 @@ final class StreamingPipelineTests: XCTestCase {
         
         print("✓ Conditional separation pipeline completed")
     }
+    
+    // MARK: - Parallel Transcription + Diarization Tests
+    
+    /// Test parallel execution of transcription and diarization with merge
+    /// This is the recommended pattern for speaker-attributed transcription
+    func testParallelTranscriptionDiarization_Sortformer_HarryPotter() async throws {
+        print("\n=== Parallel Transcription + Diarization (Sortformer) ===")
+        
+        let url = try harryPotterURL()
+        let audio16k = try loadAudio(at: url, sampleRate: 16000)
+        assertSampleRate(audio16k, expected: 16000, context: "Pipeline input")
+        
+        let duration = audio16k.duration
+        print("Audio duration: \(String(format: "%.1f", duration))s")
+        
+        // Initialize providers
+        let diarizer = FluidAudioProviders.sortformerLowLatency()
+        let transcriber = FluidAudioProviders.parakeetTranscriber()
+        
+        // Load models in parallel
+        let loadStart = Date()
+        async let diarizerLoad: Void = diarizer.load()
+        async let transcriberLoad: Void = transcriber.load()
+        try await diarizerLoad
+        try await transcriberLoad
+        let loadTime = Date().timeIntervalSince(loadStart)
+        print("Models loaded in \(String(format: "%.2f", loadTime))s (parallel)")
+        
+        // Create ClearVoice instance with both providers
+        let voice = ClearVoice(
+            configuration: .default,
+            diarization: diarizer,
+            transcriber: (TranscriptionModel.parakeet, transcriber)
+        )
+        
+        // Track events
+        let tracker = ProgressTracker()
+        
+        // Run parallel pipeline: transcription + diarization, then merge
+        let pipelineStart = Date()
+        let result = try await voice.pipeline()
+            .parallel {[
+                // Branch 1: Transcribe
+                PipelineBuilder().transcribe(TranscriptionModel.parakeet),
+                // Branch 2: Diarize
+                PipelineBuilder().diarize()
+            ]}
+            .mergeTranscriptionWithDiarization()
+            .onEvent { event in
+                await tracker.record(event: event)
+            }
+            .process(audio: audio16k)
+        let pipelineTime = Date().timeIntervalSince(pipelineStart)
+        let pipelineRTF = duration / max(pipelineTime, 0.001)
+        
+        print("Pipeline completed in \(String(format: "%.2f", pipelineTime))s (RTF: \(String(format: "%.1f", pipelineRTF))x)")
+        
+        // Verify results
+        XCTAssertNotNil(result.transcription, "Should have transcription")
+        XCTAssertNotNil(result.analysis, "Should have diarization")
+        XCTAssertNotNil(result.diarizedTranscription, "Should have merged result")
+        
+        if let diarizedTranscription = result.diarizedTranscription {
+            print("\n--- Diarized Transcription ---")
+            print("Total segments: \(diarizedTranscription.segments.count)")
+            print("Unique speakers: \(diarizedTranscription.speakerCount)")
+            print("Language: \(diarizedTranscription.language ?? "unknown")")
+            
+            let overlapSegments = diarizedTranscription.uncertainSegments()
+            print("Overlap segments: \(overlapSegments.count)")
+            
+            // Print first 10 segments
+            print("\nFirst 10 segments:")
+            for (idx, segment) in diarizedTranscription.segments.prefix(10).enumerated() {
+                let speaker = segment.speakerID?.id ?? "?"
+                let overlapMarker = segment.isOverlapRegion ? " [OVERLAP]" : ""
+                let confidence = String(format: "%.0f%%", segment.attributionConfidence * 100)
+                print("  [\(idx)] \(speaker) (\(confidence)): \"\(segment.text)\"\(overlapMarker)")
+            }
+        }
+        
+        // Print diarization summary
+        if let analysis = result.analysis {
+            print("\n--- Diarization Summary ---")
+            print("Speakers: \(analysis.speakers.speakerCount)")
+            print("Segments: \(analysis.speakers.segments.count)")
+            print("Max overlap: \(analysis.speakers.maxOverlappingSpeakers)")
+        }
+        
+        print("\n✓ Parallel transcription + diarization completed")
+    }
+    
+    /// Test parallel transcription + diarization with Pyannote
+    func testParallelTranscriptionDiarization_Pyannote_HarryPotter() async throws {
+        print("\n=== Parallel Transcription + Diarization (Pyannote) ===")
+        
+        let url = try harryPotterURL()
+        let audio16k = try loadAudio(at: url, sampleRate: 16000)
+        assertSampleRate(audio16k, expected: 16000, context: "Pipeline input")
+        
+        let duration = audio16k.duration
+        print("Audio duration: \(String(format: "%.1f", duration))s")
+        
+        // Initialize providers
+        let diarizer = FluidAudioProviders.pyannote()
+        let transcriber = FluidAudioProviders.parakeetTranscriber()
+        
+        // Load models in parallel
+        let loadStart = Date()
+        async let diarizerLoad: Void = diarizer.load()
+        async let transcriberLoad: Void = transcriber.load()
+        try await diarizerLoad
+        try await transcriberLoad
+        let loadTime = Date().timeIntervalSince(loadStart)
+        print("Models loaded in \(String(format: "%.2f", loadTime))s (parallel)")
+        
+        // Create ClearVoice instance
+        let voice = ClearVoice(
+            configuration: .default,
+            diarization: diarizer,
+            transcriber: (TranscriptionModel.parakeet, transcriber)
+        )
+        
+        // Run pipeline
+        let pipelineStart = Date()
+        let result = try await voice.pipeline()
+            .parallel {[
+                PipelineBuilder().transcribe(TranscriptionModel.parakeet),
+                PipelineBuilder().diarize()
+            ]}
+            .mergeTranscriptionWithDiarization()
+            .process(audio: audio16k)
+        let pipelineTime = Date().timeIntervalSince(pipelineStart)
+        let pipelineRTF = duration / max(pipelineTime, 0.001)
+        
+        print("Pipeline completed in \(String(format: "%.2f", pipelineTime))s (RTF: \(String(format: "%.1f", pipelineRTF))x)")
+        
+        // Verify results
+        XCTAssertNotNil(result.transcription)
+        XCTAssertNotNil(result.analysis)
+        XCTAssertNotNil(result.diarizedTranscription)
+        
+        if let diarizedTranscription = result.diarizedTranscription {
+            print("Segments: \(diarizedTranscription.segments.count)")
+            print("Speakers: \(diarizedTranscription.speakerCount)")
+            print("Overlaps: \(diarizedTranscription.uncertainSegments().count)")
+        }
+        
+        print("✓ Parallel transcription + diarization (Pyannote) completed")
+    }
+    
+    /// Test full pipeline: VAD → Parallel(Transcription + Diarization) → Merge → SE
+    func testFullPipelineWithTranscription_Sortformer_HarryPotter() async throws {
+        print("\n=== Full Pipeline with Transcription (Sortformer) ===")
+        
+        let url = try harryPotterURL()
+        let audio = try loadAudioAtRates(url: url)
+        
+        let duration = audio.audio16k.duration
+        print("Audio duration: \(String(format: "%.1f", duration))s")
+        
+        // Initialize all providers
+        let vad = FluidAudioProviders.sileroVAD(threshold: 0.5)
+        let diarizer = FluidAudioProviders.sortformerLowLatency()
+        let transcriber = FluidAudioProviders.parakeetTranscriber()
+        let enhancer = MLXProviders.mossformer2SE48K()
+        
+        // Load all models
+        let loadStart = Date()
+        try await vad.load()
+        try await diarizer.load()
+        try await transcriber.load()
+        try await enhancer.load()
+        let loadTime = Date().timeIntervalSince(loadStart)
+        print("All models loaded in \(String(format: "%.2f", loadTime))s")
+        
+        // Create ClearVoice instance
+        let voice = ClearVoice(
+            configuration: .default,
+            vad: vad,
+            diarization: diarizer,
+            enhancer: (EnhancementModel.mossformerSE48k, enhancer),
+            transcriber: (TranscriptionModel.parakeet, transcriber)
+        )
+        
+        // Run full pipeline
+        let pipelineStart = Date()
+        let result = try await voice.pipeline()
+            .detect(VADModel.silero)
+            .parallel {[
+                PipelineBuilder().transcribe(TranscriptionModel.parakeet),
+                PipelineBuilder().diarize()
+            ]}
+            .mergeTranscriptionWithDiarization()
+            .enhance(EnhancementModel.mossformerSE48k)
+            .process(audio: audio.audio16k)
+        let pipelineTime = Date().timeIntervalSince(pipelineStart)
+        let pipelineRTF = duration / max(pipelineTime, 0.001)
+        
+        print("Full pipeline completed in \(String(format: "%.2f", pipelineTime))s (RTF: \(String(format: "%.1f", pipelineRTF))x)")
+        
+        // Verify all results
+        XCTAssertNotNil(result.analysis?.speechSegments, "Should have VAD segments")
+        XCTAssertNotNil(result.transcription, "Should have transcription")
+        XCTAssertNotNil(result.analysis?.speakers, "Should have diarization")
+        XCTAssertNotNil(result.diarizedTranscription, "Should have diarized transcription")
+        XCTAssertNotNil(result.audio, "Should have enhanced audio")
+        
+        print("VAD segments: \(result.analysis?.speechSegments.count ?? 0)")
+        print("Speakers: \(result.analysis?.speakers.speakerCount ?? 0)")
+        print("Transcript segments: \(result.diarizedTranscription?.segments.count ?? 0)")
+        print("Enhanced audio: \(String(format: "%.1f", result.audio?.duration ?? 0))s")
+        
+        print("✓ Full pipeline with transcription completed")
+    }
 }

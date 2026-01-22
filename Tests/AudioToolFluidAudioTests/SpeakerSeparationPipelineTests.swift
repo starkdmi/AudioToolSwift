@@ -126,8 +126,7 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
         // Test OverlapHandling options
         XCTAssertEqual(OverlapHandling.skip, OverlapHandling.skip)
         XCTAssertEqual(OverlapHandling.separate, OverlapHandling.separate)
-        XCTAssertEqual(OverlapHandling.separateAndIdentify, OverlapHandling.separateAndIdentify)
-        XCTAssertEqual(OverlapHandling.separateIdentifyAndMerge, OverlapHandling.separateIdentifyAndMerge)
+        // Note: separateAndIdentify and separateIdentifyAndMerge are deprecated
         XCTAssertNotEqual(OverlapHandling.skip, OverlapHandling.separate)
     }
     
@@ -219,7 +218,7 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
         let voice = ClearVoice()
         let pipeline = voice.pipeline()
             .diarize()
-            .separateOverlap(.separateAndIdentify)
+            .separateOverlap(.separate)
         
         XCTAssertEqual(pipeline.stages.count, 2)
         XCTAssertEqual(pipeline.stages[0].name, "diarization")
@@ -242,16 +241,16 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
             .separateOverlap(.separate)
         XCTAssertEqual(separatePipeline.stages.count, 2)
         
-        // Test .separateAndIdentify option (default)
+        // Test .separateAndIdentify option - now defaults to .separate
         let identifyPipeline = voice.pipeline()
             .diarize()
-            .separateOverlap()  // Default is .separateAndIdentify
+            .separateOverlap()  // Default is .separate
         XCTAssertEqual(identifyPipeline.stages.count, 2)
     }
     
     // MARK: - Integration Tests (require models)
     
-    func testSeparateAndIdentifyIntegration() async throws {
+    func testSeparateIntegration() async throws {
         // Skip if models aren't available
         let url = try harryPotterURL()
         
@@ -298,19 +297,14 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
         
         let overlapAudio = audio.slice(firstOverlap.start..<firstOverlap.end)
         
-        // Separate and identify
-        let identifiedTracks = try await voice.separateAndIdentify(
-            overlapAudio,
-            timeline: timeline,
-            sourceTimeRange: firstOverlap
-        )
+        // Separate using the separator directly (speaker identification is deprecated)
+        let separatedTracks = try await separator.separate(overlapAudio, speakers: 2)
         
-        XCTAssertGreaterThan(identifiedTracks.count, 0, "Should produce at least one track")
+        XCTAssertGreaterThan(separatedTracks.count, 0, "Should produce at least one track")
         
-        for track in identifiedTracks {
-            print("Track \(track.trackIndex): Speaker slot \(track.speakerSlot ?? -1), ID \(track.speakerID?.id ?? "nil"), confidence \(track.confidence)")
-            XCTAssertEqual(track.sourceTimeRange, firstOverlap)
-            XCTAssertGreaterThan(track.audio.duration, 0)
+        for (idx, track) in separatedTracks.enumerated() {
+            print("Track \(idx): \(track.samples.count) samples, duration \(track.duration)s")
+            XCTAssertGreaterThan(track.duration, 0)
         }
     }
     
@@ -343,10 +337,10 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
         // Track events
         let tracker = EventTracker()
         
-        // Run full pipeline
+        // Run full pipeline with .separate mode (separation only, no identification)
         let result = try await voice.pipeline()
             .diarize()
-            .separateOverlap(.separateAndIdentify)
+            .separateOverlap(.separate)
             .onEvent { event in
                 await tracker.record(event: event)
             }
@@ -358,16 +352,15 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
         let snapshot = await tracker.snapshot()
         print("Pipeline completed:")
         print("  - Overlaps detected: \(snapshot.overlaps.count)")
-        print("  - Tracks identified: \(snapshot.tracks.count)")
+        print("  - Separated tracks: \(result.separatedTracks?.count ?? 0)")
         print("  - Stages completed: \(snapshot.stages)")
         
-        // If there were overlaps, we should have identified tracks
+        // If there were overlaps, we should have separated tracks
         if !snapshot.overlaps.isEmpty {
-            XCTAssertNotNil(result.identifiedTracks, "Should have identified tracks")
-            XCTAssertEqual(snapshot.tracks.count, result.identifiedTracks?.count ?? 0)
+            XCTAssertNotNil(result.separatedTracks, "Should have separated tracks")
             
-            for track in result.identifiedTracks ?? [] {
-                print("  Track: Speaker \(track.speakerSlot ?? -1), \(track.sourceTimeRange.duration)s, confidence \(track.confidence)")
+            for (index, track) in (result.separatedTracks ?? []).enumerated() {
+                print("  Track \(index): \(track.duration)s, \(track.samples.count) samples")
             }
         }
     }

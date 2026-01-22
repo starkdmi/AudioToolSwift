@@ -22,6 +22,7 @@ public struct PipelineStage: Sendable {
         case separateUSS(types: [USSSoundType])
         case upscale
         case transcribe(TranscriptionModel)
+        case mergeTranscriptionWithDiarization
         case classify
         case conditional(@Sendable (PipelineContext) -> Bool, then: [PipelineStage], else: [PipelineStage])
         case parallel([[PipelineStage]])
@@ -239,6 +240,51 @@ public struct PipelineBuilder: Sendable {
     public func transcribe(_ model: TranscriptionModel = .parakeet) -> PipelineBuilder {
         var builder = self
         builder.stages.append(PipelineStage(type: .transcribe(model), name: "transcription"))
+        return builder
+    }
+    
+    /// Merge transcription with diarization to create speaker-attributed transcription
+    ///
+    /// This stage combines a `Transcription` result with a `SpeakerTimeline` to produce
+    /// a `DiarizedTranscription` where each segment is assigned to the speaker with the
+    /// most overlap at that time range.
+    ///
+    /// ## Requirements
+    /// - Must run after both `.transcribe()` and `.diarize()` stages
+    /// - Can be used after `.parallel()` that runs transcription and diarization concurrently
+    ///
+    /// ## Example: Parallel Transcription + Diarization
+    /// ```swift
+    /// let result = try await voice.pipeline()
+    ///     .parallel {[
+    ///         PipelineBuilder().transcribe(.whisperLarge),
+    ///         PipelineBuilder().diarize()
+    ///     ]}
+    ///     .mergeTranscriptionWithDiarization()
+    ///     .process(audio: audio)
+    ///
+    /// // Access diarized transcription
+    /// for segment in result.diarizedTranscription?.segments ?? [] {
+    ///     let speaker = segment.speakerID?.id ?? "Unknown"
+    ///     let overlap = segment.isOverlapRegion ? " [OVERLAP]" : ""
+    ///     print("\(speaker): \(segment.text)\(overlap)")
+    /// }
+    /// ```
+    ///
+    /// ## Overlap Handling
+    /// When a transcription segment spans a region where multiple speakers are active:
+    /// - `speakerID` is set to the speaker with the most overlap duration
+    /// - `activeSpeakers` contains all speakers active during the segment
+    /// - `isOverlapRegion` returns `true`
+    /// - `attributionConfidence` is lower to indicate uncertainty
+    ///
+    /// - Returns: Updated pipeline builder
+    public func mergeTranscriptionWithDiarization() -> PipelineBuilder {
+        var builder = self
+        builder.stages.append(PipelineStage(
+            type: .mergeTranscriptionWithDiarization,
+            name: "mergeTranscriptionDiarization"
+        ))
         return builder
     }
     
