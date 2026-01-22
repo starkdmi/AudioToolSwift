@@ -143,7 +143,7 @@ struct PipelineTests {
             configuration: .default,
             vad: mockVAD,
             diarization: mockDiarization,
-            separator: (.mossformer2spk, mockSeparator)
+            separator: (.mossformerWhamr, mockSeparator)
         )
         
         let result = try await voice.pipeline()
@@ -174,7 +174,7 @@ struct PipelineTests {
             configuration: .default,
             vad: mockVAD,
             diarization: mockDiarization,
-            separator: (.mossformer2spk, mockSeparator)
+            separator: (.mossformerWhamr, mockSeparator)
         )
         
         let result = try await voice.pipeline()
