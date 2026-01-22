@@ -1177,6 +1177,7 @@ public actor ClearVoice {
                     separatedTracks: result.separatedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: result.classifications,
                     analysis: result.analysis,
                     metrics: result.metrics
@@ -1205,6 +1206,7 @@ public actor ClearVoice {
                     identifiedTracks: result.identifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: result.classifications,
                     analysis: result.analysis,
                     metrics: result.metrics
@@ -1300,6 +1302,7 @@ public actor ClearVoice {
                     identifiedTracks: allIdentifiedTracks.isEmpty ? nil : allIdentifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: result.classifications,
                     analysis: result.analysis,
                     metrics: result.metrics
@@ -1342,6 +1345,7 @@ public actor ClearVoice {
                     separatedTracks: result.separatedTracks,
                     ussSeparated: ussSeparatedResults,
                     transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: result.classifications,
                     analysis: result.analysis,
                     metrics: result.metrics
@@ -1393,6 +1397,7 @@ public actor ClearVoice {
                     separatedTracks: result.separatedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: result.classifications,
                     analysis: context.analysis,
                     metrics: result.metrics
@@ -1470,6 +1475,7 @@ public actor ClearVoice {
                     separatedTracks: result.separatedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: classifications,
                     analysis: result.analysis,
                     metrics: result.metrics
@@ -1537,6 +1543,7 @@ public actor ClearVoice {
                         separatedTracks: processedTracks,
                         ussSeparated: result.ussSeparated,
                         transcription: result.transcription,
+                        diarizedTranscription: result.diarizedTranscription,
                         classifications: result.classifications,
                         analysis: result.analysis,
                         metrics: result.metrics
