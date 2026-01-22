@@ -1512,6 +1512,23 @@ public actor ClearVoice {
                     
                     // Collect and merge results from all branches
                     for try await branchResult in group {
+                        // Merge AnalysisResult components (VAD segments + diarization speakers)
+                        // separately to avoid one overwriting the other
+                        let mergedAnalysis: AnalysisResult?
+                        if let branchAnalysis = branchResult.analysis {
+                            if let existingAnalysis = result.analysis {
+                                // Merge: keep non-empty segments from either, same for speakers
+                                mergedAnalysis = AnalysisResult(
+                                    segments: existingAnalysis.segments.isEmpty ? branchAnalysis.segments : existingAnalysis.segments,
+                                    speakers: existingAnalysis.speakers.segments.isEmpty ? branchAnalysis.speakers : existingAnalysis.speakers
+                                )
+                            } else {
+                                mergedAnalysis = branchAnalysis
+                            }
+                        } else {
+                            mergedAnalysis = result.analysis
+                        }
+                        
                         // Merge all non-nil results from branches
                         result = PipelineResult(
                             audio: branchResult.audio ?? result.audio,
@@ -1521,7 +1538,7 @@ public actor ClearVoice {
                             transcription: branchResult.transcription ?? result.transcription,
                             diarizedTranscription: branchResult.diarizedTranscription ?? result.diarizedTranscription,
                             classifications: branchResult.classifications ?? result.classifications,
-                            analysis: branchResult.analysis ?? result.analysis,
+                            analysis: mergedAnalysis,
                             metrics: result.metrics
                         )
                     }
