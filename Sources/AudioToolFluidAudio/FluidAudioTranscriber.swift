@@ -42,6 +42,12 @@ public actor FluidAudioTranscriber: Transcriber {
     private var models: AsrModels?
     private let version: ParakeetVersion
     
+    /// Mel spectrogram lead-in buffer in samples (20ms at 16kHz)
+    /// Workaround for FluidAudio ChunkProcessor edge effect where audio starting
+    /// at exact chunk boundaries can cause all-blank predictions.
+    /// See: ISSUE-transcription-truncation.md in FluidAudio repo
+    private let melLeadInSamples: Int = 320
+    
     // MARK: - Initialization
     
     /// Initialize Parakeet transcriber
@@ -67,10 +73,14 @@ public actor FluidAudioTranscriber: Transcriber {
             throw ClearVoiceError.modelNotLoaded("FluidAudio ASR")
         }
         
-        let result = try await manager.transcribe(audio.samples)
+        // Prepend silence to avoid mel spectrogram edge effects
+        // See melLeadInSamples documentation for details
+        let paddedSamples = prependMelLeadIn(to: audio.samples)
+        let result = try await manager.transcribe(paddedSamples)
         
         // Convert FluidAudio tokenTimings -> word-level segments
-        let segments = buildSegmentsFromTokenTimings(result.tokenTimings)
+        // Adjust timestamps to account for prepended silence
+        let segments = buildSegmentsFromTokenTimings(result.tokenTimings, timeOffset: melLeadInOffset)
         
         return Transcription(
             text: result.text,
@@ -79,8 +89,22 @@ public actor FluidAudioTranscriber: Transcriber {
         )
     }
     
+    /// Lead-in time offset in seconds
+    private var melLeadInOffset: TimeInterval {
+        Double(melLeadInSamples) / Double(sampleRate)
+    }
+    
+    /// Prepend silence buffer to audio samples for mel spectrogram stability
+    private func prependMelLeadIn(to samples: [Float]) -> [Float] {
+        let silence = [Float](repeating: 0, count: melLeadInSamples)
+        return silence + samples
+    }
+    
     /// Build TranscriptionSegments from FluidAudio token timings
-    private func buildSegmentsFromTokenTimings(_ tokenTimings: [TokenTiming]?) -> [TranscriptionSegment] {
+    /// - Parameters:
+    ///   - tokenTimings: Raw token timings from FluidAudio
+    ///   - timeOffset: Offset to subtract from all timestamps (e.g., for mel lead-in compensation)
+    private func buildSegmentsFromTokenTimings(_ tokenTimings: [TokenTiming]?, timeOffset: TimeInterval = 0) -> [TranscriptionSegment] {
         guard let tokenTimings = tokenTimings, !tokenTimings.isEmpty else {
             return []
         }
@@ -89,7 +113,10 @@ public actor FluidAudioTranscriber: Transcriber {
         return wordTimings.map { word in
             TranscriptionSegment(
                 text: word.word,
-                timeRange: TimeRange(start: word.startTime, end: word.endTime),
+                timeRange: TimeRange(
+                    start: max(0, word.startTime - timeOffset),
+                    end: max(0, word.endTime - timeOffset)
+                ),
                 speakerID: nil,
                 confidence: word.confidence
             )
@@ -120,9 +147,15 @@ public actor FluidAudioTranscriber: Transcriber {
                     allSamples.append(contentsOf: chunk.samples)
                 }
                 
+                // Prepend silence to avoid mel spectrogram edge effects
+                let leadInSamples = await self.melLeadInSamples
+                let leadInOffset = await self.melLeadInOffset
+                let silence = [Float](repeating: 0, count: leadInSamples)
+                let paddedSamples = silence + allSamples
+                
                 // Transcribe collected audio
                 do {
-                    let result = try await manager.transcribe(allSamples)
+                    let result = try await manager.transcribe(paddedSamples)
                     
                     // Emit word-level segments if token timings available
                     if let tokenTimings = result.tokenTimings, !tokenTimings.isEmpty {
@@ -130,7 +163,10 @@ public actor FluidAudioTranscriber: Transcriber {
                         for word in wordTimings {
                             let segment = TranscriptionSegment(
                                 text: word.word,
-                                timeRange: TimeRange(start: word.startTime, end: word.endTime),
+                                timeRange: TimeRange(
+                                    start: max(0, word.startTime - leadInOffset),
+                                    end: max(0, word.endTime - leadInOffset)
+                                ),
                                 speakerID: nil,
                                 confidence: word.confidence
                             )
@@ -176,14 +212,16 @@ public actor FluidAudioTranscriber: Transcriber {
         // Report initial progress
         await onProgress?(0.0)
         
-        // Start transcription - this is batch, so we can't get intermediate progress
-        let result = try await manager.transcribe(audio.samples)
+        // Prepend silence to avoid mel spectrogram edge effects
+        let paddedSamples = prependMelLeadIn(to: audio.samples)
+        let result = try await manager.transcribe(paddedSamples)
         
         // Report near-complete
         await onProgress?(90.0)
         
         // Convert FluidAudio tokenTimings -> word-level segments
-        let segments = buildSegmentsFromTokenTimings(result.tokenTimings)
+        // Adjust timestamps to account for prepended silence
+        let segments = buildSegmentsFromTokenTimings(result.tokenTimings, timeOffset: melLeadInOffset)
         
         // Build transcription result
         let transcription = Transcription(
