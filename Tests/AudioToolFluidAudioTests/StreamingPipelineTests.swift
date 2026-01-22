@@ -151,6 +151,125 @@ final class StreamingPipelineTests: XCTestCase {
         audio.samples.map { abs($0) }.max() ?? 0
     }
     
+    // MARK: - Output Saving Helpers
+    
+    private static let outputDir = URL(fileURLWithPath: "/path/to/ProjectTwo/temp/pipeline_outputs")
+    
+    private func writeWAV(_ audio: AudioBuffer, to filename: String) throws {
+        let url = Self.outputDir.appendingPathComponent(filename)
+        try FileManager.default.createDirectory(at: Self.outputDir, withIntermediateDirectories: true)
+        
+        // WAV header for mono PCM 16-bit
+        var data = Data()
+        let sampleRate = UInt32(audio.sampleRate)
+        let numSamples = UInt32(audio.samples.count)
+        let byteRate = sampleRate * 2  // 16-bit mono
+        let dataSize = numSamples * 2
+        let fileSize = dataSize + 36
+        
+        // RIFF header
+        data.append(contentsOf: "RIFF".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: fileSize.littleEndian) { Array($0) })
+        data.append(contentsOf: "WAVE".utf8)
+        
+        // fmt chunk
+        data.append(contentsOf: "fmt ".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) })  // chunk size
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })   // PCM
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })   // mono
+        data.append(contentsOf: withUnsafeBytes(of: sampleRate.littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(2).littleEndian) { Array($0) })   // block align
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(16).littleEndian) { Array($0) })  // bits per sample
+        
+        // data chunk
+        data.append(contentsOf: "data".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: dataSize.littleEndian) { Array($0) })
+        
+        // Convert float samples to 16-bit PCM
+        for sample in audio.samples {
+            let clamped = max(-1.0, min(1.0, sample))
+            let int16 = Int16(clamped * 32767.0)
+            data.append(contentsOf: withUnsafeBytes(of: int16.littleEndian) { Array($0) })
+        }
+        
+        try data.write(to: url)
+        print("Saved: \(filename) (\(String(format: "%.1f", audio.duration))s @ \(audio.sampleRate)Hz)")
+    }
+    
+    private func writeDiarization(_ timeline: SpeakerTimeline, to filename: String) throws {
+        let url = Self.outputDir.appendingPathComponent(filename)
+        try FileManager.default.createDirectory(at: Self.outputDir, withIntermediateDirectories: true)
+        
+        var lines = ["start,end,speaker,confidence"]
+        for segment in timeline.segments {
+            lines.append(String(format: "%.3f,%.3f,%d,%.3f",
+                segment.timeRange.start,
+                segment.timeRange.end,
+                segment.speakerID.id,
+                segment.confidence))
+        }
+        try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        print("Saved: \(filename) (\(timeline.segments.count) segments, \(timeline.speakerCount) speakers)")
+    }
+    
+    private func writeTranscription(_ transcription: DiarizedTranscription, to filename: String) throws {
+        let url = Self.outputDir.appendingPathComponent(filename)
+        try FileManager.default.createDirectory(at: Self.outputDir, withIntermediateDirectories: true)
+        
+        var lines = ["start,end,speaker,text"]
+        for segment in transcription.segments {
+            let escapedText = segment.text.replacingOccurrences(of: "\"", with: "\"\"")
+            lines.append(String(format: "%.3f,%.3f,%d,\"%@\"",
+                segment.timeRange.start,
+                segment.timeRange.end,
+                segment.speakerID?.id ?? -1,
+                escapedText))
+        }
+        try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        print("Saved: \(filename) (\(transcription.segments.count) segments)")
+    }
+    
+    private func writeTranscriptionTXT(_ transcription: DiarizedTranscription, to filename: String) throws {
+        let url = Self.outputDir.appendingPathComponent(filename)
+        try FileManager.default.createDirectory(at: Self.outputDir, withIntermediateDirectories: true)
+        
+        var lines: [String] = []
+        for segment in transcription.segments {
+            let speaker = segment.speakerID.map { "Speaker \($0.id)" } ?? "Unknown"
+            let time = String(format: "[%02d:%05.2f]", Int(segment.timeRange.start) / 60, segment.timeRange.start.truncatingRemainder(dividingBy: 60))
+            lines.append("\(time) \(speaker): \(segment.text)")
+        }
+        try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        print("Saved: \(filename)")
+    }
+    
+    /// Segment metadata for JSON manifest
+    struct SegmentOutput: Codable {
+        let originalStart: Double
+        let originalEnd: Double
+        let file: String
+        let type: String
+        let durationSeconds: Double
+    }
+    
+    struct SegmentManifest: Codable {
+        let sourceFile: String
+        let totalDuration: Double
+        let segments: [SegmentOutput]
+    }
+    
+    private func writeManifest(_ manifest: SegmentManifest, to filename: String) throws {
+        let url = Self.outputDir.appendingPathComponent(filename)
+        try FileManager.default.createDirectory(at: Self.outputDir, withIntermediateDirectories: true)
+        
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(manifest)
+        try data.write(to: url)
+        print("Saved: \(filename) (\(manifest.segments.count) segments)")
+    }
+
     private func runFullBatchPipeline(
         diarizerName: String,
         diarizer: any DiarizationProvider,
@@ -267,6 +386,18 @@ final class StreamingPipelineTests: XCTestCase {
         XCTAssertGreaterThan(maxAmplitude(musicBackground), 0)
         XCTAssertGreaterThan(maxAmplitude(animalBackground), 0)
         
+        // Save outputs for manual inspection
+        let prefix = diarizerName.lowercased()
+        print("\n--- Saving outputs to \(Self.outputDir.path) ---")
+        try writeDiarization(timeline, to: "\(prefix)_diarization.csv")
+        try writeWAV(seResult.enhanced, to: "\(prefix)_enhanced_speech_48k.wav")
+        try writeWAV(seResult.background, to: "\(prefix)_se_background_48k.wav")
+        try writeWAV(nonSpeechAudio32k, to: "\(prefix)_nonspeech_32k.wav")
+        try writeWAV(musicNonSpeech, to: "\(prefix)_uss_nonspeech_music_32k.wav")
+        try writeWAV(animalNonSpeech, to: "\(prefix)_uss_nonspeech_animal_32k.wav")
+        try writeWAV(musicBackground, to: "\(prefix)_uss_background_music_32k.wav")
+        try writeWAV(animalBackground, to: "\(prefix)_uss_background_animal_32k.wav")
+        
         print("✓ Full batch pipeline (\(diarizerName)) completed")
     }
     
@@ -308,6 +439,163 @@ final class StreamingPipelineTests: XCTestCase {
             audio48k: audio.audio48k,
             audio32k: audio.audio32k
         )
+    }
+    
+    /// Segment-aware pipeline: preserves original timestamps in output
+    /// Outputs individual segment files + JSON manifest for proper timeline mapping
+    func testSegmentAwarePipeline_HarryPotter() async throws {
+        print("\n=== Segment-Aware Pipeline (with JSON manifest) ===")
+        
+        let url = try harryPotterURL()
+        let audio = try loadAudioAtRates(url: url)
+        
+        let duration = audio.audio16k.duration
+        print("Audio duration: \(String(format: "%.1f", duration))s")
+        
+        // Load models
+        let vad = FluidAudioProviders.sileroVAD(threshold: 0.5)
+        let enhancer = MLXProviders.mossformer2SE48K()
+        let uss = USSProviders.speechSeparation()
+        defer { Task { await uss.unload() } }
+        
+        try await vad.load()
+        try await enhancer.load()
+        try await uss.load()
+        print("Models loaded")
+        
+        // VAD
+        let speechSegments = try await vad.detect(audio.audio16k)
+        let speechRanges = speechSegments.map(\.timeRange)
+        let nonSpeechRanges = buildNonSpeechRanges(from: speechSegments, totalDuration: duration)
+        print("VAD: \(speechRanges.count) speech segments, \(nonSpeechRanges.count) non-speech segments")
+        
+        // Process each non-speech segment individually with USS
+        var nonSpeechMusicSegments: [SegmentOutput] = []
+        var nonSpeechAnimalSegments: [SegmentOutput] = []
+        
+        print("\n--- Processing non-speech segments ---")
+        for (idx, range) in nonSpeechRanges.enumerated() {
+            let segmentAudio = extractSegment(from: audio.audio32k, timeRange: range)
+            guard !segmentAudio.samples.isEmpty else { continue }
+            
+            // USS music
+            let musicFilename = "segment_nonspeech_music_\(String(format: "%02d", idx)).wav"
+            let music = try await uss.process(segmentAudio, type: .music)
+            try writeWAV(music, to: musicFilename)
+            nonSpeechMusicSegments.append(SegmentOutput(
+                originalStart: range.start,
+                originalEnd: range.end,
+                file: musicFilename,
+                type: "music",
+                durationSeconds: music.duration
+            ))
+            
+            // USS animal
+            let animalFilename = "segment_nonspeech_animal_\(String(format: "%02d", idx)).wav"
+            let animal = try await uss.process(segmentAudio, type: .animal)
+            try writeWAV(animal, to: animalFilename)
+            nonSpeechAnimalSegments.append(SegmentOutput(
+                originalStart: range.start,
+                originalEnd: range.end,
+                file: animalFilename,
+                type: "animal",
+                durationSeconds: animal.duration
+            ))
+        }
+        print("Processed \(nonSpeechRanges.count) non-speech segments")
+        
+        // Process each speech segment with SE + USS on background
+        var speechEnhancedSegments: [SegmentOutput] = []
+        var backgroundMusicSegments: [SegmentOutput] = []
+        var backgroundAnimalSegments: [SegmentOutput] = []
+        
+        print("\n--- Processing speech segments ---")
+        for (idx, range) in speechRanges.enumerated() {
+            let segmentAudio48k = extractSegment(from: audio.audio48k, timeRange: range)
+            guard !segmentAudio48k.samples.isEmpty else { continue }
+            
+            // SE with background extraction
+            let seResult = try await enhancer.processWithBackground(segmentAudio48k)
+            
+            // Save enhanced speech
+            let enhancedFilename = "segment_enhanced_\(String(format: "%02d", idx)).wav"
+            try writeWAV(seResult.enhanced, to: enhancedFilename)
+            speechEnhancedSegments.append(SegmentOutput(
+                originalStart: range.start,
+                originalEnd: range.end,
+                file: enhancedFilename,
+                type: "enhanced_speech",
+                durationSeconds: seResult.enhanced.duration
+            ))
+            
+            // Resample background for USS
+            let background32k = resample48kTo32k(seResult.background)
+            
+            // USS on background - music
+            let bgMusicFilename = "segment_bg_music_\(String(format: "%02d", idx)).wav"
+            let bgMusic = try await uss.process(background32k, type: .music)
+            try writeWAV(bgMusic, to: bgMusicFilename)
+            backgroundMusicSegments.append(SegmentOutput(
+                originalStart: range.start,
+                originalEnd: range.end,
+                file: bgMusicFilename,
+                type: "background_music",
+                durationSeconds: bgMusic.duration
+            ))
+            
+            // USS on background - animal
+            let bgAnimalFilename = "segment_bg_animal_\(String(format: "%02d", idx)).wav"
+            let bgAnimal = try await uss.process(background32k, type: .animal)
+            try writeWAV(bgAnimal, to: bgAnimalFilename)
+            backgroundAnimalSegments.append(SegmentOutput(
+                originalStart: range.start,
+                originalEnd: range.end,
+                file: bgAnimalFilename,
+                type: "background_animal",
+                durationSeconds: bgAnimal.duration
+            ))
+        }
+        print("Processed \(speechRanges.count) speech segments")
+        
+        // Write manifests
+        print("\n--- Writing manifests ---")
+        
+        try writeManifest(SegmentManifest(
+            sourceFile: "harry_potter.wav",
+            totalDuration: duration,
+            segments: nonSpeechMusicSegments
+        ), to: "manifest_nonspeech_music.json")
+        
+        try writeManifest(SegmentManifest(
+            sourceFile: "harry_potter.wav",
+            totalDuration: duration,
+            segments: nonSpeechAnimalSegments
+        ), to: "manifest_nonspeech_animal.json")
+        
+        try writeManifest(SegmentManifest(
+            sourceFile: "harry_potter.wav",
+            totalDuration: duration,
+            segments: speechEnhancedSegments
+        ), to: "manifest_enhanced_speech.json")
+        
+        try writeManifest(SegmentManifest(
+            sourceFile: "harry_potter.wav",
+            totalDuration: duration,
+            segments: backgroundMusicSegments
+        ), to: "manifest_background_music.json")
+        
+        try writeManifest(SegmentManifest(
+            sourceFile: "harry_potter.wav",
+            totalDuration: duration,
+            segments: backgroundAnimalSegments
+        ), to: "manifest_background_animal.json")
+        
+        // Verify
+        XCTAssertGreaterThan(nonSpeechMusicSegments.count, 0)
+        XCTAssertGreaterThan(speechEnhancedSegments.count, 0)
+        
+        print("\n✓ Segment-aware pipeline completed")
+        print("Total segments: \(speechEnhancedSegments.count) speech + \(nonSpeechMusicSegments.count) non-speech")
     }
     
     // MARK: - Streaming Tests
@@ -1163,6 +1451,16 @@ final class StreamingPipelineTests: XCTestCase {
             }
         }
         
+        // Save outputs for manual inspection
+        print("\n--- Saving outputs to \(Self.outputDir.path) ---")
+        if let timeline = result.analysis?.speakers {
+            try writeDiarization(timeline, to: "sortformer_parallel_diarization.csv")
+        }
+        if let diarizedTranscription = result.diarizedTranscription {
+            try writeTranscription(diarizedTranscription, to: "sortformer_parallel_transcription.csv")
+            try writeTranscriptionTXT(diarizedTranscription, to: "sortformer_parallel_transcription.txt")
+        }
+        
         print("\n✓ Parallel transcription + diarization completed")
     }
     
@@ -1328,6 +1626,19 @@ final class StreamingPipelineTests: XCTestCase {
         print("Speakers: \(result.analysis?.speakers.speakerCount ?? 0)")
         print("Transcript segments: \(result.diarizedTranscription?.segments.count ?? 0)")
         print("Enhanced audio: \(String(format: "%.1f", result.audio?.duration ?? 0))s")
+        
+        // Save outputs for manual inspection
+        print("\n--- Saving outputs to \(Self.outputDir.path) ---")
+        if let timeline = result.analysis?.speakers {
+            try writeDiarization(timeline, to: "fullpipeline_diarization.csv")
+        }
+        if let diarizedTranscription = result.diarizedTranscription {
+            try writeTranscription(diarizedTranscription, to: "fullpipeline_transcription.csv")
+            try writeTranscriptionTXT(diarizedTranscription, to: "fullpipeline_transcription.txt")
+        }
+        if let enhanced = result.audio {
+            try writeWAV(enhanced, to: "fullpipeline_enhanced.wav")
+        }
         
         print("✓ Full pipeline with transcription completed")
     }
