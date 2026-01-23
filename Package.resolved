@@ -1,15 +1,6 @@
 {
-  "originHash" : "c1ffb730cf1575a7318569733f46ec0d8dc757465940aad648cfa65a41cd0ed9",
+  "originHash" : "3761d1ddf6428369ed15222c0a193be4bf0caf2b69de0d01ec0b8e1dddfe01d1",
   "pins" : [
-    {
-      "identity" : "fluidaudio",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/FluidInference/FluidAudio",
-      "state" : {
-        "revision" : "a1582f0c476864b6609f75459312037390089044",
-        "version" : "0.10.0"
-      }
-    },
     {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
@@ -71,15 +62,6 @@
       "state" : {
         "revision" : "573e5c9036c2f136b3a8a071da8e8907322403d0",
         "version" : "1.1.6"
-      }
-    },
-    {
-      "identity" : "swiftaudio",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/starkdmi/SwiftAudio",
-      "state" : {
-        "branch" : "main",
-        "revision" : "965e4f89c192d903b73e76ae7b6bd310f0b409a7"
       }
     },
     {

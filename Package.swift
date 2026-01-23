@@ -60,8 +60,8 @@ let package = Package(
         ),
     ],
     dependencies: [
-        // SwiftAudio for resampling, STFT, and audio I/O
-        .package(url: "https://github.com/starkdmi/SwiftAudio.git", exact: "1.0.0"),
+        // SwiftAudio for resampling, STFT, and audio I/O (local with buffer capacity fix)
+        .package(name: "SwiftAudio", path: "../SwiftAudio"),
         
         // MLX Model packages (local development)
         .package(name: "Mossformer2MLXSwift", path: "../Models/mossformer2_se_mlx_swift"),
@@ -74,8 +74,10 @@ let package = Package(
         // MLX for neural engine operations
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.29.1")),
         
-        // FluidAudio for VAD, transcription, diarization (v0.10.0+ for Sortformer)
-        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.10.0"),
+        // FluidAudio for VAD, transcription, diarization (local fork with mel context fix)
+        // Fixes: Chunk boundary truncation bug where audio at exact chunk boundaries caused all-blank predictions
+        // TODO: Switch back to hosted version after PR is merged: https://github.com/FluidInference/FluidAudio/pull/XXX
+        .package(name: "FluidAudio", path: "../Docs/temp/FluidAudio"),
         
         // Kokoro TTS with MisakiSwift G2P (MIT license, no ESpeakNG)
         // Using local fork with extended misaki[en] language support
