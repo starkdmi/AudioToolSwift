@@ -113,7 +113,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         diarizer = SortformerDiarizer(config: config)
         
         // Load models from HuggingFace (auto-downloads and caches)
-        let models = try await SortformerModelInference.loadFromHuggingFace(config: config)
+        let models = try await SortformerModels.loadFromHuggingFace(config: config)
         
         // Initialize diarizer with loaded models
         diarizer?.initialize(models: models)
