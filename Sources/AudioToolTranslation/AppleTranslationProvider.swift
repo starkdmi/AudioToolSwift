@@ -131,13 +131,12 @@ public actor AppleTranslationProvider: TextTranslator {
         }
         
         // Create new session using installedSource:target: initializer
-        // Note: This throws if languages aren't installed
         let newSession: TranslationSession
         if let sourceLanguage = sourceLanguage {
-            newSession = try TranslationSession(installedSource: sourceLanguage, target: targetLanguage)
+            newSession = TranslationSession(installedSource: sourceLanguage, target: targetLanguage)
         } else {
             // When source is nil, use English as default and let translate handle detection
-            newSession = try TranslationSession(installedSource: .init(identifier: "en"), target: targetLanguage)
+            newSession = TranslationSession(installedSource: .init(identifier: "en"), target: targetLanguage)
         }
         
         self.cachedSource = sourceLanguage

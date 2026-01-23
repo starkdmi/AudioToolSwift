@@ -163,7 +163,7 @@ public actor AppleSpeechTranscriber: Transcriber {
         
         // Now run the analysis
         print("Analyzer task started")
-        try await analyzer.analyzeSequence(from: audioFile)
+        _ = try await analyzer.analyzeSequence(from: audioFile)
         print("Analyzer task completed, finalizing...")
         
         // Signal that all audio has been processed
@@ -235,7 +235,7 @@ public actor AppleSpeechTranscriber: Transcriber {
                     
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask {
-                            try await analyzer.analyzeSequence(from: audioFile)
+                            _ = try await analyzer.analyzeSequence(from: audioFile)
                         }
                         
                         group.addTask {
@@ -354,7 +354,7 @@ public actor AppleSpeechTranscriber: Transcriber {
         
         try await Task.sleep(for: .milliseconds(100))
         
-        try await analyzer.analyzeSequence(from: audioFile)
+        _ = try await analyzer.analyzeSequence(from: audioFile)
         try await analyzer.finalizeAndFinishThroughEndOfInput()
         
         try await resultsTask

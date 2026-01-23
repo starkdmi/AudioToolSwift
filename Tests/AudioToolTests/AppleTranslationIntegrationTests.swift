@@ -99,7 +99,7 @@ struct AppleTranslationIntegrationTests {
             return
         }
         
-        let session = try TranslationSession(installedSource: sourceLanguage, target: targetLanguage)
+        let session = TranslationSession(installedSource: sourceLanguage, target: targetLanguage)
         let response = try await session.translate("Hello, world!")
         
         print("Direct translation: 'Hello, world!' -> '\(response.targetText)'")
@@ -122,7 +122,7 @@ struct AppleTranslationIntegrationTests {
             return
         }
         
-        let session = try TranslationSession(installedSource: sourceLanguage, target: targetLanguage)
+        let session = TranslationSession(installedSource: sourceLanguage, target: targetLanguage)
         
         let requests = [
             TranslationSession.Request(sourceText: "Hello", clientIdentifier: "0"),

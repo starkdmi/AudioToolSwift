@@ -19,7 +19,7 @@ MLX error: Failed to load the default metallib. library not found
 **Always use xcodebuild:**
 
 ```bash
-cd /path/to/ProjectTwo/ClearVoice
+cd ClearVoice
 
 # Build
 xcodebuild build -scheme ClearVoice-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData

@@ -7,7 +7,7 @@
 //
 
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 import Accelerate
 import ClearVoiceCore
 
@@ -204,18 +204,25 @@ private func resampleAVAudioConverter(_ samples: [Float], fromRate: Float, toRat
         throw ResamplingError.invalidFormat
     }
     
-    // Perform conversion
+    // Perform conversion using class to avoid Swift 6 Sendable issues with captured vars
     var error: NSError?
-    var inputConsumed = false
+    
+    // Use a class to wrap mutable state for the converter callback
+    final class InputProvider: @unchecked Sendable {
+        var consumed = false
+        let buffer: AVAudioPCMBuffer
+        init(buffer: AVAudioPCMBuffer) { self.buffer = buffer }
+    }
+    let provider = InputProvider(buffer: inputBuffer)
     
     let status = converter.convert(to: outputBuffer, error: &error) { inNumPackets, outStatus in
-        if inputConsumed {
+        if provider.consumed {
             outStatus.pointee = .noDataNow
             return nil
         }
         outStatus.pointee = .haveData
-        inputConsumed = true
-        return inputBuffer
+        provider.consumed = true
+        return provider.buffer
     }
     
     guard status != .error, error == nil else {

@@ -153,7 +153,7 @@ final class StreamingPipelineTests: XCTestCase {
     
     // MARK: - Output Saving Helpers
     
-    private static let outputDir = URL(fileURLWithPath: "/path/to/ProjectTwo/temp/pipeline_outputs")
+    private static let outputDir = URL(fileURLWithPath: "\(projectRoot)/temp/pipeline_outputs")
     
     private func writeWAV(_ audio: AudioBuffer, to filename: String) throws {
         let url = Self.outputDir.appendingPathComponent(filename)
