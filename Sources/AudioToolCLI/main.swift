@@ -1,11 +1,11 @@
 //
 //  main.swift
-//  Generate
+//  AudioToolCLI
 //
 //  CLI tool for testing AudioTool MLX providers with chunking
 //  
-//  Build: xcodebuild build -scheme Generate -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
-//  Run: .build/DerivedData/Build/Products/Release/Generate --model frcrn --input test.wav --output enhanced.wav
+//  Build: xcodebuild build -scheme audiotool -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
+//  Run: .build/DerivedData/Build/Products/Release/audiotool --model frcrn --input test.wav --output enhanced.wav
 //
 
 import Foundation
@@ -60,9 +60,9 @@ while i < args.count {
 
 func printUsage() {
     print("""
-    AudioTool Generate - MLX Provider CLI with Chunking
+    audiotool - AudioToolSwift command line interface
     
-    Usage: Generate --model <model> --input <path> [--output <path>] [--weights <path>]
+    Usage: audiotool --model <model> --input <path> [--output <path>] [--weights <path>]
     
     Models:
       frcrn          FRCRN SE 16K (4s/25%/discard-edges)
@@ -77,14 +77,18 @@ func printUsage() {
       -h, --help     Show this help
     
     Example:
-      Generate -m frcrn -i test.wav -o enhanced.wav -w Weights/frcrn_se_16k.safetensors
-      Generate -m demucs -i song.wav -o vocals.wav -w ../Models/demucs_mlx_swift/Weights
+      audiotool -m frcrn -i test.wav -o enhanced.wav
+      audiotool -m demucs -i song.wav -o vocals.wav
+
+    Weights download automatically from HuggingFace on first use.
+    --weights is only needed to point at a local override.
     """)
 }
 
-// Validate input (skip for TTS which doesn't need input audio)
-let ttsModels = ["kokoro", "tts", "voice_mix", "voicemix", "mix", "voice_match", "voicematch", "match", "chatterbox", "chatterbox_expressive", "chatterbox_vad", "cb_vad", "vad_test", "meeting", "meeting_test", "diarization_test"]
-guard !inputPath.isEmpty || ttsModels.contains(model.lowercased()) else {
+// Validate input. Every remaining subcommand transforms an input file; the TTS
+// and diarization scratch commands that used to be exempt here were removed
+// along with their hardcoded paths into a machine that no longer exists.
+guard !inputPath.isEmpty else {
     print("Error: Input path required (--input)")
     printUsage()
     exit(1)
@@ -683,9 +687,9 @@ func runStreamingVerification(inputPath: String, outputPath: String, weightsPath
 
 func printUsageDetailed() {
     print("""
-    AudioTool Generate - MLX Provider CLI with Chunking
+    audiotool - AudioToolSwift command line interface
     
-    Usage: Generate --model <model> --input <path> [--output <path>] [--weights <path>]
+    Usage: audiotool --model <model> --input <path> [--output <path>] [--weights <path>]
     
     Models:
       frcrn           FRCRN SE 16K (4s/25%/discard-edges)
@@ -703,9 +707,12 @@ func printUsageDetailed() {
       -h, --help     Show this help
     
     Example:
-      Generate -m frcrn -i test.wav -o enhanced.wav -w Weights/frcrn_se_16k.safetensors
-      Generate -m demucs -i song.wav -o vocals.wav -w ../Models/demucs_mlx_swift/Weights
-      Generate -m ss_2spk -i mixed.wav -o separated.wav
+      audiotool -m frcrn -i test.wav -o enhanced.wav
+      audiotool -m demucs -i song.wav -o vocals.wav
+      audiotool -m ss_2spk -i mixed.wav -o separated.wav
+
+    Weights download automatically from HuggingFace on first use.
+    --weights is only needed to point at a local override.
     """)
 }
 
@@ -730,20 +737,6 @@ Task {
             try await runMossFormer2SS(inputPath: inputPath, outputPath: outputPath, variant: "whamr")
         case "sr48k", "sr", "mossformer2_sr":
             try await runMossFormer2SR(inputPath: inputPath, outputPath: outputPath)
-        case "kokoro", "tts":
-            try await runKokoroTest()
-        case "voice_mix", "voicemix", "mix":
-            try await runVoiceMixingTest()
-        case "voice_match", "voicematch", "match":
-            try await runVoiceMatchingTest()
-        case "chatterbox", "cb":
-            try await runChatterboxTest()
-        case "chatterbox_expressive", "cb_expressive":
-            try await runChatterboxExpressiveTest()
-        case "chatterbox_vad", "cb_vad":
-            try await runChatterboxVADTest()
-        case "vad_test":
-            try await runVADOnlyTest()
         #if canImport(AudioToolSpeech)
         case "transcribe", "speech", "stt":
             if #available(macOS 26.0, *) {
@@ -755,11 +748,9 @@ Task {
         #endif
         case "streaming_verify", "stream_test", "verify_stream":
             try await runStreamingVerification(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
-        case "meeting", "meeting_test", "diarization_test":
-            await runMeetingTest()
         default:
             print("Unknown model: \(model)")
-            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, streaming_verify, kokoro, voice_mix, voice_match, chatterbox, chatterbox_expressive, transcribe")
+            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, streaming_verify, transcribe")
             exit(1)
         }
         exit(0)
