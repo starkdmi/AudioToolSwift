@@ -60,4 +60,39 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# Claude Code local config (skills, settings) - not published
+.claude/
+
+# macOS
 .DS_Store
+
+# ---------------------------------------------------------------------------
+# Model weights — NEVER commit. Weights are hosted on HuggingFace and fetched
+# at runtime by ModelDownloader. A weight committed once lives in history
+# forever, so these patterns must stay ahead of any model source landing here.
+# ---------------------------------------------------------------------------
+*.safetensors
+*.mlpackage/
+*.mlmodel
+*.mlmodelc/
+*.onnx
+*.pt
+*.pth
+*.bin
+*.gguf
+*.npz
+Weights/
+
+# Audio fixtures — test/demo audio belongs in Tests/Fixtures/ (tracked
+# explicitly via the negation below); stray recordings do not.
+*.wav
+*.mp3
+*.flac
+*.m4a
+!Tests/Fixtures/**/*.wav
+
+# Build products
+DerivedData/
+.swiftpm/xcode/
+*.xcuserstate
