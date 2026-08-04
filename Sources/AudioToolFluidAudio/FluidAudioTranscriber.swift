@@ -52,9 +52,25 @@ public actor FluidAudioTranscriber: Transcriber {
     
     /// Load the ASR model (downloads if needed)
     public func load() async throws {
-        models = try await AsrModels.downloadAndLoad(version: version.asrVersion)
-        asrManager = AsrManager(config: .default)
-        try await asrManager?.initialize(models: models!)
+        let loaded = try await AsrModels.downloadAndLoad(version: version.asrVersion)
+        models = loaded
+        let manager = AsrManager(config: .default)
+        try await manager.loadModels(loaded)
+        asrManager = manager
+    }
+
+    /// Run one batch transcription against a fresh TDT decoder state.
+    ///
+    /// `AsrManager.transcribe` takes the decoder state `inout` so a caller can carry
+    /// it across successive chunks of one utterance. Every entry point here hands it
+    /// a complete recording, so each call gets its own state - sharing one would leak
+    /// the tail of the previous transcription into the next.
+    private func transcribeBatch(_ samples: [Float]) async throws -> ASRResult {
+        guard let manager = asrManager else {
+            throw AudioToolError.modelNotLoaded("FluidAudio ASR")
+        }
+        var decoderState = try TdtDecoderState()
+        return try await manager.transcribe(samples, decoderState: &decoderState)
     }
     
     // MARK: - Transcriber Conformance
@@ -63,11 +79,7 @@ public actor FluidAudioTranscriber: Transcriber {
     /// - Parameter audio: Input audio buffer (16kHz mono expected)
     /// - Returns: Transcription with text and word-level segments
     public func transcribe(_ audio: AudioBuffer) async throws -> Transcription {
-        guard let manager = asrManager else {
-            throw AudioToolError.modelNotLoaded("FluidAudio ASR")
-        }
-        
-        let result = try await manager.transcribe(audio.samples)
+        let result = try await transcribeBatch(audio.samples)
         let segments = buildSegmentsFromTokenTimings(result.tokenTimings)
         
         return Transcription(
@@ -110,22 +122,17 @@ public actor FluidAudioTranscriber: Transcriber {
     public nonisolated func streamTranscription(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
         AsyncThrowingStream { continuation in
             Task {
-                guard let manager = await self.asrManager else {
-                    continuation.finish(throwing: AudioToolError.modelNotLoaded("FluidAudio ASR"))
-                    return
-                }
-                
                 // Collect audio chunks for batch processing
                 var allSamples = [Float]()
-                
+
                 for await chunk in audio {
                     allSamples.append(contentsOf: chunk.samples)
                 }
-                
+
                 // Transcribe collected audio
                 do {
-                    let result = try await manager.transcribe(allSamples)
-                    
+                    let result = try await self.transcribeBatch(allSamples)
+
                     // Emit word-level segments if token timings available
                     if let tokenTimings = result.tokenTimings, !tokenTimings.isEmpty {
                         let wordTimings = WordTimingMerger.mergeTokensIntoWords(tokenTimings)
@@ -174,14 +181,10 @@ public actor FluidAudioTranscriber: Transcriber {
     /// - 0% at start, 90% when processing completes, 100% after segment building
     /// For real per-segment progress, use streaming API or pre-segmented audio
     public func transcribe(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> Transcription {
-        guard let manager = asrManager else {
-            throw AudioToolError.modelNotLoaded("FluidAudio ASR")
-        }
-        
         // Report initial progress
         await onProgress?(0.0)
-        
-        let result = try await manager.transcribe(audio.samples)
+
+        let result = try await transcribeBatch(audio.samples)
         
         // Report near-complete
         await onProgress?(90.0)

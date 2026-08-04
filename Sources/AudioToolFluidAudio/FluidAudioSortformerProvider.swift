@@ -27,8 +27,8 @@ import AudioToolCore
 /// | Config | Latency | Use Case |
 /// |--------|---------|----------|
 /// | `.default` | ~1.04s | Real-time streaming (recommended) |
-/// | `.nvidiaLowLatency` | ~1.04s | NVIDIA benchmark config |
-/// | `.nvidiaHighLatency` | ~30.4s | Batch, best quality |
+/// | `.balancedV2_1` | ~1.04s | NVIDIA benchmark config |
+/// | `.highContextV2_1` | ~30.4s | Batch, best quality |
 ///
 /// - Warning: CoreML models have static input shapes baked in at conversion time.
 ///   The `.default` config matches the model shipped with FluidAudio v0.10.0+.
@@ -130,14 +130,14 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         }
         
         // Check if using NVIDIA low latency (similar to default)
-        let nvidiaLowConfig = SortformerConfig.nvidiaLowLatency
+        let nvidiaLowConfig = SortformerConfig.balancedV2_1
         if config.isCompatible(with: nvidiaLowConfig) {
             print("[Sortformer] Using NVIDIA low latency config - may require matching CoreML model")
             return
         }
         
         // Check if using NVIDIA high latency
-        let nvidiaHighConfig = SortformerConfig.nvidiaHighLatency
+        let nvidiaHighConfig = SortformerConfig.highContextV2_1
         if config.isCompatible(with: nvidiaHighConfig) {
             print("[Sortformer] Warning: High latency config requires separately converted CoreML model")
             print("[Sortformer] If you experience runtime errors, use sortformerLowLatency() instead")
@@ -220,12 +220,20 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         // Use batch processing for complete audio
         let timeline = try diarizer.processComplete(processedSamples)
         
-        // Convert Sortformer timeline to AudioTool DiarizedSegment format
-        // Sortformer timeline.segments is [[SortformerSegment]] - array per speaker
+        return Self.speakerTimeline(from: timeline)
+    }
+
+    /// Convert a FluidAudio `DiarizerTimeline` into our `SpeakerTimeline`.
+    ///
+    /// The timeline no longer exposes a flat `segments` array indexed by speaker; it
+    /// keys speakers by slot and each one carries its own segments. Finalized and
+    /// tentative segments are both included: a caller asking for a timeline wants
+    /// everything heard so far, and for completed audio the tentative set is empty.
+    private static func speakerTimeline(from timeline: DiarizerTimeline) -> SpeakerTimeline {
         var segments: [DiarizedSegment] = []
-        
-        for (speakerIndex, speakerSegments) in timeline.segments.enumerated() {
-            for segment in speakerSegments {
+
+        for (speakerIndex, speaker) in timeline.speakers {
+            for segment in speaker.finalizedSegments + speaker.tentativeSegments {
                 segments.append(DiarizedSegment(
                     timeRange: TimeRange(start: Double(segment.startTime), end: Double(segment.endTime)),
                     speakerID: SpeakerID(speakerIndex),
@@ -233,13 +241,13 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
                 ))
             }
         }
-        
+
         // Sort segments chronologically by start time
         segments.sort { $0.timeRange.start < $1.timeRange.start }
-        
+
         return SpeakerTimeline(segments: segments)
     }
-    
+
     /// Apply preprocessing normalization to audio samples
     private func applyPreprocessNormalization(_ samples: [Float]) -> [Float] {
         switch preprocessNormalization {
@@ -291,33 +299,18 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     /// Returns chunk result when enough audio has been processed
     /// - Parameter samples: Audio samples to add (16kHz mono)
     /// - Returns: Optional result with speaker predictions for this chunk
-    public func processChunk(_ samples: [Float]) throws -> SortformerChunkResult? {
+    public func processChunk(_ samples: [Float]) throws -> DiarizerChunkResult? {
         guard let diarizer = diarizer else {
             throw AudioToolError.modelNotLoaded("FluidAudio Sortformer")
         }
-        
-        return try diarizer.processSamples(samples)
+
+        return try diarizer.process(samples: samples)?.chunkResult
     }
-    
+
     /// Get current accumulated timeline (for streaming mode)
     public var currentTimeline: SpeakerTimeline? {
         guard let diarizer = diarizer else { return nil }
-        
-        let timeline = diarizer.timeline
-        var segments: [DiarizedSegment] = []
-        
-        for (speakerIndex, speakerSegments) in timeline.segments.enumerated() {
-            for segment in speakerSegments {
-                segments.append(DiarizedSegment(
-                    timeRange: TimeRange(start: Double(segment.startTime), end: Double(segment.endTime)),
-                    speakerID: SpeakerID(speakerIndex),
-                    confidence: 1.0
-                ))
-            }
-        }
-        
-        segments.sort { $0.timeRange.start < $1.timeRange.start }
-        return SpeakerTimeline(segments: segments)
+        return Self.speakerTimeline(from: diarizer.timeline)
     }
     
     /// Reset streaming state for new audio session
@@ -369,25 +362,25 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
             inputSamples = audio.samples
         }
         
-        // Process the audio through Sortformer
-        // Note: We use processSamples which preserves spkcache state
-        // The diarizer's internal state (spkcache) from previous diarization is maintained
-        let result = try diarizer.processSamples(inputSamples)
-        
-        guard let chunkResult = result else {
+        // Process the audio through Sortformer.
+        // Note: this streaming path preserves spkcache state, so the speaker
+        // characteristics learned during the previous diarization still apply.
+        let update = try diarizer.process(samples: inputSamples)
+
+        guard let chunkResult = update?.chunkResult else {
             // Audio too short for full chunk - use batch processing with state preservation
             return try identifySpeakerBatch(inputSamples)
         }
-        
+
         // Aggregate probabilities across all frames
         let numSpeakers = 4
-        let frameCount = chunkResult.frameCount
-        
+        let frameCount = chunkResult.finalizedFrameCount
+
         // Calculate average probabilities across all frames
         var avgProbs = [Float](repeating: 0, count: numSpeakers)
         for frame in 0..<frameCount {
             for speaker in 0..<numSpeakers {
-                let prob = chunkResult.getSpeakerPrediction(speaker: speaker, frame: frame)
+                let prob = chunkResult.probability(speaker: speaker, frame: frame, numSpeakers: numSpeakers)
                 avgProbs[speaker] += prob
             }
         }
@@ -438,13 +431,13 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         }
         
         // Process the audio (padded or original)
-        if let result = try diarizer.processSamples(processingSamples) {
-            let frameCount = result.frameCount
+        if let result = try diarizer.process(samples: processingSamples)?.chunkResult {
+            let frameCount = result.finalizedFrameCount
             var avgProbs = [Float](repeating: 0, count: numSpeakers)
-            
+
             for frame in 0..<frameCount {
                 for speaker in 0..<numSpeakers {
-                    avgProbs[speaker] += result.getSpeakerPrediction(speaker: speaker, frame: frame)
+                    avgProbs[speaker] += result.probability(speaker: speaker, frame: frame, numSpeakers: numSpeakers)
                 }
             }
             

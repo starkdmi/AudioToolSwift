@@ -136,7 +136,7 @@ public struct FluidAudioProviders {
     public static func sortformerHighLatency(
         preprocessNormalization: PreprocessNormalization = .none
     ) -> FluidAudioSortformerProvider {
-        FluidAudioSortformerProvider(config: .nvidiaHighLatency, preprocessNormalization: preprocessNormalization)
+        FluidAudioSortformerProvider(config: .highContextV2_1, preprocessNormalization: preprocessNormalization)
     }
     
     /// Create Sortformer with NVIDIA's low latency configuration
@@ -158,7 +158,7 @@ public struct FluidAudioProviders {
     public static func sortformerNVIDIALowLatency(
         preprocessNormalization: PreprocessNormalization = .none
     ) -> FluidAudioSortformerProvider {
-        FluidAudioSortformerProvider(config: .nvidiaLowLatency, preprocessNormalization: preprocessNormalization)
+        FluidAudioSortformerProvider(config: .balancedV2_1, preprocessNormalization: preprocessNormalization)
     }
 }
 
