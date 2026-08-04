@@ -1,13 +1,13 @@
 //
 //  USSMLXProvider.swift
-//  ClearVoiceUSS
+//  AudioToolUSS
 //
 //  Universal Speech Separation provider using USS MLX model
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 @preconcurrency import USSMLXSwift
 import AudioUtils
 import MLX
@@ -109,7 +109,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         
         // Get model weights path from USSMLXSwift bundle using public accessor
         guard let weightsURL = USSBundle.weightsURL(fp16: useFp16) else {
-            throw ClearVoiceError.modelNotFound("USS ResUNet30 weights (\(useFp16 ? "fp16" : "fp32"))")
+            throw AudioToolError.modelNotFound("USS ResUNet30 weights (\(useFp16 ? "fp16" : "fp32"))")
         }
         
         // Load weights
@@ -117,7 +117,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         
         // Load and cache ALL embeddings upfront (~14KB total for 7 types)
         guard let embeddingsDir = USSBundle.embeddingsDirectory else {
-            throw ClearVoiceError.modelNotFound("USS embeddings directory")
+            throw AudioToolError.modelNotFound("USS embeddings directory")
         }
         
         for type in EmbeddingLoader.EmbeddingType.allCases {
@@ -127,7 +127,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         
         // Set initial conditioning
         guard let initialConditioning = embeddingCache[initialEmbeddingType] else {
-            throw ClearVoiceError.modelNotFound("USS embedding for \(initialEmbeddingType.rawValue)")
+            throw AudioToolError.modelNotFound("USS embedding for \(initialEmbeddingType.rawValue)")
         }
         
         // Create inference pipeline with 2s chunks, no overlap (hopLength == segmentDuration)
@@ -171,14 +171,14 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// Switch conditioning embedding type without reloading model weights.
     /// Embeddings are cached, so switching is instant (~0ms).
     /// - Parameter type: New embedding type to use for subsequent process() calls
-    /// - Throws: ClearVoiceError.modelNotLoaded if model not loaded
+    /// - Throws: AudioToolError.modelNotLoaded if model not loaded
     public func setConditioning(_ type: EmbeddingLoader.EmbeddingType) async throws {
         guard inference != nil else {
-            throw ClearVoiceError.modelNotLoaded("USS MLX")
+            throw AudioToolError.modelNotLoaded("USS MLX")
         }
         
         guard let cachedConditioning = embeddingCache[type] else {
-            throw ClearVoiceError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
+            throw AudioToolError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
         }
         
         self.conditioning = cachedConditioning
@@ -194,7 +194,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// - Parameter types: Embedding types to prewarm (runs tiny inference with each)
     public func prewarmEmbeddings(_ types: [EmbeddingLoader.EmbeddingType]) async throws {
         guard let inference = inference else {
-            throw ClearVoiceError.modelNotLoaded("USS MLX")
+            throw AudioToolError.modelNotLoaded("USS MLX")
         }
         
         // Create tiny audio for prewarming (0.1 second = 3200 samples)
@@ -220,7 +220,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// - Returns: Separated audio buffer
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
         guard let inference = inference, let conditioning = conditioning else {
-            throw ClearVoiceError.modelNotLoaded("USS MLX")
+            throw AudioToolError.modelNotLoaded("USS MLX")
         }
         
         return try separateWithConditioning(input, conditioning: conditioning, inference: inference)
@@ -237,11 +237,11 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// - Returns: Separated audio buffer
     public func process(_ input: AudioBuffer, type: EmbeddingLoader.EmbeddingType) async throws -> AudioBuffer {
         guard let inference = inference else {
-            throw ClearVoiceError.modelNotLoaded("USS MLX")
+            throw AudioToolError.modelNotLoaded("USS MLX")
         }
         
         guard let cachedConditioning = embeddingCache[type] else {
-            throw ClearVoiceError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
+            throw AudioToolError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
         }
         
         // Use specified conditioning without modifying stored state
@@ -262,14 +262,14 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         types: [EmbeddingLoader.EmbeddingType]
     ) async throws -> [EmbeddingLoader.EmbeddingType: AudioBuffer] {
         guard let inference = inference else {
-            throw ClearVoiceError.modelNotLoaded("USS MLX")
+            throw AudioToolError.modelNotLoaded("USS MLX")
         }
         
         // Collect conditionings from cache
         var conditionings: [MLXArray] = []
         for type in types {
             guard let cachedConditioning = embeddingCache[type] else {
-                throw ClearVoiceError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
+                throw AudioToolError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
             }
             conditionings.append(cachedConditioning)
         }
@@ -362,7 +362,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// - Returns: Separated target and background audio
     public func separateWithBackground(_ audio: AudioBuffer) async throws -> SeparatedWithBackground {
         guard let inference = inference, let conditioning = conditioning else {
-            throw ClearVoiceError.modelNotLoaded("USS MLX")
+            throw AudioToolError.modelNotLoaded("USS MLX")
         }
         
         return try separateWithBackgroundInternal(audio, conditioning: conditioning, inference: inference)
@@ -375,11 +375,11 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// - Returns: Separated target and background audio
     public func separateWithBackground(_ audio: AudioBuffer, type: EmbeddingLoader.EmbeddingType) async throws -> SeparatedWithBackground {
         guard let inference = inference else {
-            throw ClearVoiceError.modelNotLoaded("USS MLX")
+            throw AudioToolError.modelNotLoaded("USS MLX")
         }
         
         guard let cachedConditioning = embeddingCache[type] else {
-            throw ClearVoiceError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
+            throw AudioToolError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
         }
         
         return try separateWithBackgroundInternal(audio, conditioning: cachedConditioning, inference: inference)

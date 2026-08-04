@@ -1,14 +1,14 @@
 //
 //  Errors.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Framework error types
 //
 
 import Foundation
 
-/// ClearVoice framework errors
-public enum ClearVoiceError: Error, Sendable {
+/// AudioTool framework errors
+public enum AudioToolError: Error, Sendable {
     
     // MARK: - Model Errors
     
@@ -66,7 +66,7 @@ public enum ClearVoiceError: Error, Sendable {
 
 // MARK: - LocalizedError
 
-extension ClearVoiceError: LocalizedError {
+extension AudioToolError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .modelNotFound(let model):

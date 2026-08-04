@@ -1,17 +1,17 @@
 //
-//  ClearVoiceMLXTranslation.swift
-//  ClearVoiceMLXTranslation
+//  AudioToolMLXTranslation.swift
+//  AudioToolMLXTranslation
 //
 //  Public exports and convenience factory for MLX-based translation providers
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 
 // Re-export core types
-@_exported import ClearVoice
-@_exported import ClearVoiceCore
+@_exported import AudioTool
+@_exported import AudioToolCore
 
 /// Factory for creating MLX-based translation providers
 public struct MLXTranslationProviders {
@@ -44,8 +44,8 @@ public struct MLXTranslationProviders {
     }
 }
 
-/// ClearVoice extension for registering MLX translation providers
-extension ClearVoice {
+/// AudioEngine extension for registering MLX translation providers
+extension AudioEngine {
     
     /// Configure with TranslateGemma translation provider
     /// - Parameters:

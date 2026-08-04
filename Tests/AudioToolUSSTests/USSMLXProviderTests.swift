@@ -1,13 +1,13 @@
 //
 //  USSMLXProviderTests.swift
-//  ClearVoiceUSSTests
+//  AudioToolUSSTests
 //
 //  Tests for USS MLX speech separation
 //
 
 import XCTest
-import ClearVoiceUSS
-import ClearVoiceCore
+import AudioToolUSS
+import AudioToolCore
 import AudioUtils
 import MLX
 @preconcurrency import USSMLXSwift

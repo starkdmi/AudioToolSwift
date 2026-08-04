@@ -1,14 +1,14 @@
 //
 //  RUAccentProviderTests.swift
-//  ClearVoiceTests
+//  AudioToolTests
 //
 //  Tests for Russian stress/accent preprocessing
 //
 
 import Testing
 import Foundation
-@testable import ClearVoiceTTS
-@testable import ClearVoiceCore
+@testable import AudioToolTTS
+@testable import AudioToolCore
 
 @Suite("RUAccent Provider Tests")
 struct RUAccentProviderTests {
@@ -107,8 +107,8 @@ struct RUAccentProviderTests {
         print("✅ Empty string handled correctly")
     }
     
-    @Test("ClearVoice integration")
-    func testClearVoiceIntegration() async throws {
+    @Test("AudioTool integration")
+    func testAudioToolIntegration() async throws {
         try #require(Self.modelsAvailable, "RUAccent models not found")
         
         // Test factory method

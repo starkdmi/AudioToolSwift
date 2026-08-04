@@ -1,14 +1,14 @@
 //
 //  ChatterboxTTSProvider.swift
-//  ClearVoiceTTS
+//  AudioToolTTS
 //
 //  ChatterBox Multilingual TTS provider with MLX backend
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
-import ClearVoiceFluidAudio
+import AudioTool
+import AudioToolCore
+import AudioToolFluidAudio
 import ChatterboxMLXSwift
 import MLX
 import MLXNN
@@ -270,7 +270,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
                 } else if let anyFile = files.first(where: { $0.pathExtension == "safetensors" }) {
                     weightsPath = anyFile
                 } else {
-                    throw ClearVoiceError.modelNotFound("No .safetensors file found in \(path.lastPathComponent)")
+                    throw AudioToolError.modelNotFound("No .safetensors file found in \(path.lastPathComponent)")
                 }
             }
             
@@ -336,7 +336,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             if let tokenizerPath = tokenizerPath {
                 textTokenizer = try MTLTokenizer(tokenizerJSONPath: tokenizerPath)
             } else {
-                throw ClearVoiceError.modelNotFound("Missing tokenizer JSON (grapheme_mtl_merged_expanded_v1.json)")
+                throw AudioToolError.modelNotFound("Missing tokenizer JSON (grapheme_mtl_merged_expanded_v1.json)")
             }
             
             // Load default voice conditioning from conds.safetensors (optional)
@@ -384,7 +384,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     /// - Parameter url: Path to reference audio file (WAV recommended)
     public func setReferenceAudio(from url: URL) async throws {
         guard let voiceEncoder = voiceEncoder else {
-            throw ClearVoiceError.modelNotLoaded("ChatterBox")
+            throw AudioToolError.modelNotLoaded("ChatterBox")
         }
         
         let info = try AudioLoader().getAudioInfo(from: url.path)
@@ -429,9 +429,9 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     
     /// Set reference audio from an AudioBuffer
     /// - Parameter audio: Audio buffer with reference speech
-    public func setReferenceAudio(_ audio: ClearVoiceCore.AudioBuffer) async throws {
+    public func setReferenceAudio(_ audio: AudioToolCore.AudioBuffer) async throws {
         guard let voiceEncoder = voiceEncoder else {
-            throw ClearVoiceError.modelNotLoaded("ChatterBox")
+            throw AudioToolError.modelNotLoaded("ChatterBox")
         }
         
         let wav = MLXArray(audio.samples)
@@ -477,7 +477,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         
         // Load T3 conditioning
         guard let speakerEmb = tensors["t3.speaker_emb"] else {
-            throw ClearVoiceError.resourceUnavailable("Missing t3.speaker_emb in conds.safetensors")
+            throw AudioToolError.resourceUnavailable("Missing t3.speaker_emb in conds.safetensors")
         }
         
         let condTokens = tensors["t3.cond_prompt_speech_tokens"]?.asType(.int32)
@@ -496,7 +496,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
               let promptTokenLen = tensors["gen.prompt_token_len"],
               let promptFeat = tensors["gen.prompt_feat"],
               let embedding = tensors["gen.embedding"] else {
-            throw ClearVoiceError.resourceUnavailable("Missing gen.* keys in conds.safetensors")
+            throw AudioToolError.resourceUnavailable("Missing gen.* keys in conds.safetensors")
         }
         
         var promptFeatLen = tensors["gen.prompt_feat_len"]?.asType(.int32)
@@ -612,9 +612,9 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     ///   - text: Text to synthesize
     ///   - voice: Voice identifier (ignored - uses reference audio or default voice)
     /// - Returns: Audio buffer with synthesized speech (24kHz mono)
-    public func synthesize(_ text: String, voice: String) async throws -> ClearVoiceCore.AudioBuffer {
+    public func synthesize(_ text: String, voice: String) async throws -> AudioToolCore.AudioBuffer {
         guard let t3 = t3, let s3Gen = s3Gen, let textTokenizer = textTokenizer else {
-            throw ClearVoiceError.modelNotLoaded("ChatterBox")
+            throw AudioToolError.modelNotLoaded("ChatterBox")
         }
         
         // Use reference audio if set, otherwise fall back to default voice
@@ -633,7 +633,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             useSpeakerEmbedding = defaultT3Cond.speaker_emb
             useT3Cond = defaultT3Cond
         } else {
-            throw ClearVoiceError.resourceUnavailable("No reference audio set and no default voice available. Either call setReferenceAudio() or use a model repo with conds.safetensors.")
+            throw AudioToolError.resourceUnavailable("No reference audio set and no default voice available. Either call setReferenceAudio() or use a model repo with conds.safetensors.")
         }
         
         // Preprocess text
@@ -674,7 +674,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         } else {
             // Compute T3 conditioning from reference audio
             guard let refWav = referenceWav, let refSr = referenceSampleRate else {
-                throw ClearVoiceError.resourceUnavailable("Reference audio not set")
+                throw AudioToolError.resourceUnavailable("Reference audio not set")
             }
             
             let encCondLen = 6 * S3_SR
@@ -690,7 +690,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             let t3MelBatch = t3Mel.expandedDimensions(axis: 0)
             let t3MelLen = MLXArray([Int32(t3MelBatch.shape[2])])
             guard let s3Tokenizer = s3Tokenizer else {
-                throw ClearVoiceError.modelNotLoaded("S3Tokenizer")
+                throw AudioToolError.modelNotLoaded("S3Tokenizer")
             }
             let (t3Tokens, _) = s3Tokenizer(t3MelBatch, t3MelLen)
             let plen = t3.hp.speech_cond_prompt_len
@@ -730,7 +730,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         
         // Convert to samples
         let samples = wavMono.asArray(Float.self)
-        var audioBuffer = ClearVoiceCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
+        var audioBuffer = AudioToolCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
         
         // Apply VAD trimming if enabled (removes start/end artifacts like breathing/noise)
         if vadTrimEnabled, let vad = vadProvider {
@@ -741,11 +741,11 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     }
     
     /// Trim audio using VAD to remove non-speech segments at start and end
-    private func trimAudioWithVAD(_ audio: ClearVoiceCore.AudioBuffer, using vad: FluidAudioVADProvider) async throws -> ClearVoiceCore.AudioBuffer {
+    private func trimAudioWithVAD(_ audio: AudioToolCore.AudioBuffer, using vad: FluidAudioVADProvider) async throws -> AudioToolCore.AudioBuffer {
         // Resample to 16kHz for VAD using simple linear interpolation
         // (polyphase resampling preserves high frequencies which causes VAD to over-detect speech)
         let vadSampleRate = 16000
-        let resampledAudio: ClearVoiceCore.AudioBuffer
+        let resampledAudio: AudioToolCore.AudioBuffer
         
         if audio.sampleRate != vadSampleRate {
             // Use simple linear interpolation resampling
@@ -764,7 +764,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
                     resampled[i] = audio.samples[srcIdx]
                 }
             }
-            resampledAudio = ClearVoiceCore.AudioBuffer(samples: resampled, sampleRate: vadSampleRate, channels: 1)
+            resampledAudio = AudioToolCore.AudioBuffer(samples: resampled, sampleRate: vadSampleRate, channels: 1)
         } else {
             resampledAudio = audio
         }
@@ -826,7 +826,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         print("[VAD] Trimmed: \(String(format: "%.3f", audioDuration - trimmedDuration))s removed")
         #endif
         
-        return ClearVoiceCore.AudioBuffer(samples: trimmedSamples, sampleRate: audio.sampleRate, channels: 1)
+        return AudioToolCore.AudioBuffer(samples: trimmedSamples, sampleRate: audio.sampleRate, channels: 1)
     }
     
     
@@ -835,7 +835,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     ///   - text: Text to synthesize
     ///   - voice: Voice identifier (ignored)
     /// - Returns: Async stream of audio chunks
-    public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<ClearVoiceCore.AudioBuffer, Error> {
+    public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -879,8 +879,8 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     public var inputChannels: Int { 0 }  // Text input
     public var outputChannels: Int { 1 }
     
-    public func process(_ input: ClearVoiceCore.AudioBuffer) async throws -> ClearVoiceCore.AudioBuffer {
-        throw ClearVoiceError.pipelineConfigurationInvalid("ChatterBox is a synthesizer, use synthesize() instead of process()")
+    public func process(_ input: AudioToolCore.AudioBuffer) async throws -> AudioToolCore.AudioBuffer {
+        throw AudioToolError.pipelineConfigurationInvalid("ChatterBox is a synthesizer, use synthesize() instead of process()")
     }
     
     // MARK: - Private Helpers
@@ -1026,7 +1026,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             return try MLX.loadArrays(data: data)
         }
         
-        throw ClearVoiceError.modelNotFound("S3Tokenizer weights not found in model bundle or HuggingFace cache")
+        throw AudioToolError.modelNotFound("S3Tokenizer weights not found in model bundle or HuggingFace cache")
     }
     
     /// Find S3TokenizerV2 in HuggingFace cache

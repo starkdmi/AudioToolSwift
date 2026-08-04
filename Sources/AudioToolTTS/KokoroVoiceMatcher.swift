@@ -1,6 +1,6 @@
 //
 //  KokoroVoiceMatcher.swift
-//  ClearVoiceTTS
+//  AudioToolTTS
 //
 //  Voice matching for Kokoro TTS using speaker embeddings
 //
@@ -8,7 +8,7 @@
 import Foundation
 import Accelerate
 import MLX
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - Voice Embedding Table
 
@@ -304,7 +304,7 @@ public actor KokoroVoiceMatcher {
     ) async throws -> VoiceEmbeddingTable {
         let voices = tts.availableVoices
         guard !voices.isEmpty else {
-            throw ClearVoiceError.resourceUnavailable("No voices loaded in TTS provider")
+            throw AudioToolError.resourceUnavailable("No voices loaded in TTS provider")
         }
         
         var embeddings: [[Float]] = []
@@ -349,7 +349,7 @@ public actor KokoroVoiceMatcher {
         let k = min(topK ?? defaultTopK, embeddingTable.count)
         
         guard k > 0 else {
-            throw ClearVoiceError.resourceUnavailable("Empty embedding table")
+            throw AudioToolError.resourceUnavailable("Empty embedding table")
         }
         
         // Step 1: Extract reference embedding

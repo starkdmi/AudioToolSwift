@@ -1,13 +1,13 @@
 //
 //  MLXEnhancerProvider.swift
-//  ClearVoiceMLX
+//  AudioToolMLX
 //
 //  MLX-based speech enhancement providers with chunking support
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 @preconcurrency import MLX
 @preconcurrency import MLXNN
 @preconcurrency import AudioUtils  // SwiftAudio - used for audio I/O
@@ -84,7 +84,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
                 if FileManager.default.fileExists(atPath: modelPath) {
                     resolvedPath = modelPath
                 } else {
-                    throw ClearVoiceError.modelNotFound("Precision \(precision.rawValue) not available for MossFormer2SE48K")
+                    throw AudioToolError.modelNotFound("Precision \(precision.rawValue) not available for MossFormer2SE48K")
                 }
             } else {
                 // Auto-download from HuggingFace
@@ -101,7 +101,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
         guard let pipeline = pipeline else {
-            throw ClearVoiceError.modelNotLoaded("MossFormer2SE48K")
+            throw AudioToolError.modelNotLoaded("MossFormer2SE48K")
         }
         
         let durationSeconds = Float(input.samples.count) / Float(sampleRate)
@@ -180,7 +180,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
         let results = try pipeline.enhanceAudioArrayBatch([inputMLX])
         
         guard let enhanced = results.first else {
-            throw ClearVoiceError.pipelineConfigurationInvalid("SE 48K enhancement returned empty")
+            throw AudioToolError.pipelineConfigurationInvalid("SE 48K enhancement returned empty")
         }
         
         eval(enhanced)
@@ -219,7 +219,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     /// - Returns: Enhanced audio with background track
     public func processWithBackground(_ input: AudioBuffer, gamma: Float = 1.10) async throws -> MLXEnhancedWithBackground {
         guard let pipeline = pipeline else {
-            throw ClearVoiceError.modelNotLoaded("MossFormer2SE48K")
+            throw AudioToolError.modelNotLoaded("MossFormer2SE48K")
         }
         
         // Use direct processing with background extraction (matches Python implementation)
@@ -256,7 +256,7 @@ extension MossFormer2SE48KProvider: StreamableOutput {
     /// Internal implementation for streaming - runs within actor context
     private func processStreamImpl(_ input: AudioBuffer, continuation: AsyncThrowingStream<AudioBuffer, Error>.Continuation) async throws {
         guard let pipeline = pipeline else {
-            throw ClearVoiceError.modelNotLoaded("MossFormer2SE48K")
+            throw AudioToolError.modelNotLoaded("MossFormer2SE48K")
         }
         
         let audio = input.samples
@@ -383,7 +383,7 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("FRCRN_SE_16K")
+            throw AudioToolError.modelNotLoaded("FRCRN_SE_16K")
         }
         
         // Always use chunking for consistent quality
@@ -453,7 +453,7 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     /// - Returns: Enhanced audio with background track
     public func processWithBackground(_ input: AudioBuffer) async throws -> MLXEnhancedWithBackground {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("FRCRN_SE_16K")
+            throw AudioToolError.modelNotLoaded("FRCRN_SE_16K")
         }
         
         let inputMLX = MLXArray(input.samples).reshaped([1, -1])
@@ -501,7 +501,7 @@ extension FRCRNSE16KProvider: StreamableOutput {
     /// Internal implementation for streaming - runs within actor context
     private func processStreamImpl(_ input: AudioBuffer, continuation: AsyncThrowingStream<AudioBuffer, Error>.Continuation) async throws {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("FRCRN_SE_16K")
+            throw AudioToolError.modelNotLoaded("FRCRN_SE_16K")
         }
         
         let audio = input.samples
@@ -570,5 +570,5 @@ extension FRCRNSE16KProvider: StreamableOutput {
     }
 }
 
-// Note: MossFormer GAN SE is now available via ClearVoiceCoreML (CoreML-based provider)
+// Note: MossFormer GAN SE is now available via AudioToolCoreML (CoreML-based provider)
 // Use CoreMLProviders.mossformerGANSE16K() instead

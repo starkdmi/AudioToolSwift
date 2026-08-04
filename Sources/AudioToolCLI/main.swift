@@ -2,19 +2,19 @@
 //  main.swift
 //  Generate
 //
-//  CLI tool for testing ClearVoice MLX providers with chunking
+//  CLI tool for testing AudioTool MLX providers with chunking
 //  
 //  Build: xcodebuild build -scheme Generate -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
 //  Run: .build/DerivedData/Build/Products/Release/Generate --model frcrn --input test.wav --output enhanced.wav
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
-import ClearVoiceMLX
-import ClearVoiceFluidAudio
-#if canImport(ClearVoiceSpeech)
-import ClearVoiceSpeech
+import AudioTool
+import AudioToolCore
+import AudioToolMLX
+import AudioToolFluidAudio
+#if canImport(AudioToolSpeech)
+import AudioToolSpeech
 #endif
 import MLX
 import AudioUtils
@@ -60,7 +60,7 @@ while i < args.count {
 
 func printUsage() {
     print("""
-    ClearVoice Generate - MLX Provider CLI with Chunking
+    AudioTool Generate - MLX Provider CLI with Chunking
     
     Usage: Generate --model <model> --input <path> [--output <path>] [--weights <path>]
     
@@ -483,7 +483,7 @@ func runMossFormer2SR(inputPath: String, outputPath: String) async throws {
 
 // MARK: - Apple Speech Transcription
 
-#if canImport(ClearVoiceSpeech)
+#if canImport(AudioToolSpeech)
 @available(iOS 26.0, macOS 26.0, *)
 func runTranscribe(inputPath: String) async throws {
     print("\n=== Apple Speech Transcription ===")
@@ -683,7 +683,7 @@ func runStreamingVerification(inputPath: String, outputPath: String, weightsPath
 
 func printUsageDetailed() {
     print("""
-    ClearVoice Generate - MLX Provider CLI with Chunking
+    AudioTool Generate - MLX Provider CLI with Chunking
     
     Usage: Generate --model <model> --input <path> [--output <path>] [--weights <path>]
     
@@ -744,7 +744,7 @@ Task {
             try await runChatterboxVADTest()
         case "vad_test":
             try await runVADOnlyTest()
-        #if canImport(ClearVoiceSpeech)
+        #if canImport(AudioToolSpeech)
         case "transcribe", "speech", "stt":
             if #available(macOS 26.0, *) {
                 try await runTranscribe(inputPath: inputPath)

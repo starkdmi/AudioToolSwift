@@ -1,12 +1,12 @@
 //
 //  ModelDownloadViews.swift
-//  ClearVoice
+//  AudioTool
 //
 //  SwiftUI views for model download management
 //
 
 import SwiftUI
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - Model Download Card
 

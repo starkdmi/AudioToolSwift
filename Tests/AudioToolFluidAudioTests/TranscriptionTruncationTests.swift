@@ -1,13 +1,13 @@
 //
 //  TranscriptionTruncationTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Regression tests for transcription truncation bug (mel context issue)
 //
 
 import XCTest
-import ClearVoiceFluidAudio
-import ClearVoiceCore
+import AudioToolFluidAudio
+import AudioToolCore
 import AudioUtils
 import MLX
 

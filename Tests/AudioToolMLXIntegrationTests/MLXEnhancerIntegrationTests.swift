@@ -1,19 +1,19 @@
 //
 //  MLXEnhancerIntegrationTests.swift
-//  ClearVoiceMLXIntegrationTests
+//  AudioToolMLXIntegrationTests
 //
 //  Integration tests for MLX enhancement providers with chunking
 //  Saves audio outputs to Models/*/swift_chunked_outputs/
 //
 //  NOTE: Run with xcodebuild for Metal support:
-//    xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS'
+//    xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS'
 //
 
 import Testing
 import Foundation
-@testable import ClearVoiceMLX
-@testable import ClearVoice
-@testable import ClearVoiceCore
+@testable import AudioToolMLX
+@testable import AudioTool
+@testable import AudioToolCore
 import MLX
 import AudioUtils
 
@@ -21,8 +21,8 @@ import AudioUtils
 
 struct TestConfig {
     // Project root computed from source file location
-    // #filePath → .../ClearVoice/Tests/ClearVoiceMLXIntegrationTests/MLXEnhancerIntegrationTests.swift
-    // We go up 4 levels: file → ClearVoiceMLXIntegrationTests → Tests → ClearVoice → ProjectTwo
+    // #filePath → .../AudioTool/Tests/AudioToolMLXIntegrationTests/MLXEnhancerIntegrationTests.swift
+    // We go up 4 levels: file → AudioToolMLXIntegrationTests → Tests → AudioTool → ProjectTwo
     static let projectRoot: String = {
         let filePath = #filePath
         var url = URL(fileURLWithPath: filePath)

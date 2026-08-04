@@ -1,15 +1,15 @@
 //
 //  AppleTTSTests.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Tests for Apple TTS provider (AVSpeechSynthesizer)
 //
 
 import Testing
 import AVFoundation
-@testable import ClearVoice
-@testable import ClearVoiceCore
-@testable import ClearVoiceTTS
+@testable import AudioTool
+@testable import AudioToolCore
+@testable import AudioToolTTS
 
 @Suite("Apple TTS Tests")
 struct AppleTTSTests {
@@ -73,11 +73,11 @@ struct AppleTTSTests {
         #expect(provider.sampleRate == 22050)
     }
     
-    // MARK: - ClearVoice Integration
+    // MARK: - AudioTool Integration
     
-    @Test("ClearVoice configure Apple TTS")
-    func testClearVoiceRegistration() async {
-        let voice = ClearVoice()
+    @Test("AudioTool configure Apple TTS")
+    func testAudioToolRegistration() async {
+        let voice = AudioEngine()
         await voice.configureAppleTTS(language: "fr-FR")
         #expect(true)
     }
@@ -115,9 +115,9 @@ struct AppleTTSTests {
         #expect(audio.samples.count > 0)
     }
     
-    @Test("ClearVoice full integration with Apple TTS")
-    func testClearVoiceFullIntegration() async throws {
-        let voice = ClearVoice()
+    @Test("AudioTool full integration with Apple TTS")
+    func testAudioToolFullIntegration() async throws {
+        let voice = AudioEngine()
         await voice.configureAppleTTS(language: "it-IT")
         
         let audio = try await voice.synthesize(
@@ -126,7 +126,7 @@ struct AppleTTSTests {
             model: .appleTTS(language: "it-IT")
         )
         
-        print("Italian synthesis via ClearVoice: \(audio.samples.count) samples")
+        print("Italian synthesis via AudioTool: \(audio.samples.count) samples")
         
         #expect(audio.samples.count > 0)
     }

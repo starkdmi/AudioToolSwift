@@ -1,6 +1,6 @@
 //
 //  MossFormerGANCoreMLProvider.swift
-//  ClearVoiceCoreML
+//  AudioToolCoreML
 //
 //  CoreML-based MossFormer GAN Speech Enhancement (16kHz)
 //  Uses MLX for STFT/ISTFT, CoreML for model inference
@@ -9,8 +9,8 @@
 import Foundation
 @preconcurrency import CoreML
 import Accelerate
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 import MLX
 import MLXNN
 
@@ -68,7 +68,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("MossFormerGAN_CoreML")
+            throw AudioToolError.modelNotLoaded("MossFormerGAN_CoreML")
         }
         
         // Process in segments for long audio
@@ -92,7 +92,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     /// Uses mask-based spectral extraction for high-quality background separation
     public func processWithBackground(_ input: AudioBuffer) async throws -> EnhancedWithBackground {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("MossFormerGAN_CoreML")
+            throw AudioToolError.modelNotLoaded("MossFormerGAN_CoreML")
         }
         
         // Process in segments for long audio
@@ -508,7 +508,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     /// Internal implementation for streaming - runs within actor context
     private func processStreamImpl(_ input: AudioBuffer, continuation: AsyncThrowingStream<AudioBuffer, Error>.Continuation) async throws {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("MossFormerGAN_CoreML")
+            throw AudioToolError.modelNotLoaded("MossFormerGAN_CoreML")
         }
         
         let samples = input.samples

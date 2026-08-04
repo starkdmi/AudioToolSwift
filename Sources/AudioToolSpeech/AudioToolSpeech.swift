@@ -1,17 +1,17 @@
 //
-//  ClearVoiceSpeech.swift
-//  ClearVoiceSpeech
+//  AudioToolSpeech.swift
+//  AudioToolSpeech
 //
 //  Public exports and convenience factory for Apple Speech providers
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 
 // Re-export core types
-@_exported import ClearVoice
-@_exported import ClearVoiceCore
+@_exported import AudioTool
+@_exported import AudioToolCore
 
 // MARK: - Factory for Speech Providers
 
@@ -48,9 +48,9 @@ public struct SpeechProviders {
     }
 }
 
-// MARK: - ClearVoice Extensions
+// MARK: - AudioTool Extensions
 
-extension ClearVoice {
+extension AudioEngine {
     
     /// Configure with Apple Speech transcriber
     /// - Parameters:

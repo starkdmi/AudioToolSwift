@@ -1,13 +1,13 @@
 //
 //  SegmentTests.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Tests for segment types
 //
 
 import Testing
-@testable import ClearVoice
-@testable import ClearVoiceCore
+@testable import AudioTool
+@testable import AudioToolCore
 
 @Suite("Segment Tests")
 struct SegmentTests {

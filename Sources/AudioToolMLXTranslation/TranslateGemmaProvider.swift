@@ -1,6 +1,6 @@
 //
 //  TranslateGemmaProvider.swift
-//  ClearVoiceMLXTranslation
+//  AudioToolMLXTranslation
 //
 //  TranslateGemma translation provider using MLX (55+ languages)
 //
@@ -9,7 +9,7 @@ import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
-import ClearVoiceCore
+import AudioToolCore
 
 /// TranslateGemma translation provider
 ///

@@ -1,12 +1,12 @@
 //
 //  ModelManager.swift
-//  ClearVoice
+//  AudioTool
 //
 //  SwiftUI-ready observable model manager for download UI
 //
 
 import Foundation
-import ClearVoiceCore
+import AudioToolCore
 
 #if canImport(Observation)
 import Observation

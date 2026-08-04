@@ -1,12 +1,12 @@
 //
 //  PipelineBuilder.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Declarative pipeline builder for chaining audio processing stages
 //
 
 import Foundation
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - Pipeline Stage
 
@@ -44,13 +44,13 @@ public struct PipelineStage: Sendable {
 public struct PipelineBuilder: Sendable {
     
     internal var stages: [PipelineStage] = []
-    internal weak var voice: ClearVoice?
+    internal weak var voice: AudioTool?
     
     internal var onStageCompleteHandler: (@Sendable (String, Duration) async -> Void)?
     internal var onSegmentHandler: (@Sendable (PipelineEvent) async -> Void)?
     
     // Internal initializer
-    init(voice: ClearVoice? = nil) {
+    init(voice: AudioTool? = nil) {
         self.voice = voice
     }
     
@@ -381,7 +381,7 @@ public struct PipelineBuilder: Sendable {
     /// Execute pipeline on audio buffer (batch mode)
     public func process(audio: AudioBuffer) async throws -> PipelineResult {
         guard let voice = voice else {
-            throw ClearVoiceError.pipelineConfigurationInvalid("Pipeline not attached to ClearVoice instance")
+            throw AudioToolError.pipelineConfigurationInvalid("Pipeline not attached to AudioEngine instance")
         }
         return try await voice.executePipeline(self, audio: audio, eventHandler: onSegmentHandler)
     }
@@ -389,7 +389,7 @@ public struct PipelineBuilder: Sendable {
     /// Execute pipeline on audio source (batch mode)
     public func process(source: AudioSource) async throws -> PipelineResult {
         guard let voice = voice else {
-            throw ClearVoiceError.pipelineConfigurationInvalid("Pipeline not attached to ClearVoice instance")
+            throw AudioToolError.pipelineConfigurationInvalid("Pipeline not attached to AudioEngine instance")
         }
         
         let audio: AudioBuffer
@@ -409,7 +409,7 @@ public struct PipelineBuilder: Sendable {
             Task {
                 do {
                     guard let voice = voice else {
-                        throw ClearVoiceError.pipelineConfigurationInvalid("Pipeline not attached to ClearVoice instance")
+                        throw AudioToolError.pipelineConfigurationInvalid("Pipeline not attached to AudioEngine instance")
                     }
                     
                     let audio: AudioBuffer

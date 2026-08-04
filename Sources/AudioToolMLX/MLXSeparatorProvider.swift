@@ -1,13 +1,13 @@
 //
 //  MLXSeparatorProvider.swift
-//  ClearVoiceMLX
+//  AudioToolMLX
 //
 //  MLX-based speech separation and source separation providers with chunking
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 @preconcurrency import MLX
 @preconcurrency import MLXNN
 @preconcurrency import AudioUtils
@@ -124,7 +124,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
                 if FileManager.default.fileExists(atPath: modelPath) {
                     resolvedPath = modelPath
                 } else {
-                    throw ClearVoiceError.modelNotFound("Precision \(precision.rawValue) not available for \(modelType.rawValue)")
+                    throw AudioToolError.modelNotFound("Precision \(precision.rawValue) not available for \(modelType.rawValue)")
                 }
             } else {
                 // Auto-download from HuggingFace
@@ -142,7 +142,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     }
     
     /// Separate mixed audio into speaker streams
-    /// Output is RMS-normalized to match input energy (ClearVoice PyTorch behavior)
+    /// Output is RMS-normalized to match input energy (AudioTool PyTorch behavior)
     public func separate(_ audio: AudioBuffer, speakers: Int) async throws -> [AudioBuffer] {
         try await separate(audio, speakers: speakers, onProgress: nil)
     }
@@ -159,7 +159,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         onProgress: ProgressCallback?
     ) async throws -> [AudioBuffer] {
         guard speakers == modelType.numSpeakers else {
-            throw ClearVoiceError.pipelineConfigurationInvalid("Model supports \(modelType.numSpeakers) speakers, not \(speakers)")
+            throw AudioToolError.pipelineConfigurationInvalid("Model supports \(modelType.numSpeakers) speakers, not \(speakers)")
         }
         
         await onProgress?(0.0)
@@ -174,7 +174,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
             results = try await processChunk(audio.samples)
         }
         
-        // RMS normalization: match output energy to input energy (ClearVoice PyTorch behavior)
+        // RMS normalization: match output energy to input energy (AudioTool PyTorch behavior)
         // This preserves the relative loudness of each separated source
         let inputRMS = sqrt(audio.samples.map { $0 * $0 }.reduce(0, +) / Float(audio.samples.count))
         
@@ -213,7 +213,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     /// Uses triangular weighted overlap-add for each speaker independently
     private func processWithChunking(_ input: AudioBuffer, onProgress: ProgressCallback? = nil) async throws -> [AudioBuffer] {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("MossFormer2_SS_\(modelType.rawValue)")
+            throw AudioToolError.modelNotLoaded("MossFormer2_SS_\(modelType.rawValue)")
         }
         
         let chunkingConfig = ChunkingConfig.mossformer2SS(sampleRate: sampleRate)
@@ -280,7 +280,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     /// Process a single chunk (direct, no chunking)
     private func processChunk(_ samples: [Float]) async throws -> [AudioBuffer] {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("MossFormer2_SS_\(modelType.rawValue)")
+            throw AudioToolError.modelNotLoaded("MossFormer2_SS_\(modelType.rawValue)")
         }
         
         let inputMLX = MLXArray(samples).expandedDimensions(axis: 0)
@@ -377,7 +377,7 @@ public actor DemucsProvider: SpeechSeparator {
         let inputMLX = MLXArray(input.samples)
         
         guard let model = models[source] else {
-            throw ClearVoiceError.modelNotLoaded("Demucs_\(source.rawValue)")
+            throw AudioToolError.modelNotLoaded("Demucs_\(source.rawValue)")
         }
         
         // Source indices in Demucs output: drums=0, bass=1, other=2, vocals=3
@@ -420,7 +420,7 @@ public actor DemucsProvider: SpeechSeparator {
     /// Separate a single chunk
     private func separateChunk(_ samples: [Float], source: Source, channels: Int) async throws -> AudioBuffer {
         guard let model = models[source] else {
-            throw ClearVoiceError.modelNotLoaded("Demucs_\(source.rawValue)")
+            throw AudioToolError.modelNotLoaded("Demucs_\(source.rawValue)")
         }
         
         var inputMLX: MLXArray
@@ -486,7 +486,7 @@ public actor DemucsProvider: SpeechSeparator {
               let drums = allStems[.drums],
               let bass = allStems[.bass],
               let other = allStems[.other] else {
-            throw ClearVoiceError.modelNotLoaded("Demucs - not all stems available")
+            throw AudioToolError.modelNotLoaded("Demucs - not all stems available")
         }
         
         // Combine non-vocal stems into accompaniment

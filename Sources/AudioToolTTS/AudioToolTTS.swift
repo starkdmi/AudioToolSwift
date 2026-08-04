@@ -1,17 +1,17 @@
 //
-//  ClearVoiceTTS.swift
-//  ClearVoiceTTS
+//  AudioToolTTS.swift
+//  AudioToolTTS
 //
 //  Public exports and convenience factory for TTS providers
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 
 // Re-export core types
-@_exported import ClearVoice
-@_exported import ClearVoiceCore
+@_exported import AudioTool
+@_exported import AudioToolCore
 
 /// Factory for creating TTS providers
 public struct TTSProviders {
@@ -180,8 +180,8 @@ public struct TTSProviders {
     }
 }
 
-/// ClearVoice extension for registering TTS providers
-extension ClearVoice {
+/// AudioEngine extension for registering TTS providers
+extension AudioEngine {
     
     /// Configure with Kokoro TTS provider
     /// - Parameters:

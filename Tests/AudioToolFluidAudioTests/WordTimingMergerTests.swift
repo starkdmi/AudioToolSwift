@@ -1,12 +1,12 @@
 //
 //  WordTimingMergerTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Unit tests for WordTimingMerger token-to-word merging logic
 //
 
 import XCTest
-@testable import ClearVoiceFluidAudio
+@testable import AudioToolFluidAudio
 import FluidAudio
 
 final class WordTimingMergerTests: XCTestCase {

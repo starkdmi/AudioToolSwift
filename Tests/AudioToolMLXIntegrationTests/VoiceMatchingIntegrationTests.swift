@@ -1,15 +1,15 @@
 //
 //  VoiceMatchingIntegrationTests.swift
-//  ClearVoiceMLXIntegrationTests
+//  AudioToolMLXIntegrationTests
 //
 //  Integration tests for voice matching with real audio files
 //
 
 import XCTest
-import ClearVoice
-import ClearVoiceCore
-@preconcurrency import ClearVoiceTTS
-@preconcurrency import ClearVoiceFluidAudio
+import AudioTool
+import AudioToolCore
+@preconcurrency import AudioToolTTS
+@preconcurrency import AudioToolFluidAudio
 @preconcurrency import MLX
 @preconcurrency import AudioUtils
 
@@ -23,7 +23,7 @@ final class VoiceMatchingIntegrationTests: XCTestCase {
     }()
     
     // NOTE: This test requires Metal/MLX and must be run via xcodebuild
-    // Run: xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData -only-testing:ClearVoiceMLXIntegrationTests/VoiceMatchingIntegrationTests
+    // Run: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData -only-testing:AudioToolMLXIntegrationTests/VoiceMatchingIntegrationTests
     
     /// Test full voice matching pipeline with real audio
     /// 
@@ -34,7 +34,7 @@ final class VoiceMatchingIntegrationTests: XCTestCase {
     func testVoiceMatchingWithRealAudio() async throws {
         print("\n=== Voice Matching Integration Test ===\n")
         
-        // Reference audio files (at project root /Docs/, not /ClearVoice/Docs/)
+        // Reference audio files (at project root /Docs/, not /AudioTool/Docs/)
         let referenceFiles = [
             "\(Self.projectRoot)/Docs/burunow_short.wav",
             "\(Self.projectRoot)/Docs/reference.wav",

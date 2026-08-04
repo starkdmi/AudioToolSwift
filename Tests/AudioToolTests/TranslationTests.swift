@@ -1,13 +1,13 @@
 //
 //  TranslationTests.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Tests for translation types and protocol
 //
 
 import Testing
-@testable import ClearVoice
-@testable import ClearVoiceCore
+@testable import AudioTool
+@testable import AudioToolCore
 
 @Suite("Translation Tests")
 struct TranslationTests {
@@ -105,24 +105,24 @@ struct TranslationTests {
         #expect(available == true)
     }
     
-    // MARK: - ClearVoice Integration
+    // MARK: - AudioTool Integration
     
-    @Test("ClearVoice translate throws when no provider registered")
-    func testClearVoiceTranslateNoProvider() async {
-        let voice = ClearVoice()
+    @Test("AudioTool translate throws when no provider registered")
+    func testAudioToolTranslateNoProvider() async {
+        let voice = AudioEngine()
         
         do {
             _ = try await voice.translate("Hello", to: "es")
             #expect(Bool(false), "Expected error to be thrown")
         } catch {
             // Expected: modelNotLoaded error
-            #expect(error is ClearVoiceError)
+            #expect(error is AudioToolError)
         }
     }
     
-    @Test("ClearVoice translate with mock provider")
-    func testClearVoiceTranslateWithMock() async throws {
-        let voice = ClearVoice()
+    @Test("AudioTool translate with mock provider")
+    func testAudioToolTranslateWithMock() async throws {
+        let voice = AudioEngine()
         let mockTranslator = MockTextTranslator()
         
         await voice.register(translator: mockTranslator, for: .appleTranslation)
@@ -133,9 +133,9 @@ struct TranslationTests {
         #expect(result.targetLanguage == "fr")
     }
     
-    @Test("ClearVoice translateBatch with mock provider")
-    func testClearVoiceTranslateBatchWithMock() async throws {
-        let voice = ClearVoice()
+    @Test("AudioTool translateBatch with mock provider")
+    func testAudioToolTranslateBatchWithMock() async throws {
+        let voice = AudioEngine()
         let mockTranslator = MockTextTranslator()
         
         await voice.register(translator: mockTranslator, for: .appleTranslation)

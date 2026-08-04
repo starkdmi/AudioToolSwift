@@ -1,6 +1,6 @@
 //
 //  ModelVariant.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  Model variant and definition types for download management
 //

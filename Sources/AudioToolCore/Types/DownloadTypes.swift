@@ -1,6 +1,6 @@
 //
 //  DownloadTypes.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  Download state, progress, and error types
 //

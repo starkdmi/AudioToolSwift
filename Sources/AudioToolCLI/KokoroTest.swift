@@ -1,15 +1,15 @@
 //
 //  KokoroTest.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Test for Kokoro TTS integration with multilingual support
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
-@preconcurrency import ClearVoiceTTS
-import ClearVoiceFluidAudio
+import AudioTool
+import AudioToolCore
+@preconcurrency import AudioToolTTS
+import AudioToolFluidAudio
 @preconcurrency import AudioUtils
 @preconcurrency import MLX
 
@@ -255,10 +255,10 @@ func runVoiceMatchingTest() async throws {
     
     // Reference audio files to test
     let referenceFiles = [
-        "\(kokoroProjectRoot)/ClearVoice/Docs/burunow_short.wav",
-        "\(kokoroProjectRoot)/ClearVoice/Docs/reference.wav",
-        "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav",
-        "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav"
+        "\(kokoroProjectRoot)/AudioTool/Docs/burunow_short.wav",
+        "\(kokoroProjectRoot)/AudioTool/Docs/reference.wav",
+        "\(kokoroProjectRoot)/AudioTool/Docs/watson_short.wav",
+        "\(kokoroProjectRoot)/AudioTool/voice_match_output/dark_knight_short.wav"
     ]
     
     // Verify files exist
@@ -304,7 +304,7 @@ func runVoiceMatchingTest() async throws {
     
     // Create speaker embedding provider
     print("Loading speaker embedding model (FluidAudio WeSpeaker)...")
-    let embeddingProvider = ClearVoiceFluidAudio.SpeakerEmbeddingProvider()
+    let embeddingProvider = AudioToolFluidAudio.SpeakerEmbeddingProvider()
     try await embeddingProvider.load()
     print("✓ Embedding model ready\n")
     
@@ -380,7 +380,7 @@ func runVoiceMatchingTest() async throws {
     // Step 3: Gender-aware matching (demo for watson_short)
     print("=== Step 3: Gender-Aware Matching (watson_short) ===\n")
     
-    let watsonPath = "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav"
+    let watsonPath = "\(kokoroProjectRoot)/AudioTool/Docs/watson_short.wav"
     let watsonEmbedding = try await embeddingProvider.extractEmbedding(from: URL(fileURLWithPath: watsonPath))
     
     // Filter to female voices only
@@ -422,18 +422,18 @@ func runVoiceMatchingTest() async throws {
     
     let testCases: [(name: String, path: String, gender: VoiceGender, language: VoiceLanguage)] = [
         // With gender filter
-        ("watson_british", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .female, .british),
-        ("watson_english", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .female, .english),
-        ("dark_knight_british", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .male, .british),
-        ("dark_knight_english", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .male, .english),
+        ("watson_british", "\(kokoroProjectRoot)/AudioTool/Docs/watson_short.wav", .female, .british),
+        ("watson_english", "\(kokoroProjectRoot)/AudioTool/Docs/watson_short.wav", .female, .english),
+        ("dark_knight_british", "\(kokoroProjectRoot)/AudioTool/voice_match_output/dark_knight_short.wav", .male, .british),
+        ("dark_knight_english", "\(kokoroProjectRoot)/AudioTool/voice_match_output/dark_knight_short.wav", .male, .english),
         // WITHOUT gender filter - does embedding naturally pick correct gender?
-        ("watson_any_british", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .any, .british),
-        ("watson_any_english", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .any, .english),
-        ("dark_knight_any_british", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .any, .british),
-        ("dark_knight_any_english", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .any, .english),
+        ("watson_any_british", "\(kokoroProjectRoot)/AudioTool/Docs/watson_short.wav", .any, .british),
+        ("watson_any_english", "\(kokoroProjectRoot)/AudioTool/Docs/watson_short.wav", .any, .english),
+        ("dark_knight_any_british", "\(kokoroProjectRoot)/AudioTool/voice_match_output/dark_knight_short.wav", .any, .british),
+        ("dark_knight_any_english", "\(kokoroProjectRoot)/AudioTool/voice_match_output/dark_knight_short.wav", .any, .english),
         // COMPLETELY UNFILTERED - all 54 voices, any language
-        ("watson_unfiltered", "\(kokoroProjectRoot)/ClearVoice/Docs/watson_short.wav", .any, .any),
-        ("dark_knight_unfiltered", "\(kokoroProjectRoot)/ClearVoice/voice_match_output/dark_knight_short.wav", .any, .any),
+        ("watson_unfiltered", "\(kokoroProjectRoot)/AudioTool/Docs/watson_short.wav", .any, .any),
+        ("dark_knight_unfiltered", "\(kokoroProjectRoot)/AudioTool/voice_match_output/dark_knight_short.wav", .any, .any),
     ]
     
     for testCase in testCases {

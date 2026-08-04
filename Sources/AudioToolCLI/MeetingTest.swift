@@ -4,15 +4,15 @@
 //
 //  Test suite for:
 //  1. Sortformer preprocessing normalization
-//  2. MossFormer2 SS RMS normalization (matches ClearVoice PyTorch)
+//  2. MossFormer2 SS RMS normalization (matches AudioTool PyTorch)
 //  3. Full diarization-separation pipeline
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
-import ClearVoiceFluidAudio
-import ClearVoiceMLX
+import AudioTool
+import AudioToolCore
+import AudioToolFluidAudio
+import AudioToolMLX
 
 /// Run all meeting tests
 func runMeetingTest() async {
@@ -43,12 +43,12 @@ func runSortformerNormalizationTest() async {
     print("Purpose: Compare diarization results with/without preprocessing\n")
     
     // Use normalized clip (louder audio for better diarization)
-    let testClip = "/path/to/ProjectTwo/ClearVoice/TestAudio/meeting_normalized/clip_03.wav"
+    let testClip = "/path/to/ProjectTwo/AudioTool/TestAudio/meeting_normalized/clip_03.wav"
     
     do {
         // Test A: No preprocessing (default)
         print("Test A: No preprocessing normalization (default)")
-        let voiceA = ClearVoice()
+        let voiceA = AudioEngine()
         let sortformerA = FluidAudioProviders.sortformerLowLatency(
             preprocessNormalization: .none
         )
@@ -64,7 +64,7 @@ func runSortformerNormalizationTest() async {
         
         // Test B: Peak normalization to -3 dB
         print("\nTest B: Peak normalization to -3 dB")
-        let voiceB = ClearVoice()
+        let voiceB = AudioEngine()
         let sortformerB = FluidAudioProviders.sortformerLowLatency(
             preprocessNormalization: .peak(targetDB: -3)
         )
@@ -77,7 +77,7 @@ func runSortformerNormalizationTest() async {
         
         // Test C: RMS normalization to -20 dB
         print("\nTest C: RMS normalization to -20 dB")
-        let voiceC = ClearVoice()
+        let voiceC = AudioEngine()
         let sortformerC = FluidAudioProviders.sortformerLowLatency(
             preprocessNormalization: .rms(targetDB: -20)
         )
@@ -107,14 +107,14 @@ func runSSOutputLevelTest() async {
     print("-" .padding(toLength: 70, withPad: "-", startingAt: 0))
     print("Purpose: Verify RMS normalization matches input energy\n")
     
-    let quietClip = "/path/to/ProjectTwo/ClearVoice/TestAudio/meeting/clip_03_42-52.wav"
-    let outputDir = "/path/to/ProjectTwo/ClearVoice/TestAudio/meeting/ss_test_output"
+    let quietClip = "/path/to/ProjectTwo/AudioTool/TestAudio/meeting/clip_03_42-52.wav"
+    let outputDir = "/path/to/ProjectTwo/AudioTool/TestAudio/meeting/ss_test_output"
     
     do {
         // Create output directory
         try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
         
-        let voice = ClearVoice()
+        let voice = AudioEngine()
         
         // Load separator
         print("Loading MossFormer2 WHAMR separator...")
@@ -183,14 +183,14 @@ func runFullPipelineTest() async {
         print("Purpose: Test complete pipeline with RMS-normalized SS\n")
     
     // Use normalized audio for better results (original clips are too quiet at -25 dB)
-    let testClip = "/path/to/ProjectTwo/ClearVoice/TestAudio/meeting_normalized/clip_04.wav"
-    let outputDir = "/path/to/ProjectTwo/ClearVoice/TestAudio/meeting_normalized/pipeline_output"
+    let testClip = "/path/to/ProjectTwo/AudioTool/TestAudio/meeting_normalized/clip_04.wav"
+    let outputDir = "/path/to/ProjectTwo/AudioTool/TestAudio/meeting_normalized/pipeline_output"
     
     do {
         // Create output directory
         try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
         
-        let voice = ClearVoice()
+        let voice = AudioEngine()
         
         // Load Sortformer (no preprocessing - use original quiet audio)
         print("Loading Sortformer...")

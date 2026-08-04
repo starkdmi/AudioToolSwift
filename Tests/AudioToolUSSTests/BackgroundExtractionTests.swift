@@ -1,15 +1,15 @@
 //
 //  BackgroundExtractionTests.swift
-//  ClearVoiceTests
+//  AudioToolTests
 //
 //  Test background extraction for GAN SE, USS, and Demucs
 //
 
 import XCTest
-import ClearVoiceUSS
-import ClearVoiceCoreML
-import ClearVoiceMLX
-import ClearVoiceCore
+import AudioToolUSS
+import AudioToolCoreML
+import AudioToolMLX
+import AudioToolCore
 import AudioUtils
 import MLX
 
@@ -18,7 +18,7 @@ final class BackgroundExtractionTests: XCTestCase {
     // Compute project root from source file path
     static let projectRoot: String = {
         var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() } // file → ClearVoiceUSSTests → Tests → ClearVoice → ProjectTwo
+        for _ in 0..<4 { url.deleteLastPathComponent() } // file → AudioToolUSSTests → Tests → AudioTool → ProjectTwo
         return url.path
     }()
     

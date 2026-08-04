@@ -1,14 +1,14 @@
 //
 //  ChatterboxVADTest.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Minimal test for ChatterBox VAD trim feature - single generation only
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
-@preconcurrency import ClearVoiceTTS
+import AudioTool
+import AudioToolCore
+@preconcurrency import AudioToolTTS
 @preconcurrency import AudioUtils
 @preconcurrency import MLX
 
@@ -35,7 +35,7 @@ func runChatterboxVADTest() async throws {
     try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
     
     // Reference audio file
-    let watsonPath = "\(chatterboxVADProjectRoot)/ClearVoice/Docs/watson_short.wav"
+    let watsonPath = "\(chatterboxVADProjectRoot)/AudioTool/Docs/watson_short.wav"
     guard FileManager.default.fileExists(atPath: watsonPath) else {
         print("❌ Reference file not found: watson_short.wav")
         return

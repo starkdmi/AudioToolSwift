@@ -1,6 +1,6 @@
 //
 //  ModelState.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  Model loading state for UI binding
 //

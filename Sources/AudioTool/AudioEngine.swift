@@ -1,22 +1,22 @@
 //
-//  ClearVoice.swift
-//  ClearVoice
+//  AudioTool.swift
+//  AudioTool
 //
 //  Main unified API actor for audio ML processing
 //
 
 import Foundation
 import AVFoundation
-import ClearVoiceCore
+import AudioToolCore
 @preconcurrency import AudioUtils
 
 
 /// Main entry point - thread-safe model coordinator
-public actor ClearVoice {
+public actor AudioEngine {
     
     // MARK: - Configuration
     
-    private let configuration: ClearVoiceConfiguration
+    private let configuration: AudioToolConfiguration
     
     // MARK: - Model Lifecycle Management
     
@@ -42,7 +42,7 @@ public actor ClearVoice {
     
     /// Production initializer
     public init(
-        configuration: ClearVoiceConfiguration = .default,
+        configuration: AudioToolConfiguration = .default,
         modelManager: ModelLifecycleManager? = nil
     ) {
         self.configuration = configuration
@@ -53,7 +53,7 @@ public actor ClearVoice {
     
     /// Testing initializer with injectable providers
     internal init(
-        configuration: ClearVoiceConfiguration = .default,
+        configuration: AudioToolConfiguration = .default,
         vad: (any VADProvider)? = nil,
         diarization: (any DiarizationProvider)? = nil,
         enhancer: (EnhancementModel, any SpeechEnhancer)? = nil,
@@ -81,7 +81,7 @@ public actor ClearVoice {
         self.classifierProvider = classifier
     }
     
-    // MARK: - Provider Registration (for external libraries like ClearVoiceMLX, ClearVoiceCoreML)
+    // MARK: - Provider Registration (for external libraries like AudioToolMLX, AudioToolCoreML)
     
     /// Register an enhancement provider
     public func register(enhancer: any SpeechEnhancer, for model: EnhancementModel) {
@@ -144,9 +144,9 @@ public actor ClearVoice {
     ///   - url: Path to audio file
     ///   - targetSampleRate: Optional target sample rate for resampling. If nil, preserves source sample rate.
     /// - Returns: Loaded audio buffer
-    public func loadAudio(from url: URL, targetSampleRate: Int? = nil) async throws -> ClearVoiceCore.AudioBuffer {
+    public func loadAudio(from url: URL, targetSampleRate: Int? = nil) async throws -> AudioToolCore.AudioBuffer {
         guard FileManager.default.fileExists(atPath: url.path) else {
-            throw ClearVoiceError.audioFileNotFound(url)
+            throw AudioToolError.audioFileNotFound(url)
         }
         
         // Configure AudioLoader - preserve source rate when targetSampleRate is nil
@@ -172,22 +172,22 @@ public actor ClearVoice {
         
         do {
             let audioData = try loader.loadMonoBuffer(from: url)
-            return ClearVoiceCore.AudioBuffer(
+            return AudioToolCore.AudioBuffer(
                 samples: audioData.samples,
                 sampleRate: audioData.sampleRate,
                 channels: 1
             )
         } catch let error as AudioLoaderError {
-            // Map AudioLoader errors to ClearVoice errors
+            // Map AudioLoader errors to AudioTool errors
             switch error {
             case .fileNotFound(let path):
-                throw ClearVoiceError.audioFileNotFound(URL(fileURLWithPath: path))
+                throw AudioToolError.audioFileNotFound(URL(fileURLWithPath: path))
             case .unsupportedFormat(let ext):
-                throw ClearVoiceError.invalidAudioFormat(expected: "wav/mp3/m4a/flac", found: ext)
+                throw AudioToolError.invalidAudioFormat(expected: "wav/mp3/m4a/flac", found: ext)
             case .fileTooLarge, .audioTooLong:
-                throw ClearVoiceError.resourceUnavailable(error.localizedDescription)
+                throw AudioToolError.resourceUnavailable(error.localizedDescription)
             default:
-                throw ClearVoiceError.resourceUnavailable(error.localizedDescription)
+                throw AudioToolError.resourceUnavailable(error.localizedDescription)
             }
         }
     }
@@ -200,8 +200,8 @@ public actor ClearVoice {
     ///   - buffer: Audio buffer to save
     ///   - url: Destination file path
     ///   - format: Output format (default: .wav)
-    public func saveAudio(_ buffer: ClearVoiceCore.AudioBuffer, to url: URL, format: AudioFormat = .wav) async throws {
-        // Map ClearVoice format to AudioSaver format
+    public func saveAudio(_ buffer: AudioToolCore.AudioBuffer, to url: URL, format: AudioFormat = .wav) async throws {
+        // Map AudioTool format to AudioSaver format
         let saverConfig: AudioSaver.Configuration
         switch format {
         case .wav:
@@ -243,7 +243,7 @@ public actor ClearVoice {
         do {
             try saver.saveBuffer(audioData, to: url)
         } catch let error as AudioSaverError {
-            throw ClearVoiceError.resourceUnavailable(error.localizedDescription)
+            throw AudioToolError.resourceUnavailable(error.localizedDescription)
         }
     }
     
@@ -251,11 +251,11 @@ public actor ClearVoice {
     
     /// Voice activity detection
     public func detect(
-        _ audio: ClearVoiceCore.AudioBuffer,
+        _ audio: AudioToolCore.AudioBuffer,
         model: VADModel = .silero
     ) async throws -> [VADSegment] {
         guard let vad = vadProvider else {
-            throw ClearVoiceError.modelNotLoaded("VAD")
+            throw AudioToolError.modelNotLoaded("VAD")
         }
         
         // Resample to model's expected sample rate if needed
@@ -265,11 +265,11 @@ public actor ClearVoice {
     
     /// Speaker diarization
     public func diarize(
-        _ audio: ClearVoiceCore.AudioBuffer,
+        _ audio: AudioToolCore.AudioBuffer,
         vadHint: [VADSegment]? = nil
     ) async throws -> SpeakerTimeline {
         guard let diarizer = diarizationProvider else {
-            throw ClearVoiceError.modelNotLoaded("Diarization")
+            throw AudioToolError.modelNotLoaded("Diarization")
         }
         
         // Diarization typically expects 16kHz
@@ -283,7 +283,7 @@ public actor ClearVoice {
     }
     
     /// Combined VAD + Diarization (parallel execution)
-    public func analyze(_ audio: ClearVoiceCore.AudioBuffer) async throws -> AnalysisResult {
+    public func analyze(_ audio: AudioToolCore.AudioBuffer) async throws -> AnalysisResult {
         async let vadResult = detect(audio)
         async let diarizeResult = diarize(audio)
         
@@ -297,11 +297,11 @@ public actor ClearVoice {
     
     /// Enhance full audio
     public func enhance(
-        _ audio: ClearVoiceCore.AudioBuffer,
+        _ audio: AudioToolCore.AudioBuffer,
         model: EnhancementModel = .mossformerSE16k
-    ) async throws -> ClearVoiceCore.AudioBuffer {
+    ) async throws -> AudioToolCore.AudioBuffer {
         guard let enhancer = enhancerProviders[model] else {
-            throw ClearVoiceError.modelNotLoaded(model.modelName)
+            throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
         // Resample to model's expected sample rate if needed
@@ -317,12 +317,12 @@ public actor ClearVoice {
     
     /// Enhance only speech segments (VAD-gated)
     public func enhance(
-        _ audio: ClearVoiceCore.AudioBuffer,
+        _ audio: AudioToolCore.AudioBuffer,
         segments: [VADSegment],
         model: EnhancementModel = .mossformerSE16k
-    ) async throws -> ClearVoiceCore.AudioBuffer {
+    ) async throws -> AudioToolCore.AudioBuffer {
         guard let enhancer = enhancerProviders[model] else {
-            throw ClearVoiceError.modelNotLoaded(model.modelName)
+            throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
         // Resample full audio to model's expected sample rate
@@ -351,10 +351,10 @@ public actor ClearVoice {
     
     /// Separate speakers
     public func separate(
-        _ audio: ClearVoiceCore.AudioBuffer,
+        _ audio: AudioToolCore.AudioBuffer,
         speakers: Int,
         model: SeparationModel = .mossformer2spk
-    ) async throws -> [ClearVoiceCore.AudioBuffer] {
+    ) async throws -> [AudioToolCore.AudioBuffer] {
         try await separate(audio, speakers: speakers, model: model, onProgress: nil)
     }
     
@@ -366,13 +366,13 @@ public actor ClearVoice {
     ///   - onProgress: Progress callback (0.0 to 100.0) as chunks are processed
     /// - Returns: Array of separated audio buffers, one per speaker
     public func separate(
-        _ audio: ClearVoiceCore.AudioBuffer,
+        _ audio: AudioToolCore.AudioBuffer,
         speakers: Int,
         model: SeparationModel = .mossformer2spk,
         onProgress: ProgressCallback?
-    ) async throws -> [ClearVoiceCore.AudioBuffer] {
+    ) async throws -> [AudioToolCore.AudioBuffer] {
         guard let separator = separatorProviders[model] else {
-            throw ClearVoiceError.modelNotLoaded(model.modelName)
+            throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
         // Resample to model's expected sample rate if needed
@@ -412,7 +412,7 @@ public actor ClearVoice {
     /// - Use a separate embedding model (WeSpeaker) with clean reference samples
     /// - Modify FluidAudio to support spkcache save/restore
     private func separateAndIdentify(
-        _ audio: ClearVoiceCore.AudioBuffer,
+        _ audio: AudioToolCore.AudioBuffer,
         timeline: SpeakerTimeline,
         sourceTimeRange: TimeRange,
         onProgress: ProgressCallback? = nil
@@ -438,11 +438,11 @@ public actor ClearVoice {
         // Select separation model based on speaker count
         let model = SeparationModel.forOverlappingSpeakers(speakerCount)
         guard let separationModel = model else {
-            throw ClearVoiceError.resourceUnavailable("No separation model available for \(speakerCount) speakers")
+            throw AudioToolError.resourceUnavailable("No separation model available for \(speakerCount) speakers")
         }
         
         guard separatorProviders[separationModel] != nil else {
-            throw ClearVoiceError.modelNotLoaded(separationModel.modelName)
+            throw AudioToolError.modelNotLoaded(separationModel.modelName)
         }
         
         // Separate audio
@@ -455,7 +455,7 @@ public actor ClearVoice {
         
         // Re-identify speakers using diarization provider
         guard let diarizer = diarizationProvider else {
-            throw ClearVoiceError.modelNotLoaded("Diarization")
+            throw AudioToolError.modelNotLoaded("Diarization")
         }
         
         // Check if diarizer supports speaker identification
@@ -477,7 +477,7 @@ public actor ClearVoice {
     
     /// Identify separated tracks using the diarization provider
     private func identifyTracksWithDiarizer(
-        _ tracks: [ClearVoiceCore.AudioBuffer],
+        _ tracks: [AudioToolCore.AudioBuffer],
         diarizer: any DiarizationProvider,
         timeline: SpeakerTimeline,
         sourceTimeRange: TimeRange,
@@ -582,9 +582,9 @@ public actor ClearVoice {
     // MARK: - Upscaling
     
     /// Super-resolution upscaling
-    public func upscale(_ audio: ClearVoiceCore.AudioBuffer) async throws -> ClearVoiceCore.AudioBuffer {
+    public func upscale(_ audio: AudioToolCore.AudioBuffer) async throws -> AudioToolCore.AudioBuffer {
         guard let upscaler = upscalerProvider else {
-            throw ClearVoiceError.modelNotLoaded("Upscaler")
+            throw AudioToolError.modelNotLoaded("Upscaler")
         }
         
         // Upscaler expects 16kHz input, outputs 48kHz
@@ -596,11 +596,11 @@ public actor ClearVoice {
     
     /// Transcribe audio
     public func transcribe(
-        _ audio: ClearVoiceCore.AudioBuffer,
+        _ audio: AudioToolCore.AudioBuffer,
         model: TranscriptionModel = .parakeet
     ) async throws -> Transcription {
         guard let transcriber = transcriberProviders[model] else {
-            throw ClearVoiceError.modelNotLoaded(model.modelName)
+            throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
         // Resample to model's expected sample rate if needed
@@ -615,12 +615,12 @@ public actor ClearVoice {
     ///   - onProgress: Progress callback (0.0 to 100.0) as segments are recognized
     /// - Returns: Complete transcription result
     public func transcribe(
-        _ audio: ClearVoiceCore.AudioBuffer,
+        _ audio: AudioToolCore.AudioBuffer,
         model: TranscriptionModel = .parakeet,
         onProgress: ProgressCallback?
     ) async throws -> Transcription {
         guard let transcriber = transcriberProviders[model] else {
-            throw ClearVoiceError.modelNotLoaded(model.modelName)
+            throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
         // Resample to model's expected sample rate if needed
@@ -718,9 +718,9 @@ public actor ClearVoice {
     // MARK: - Classification
     
     /// Classify sounds
-    public func classify(_ audio: ClearVoiceCore.AudioBuffer) async throws -> [SoundClassification] {
+    public func classify(_ audio: AudioToolCore.AudioBuffer) async throws -> [SoundClassification] {
         guard let classifier = classifierProvider else {
-            throw ClearVoiceError.modelNotLoaded("Classifier")
+            throw AudioToolError.modelNotLoaded("Classifier")
         }
         return try await classifier.classify(audio)
     }
@@ -737,11 +737,11 @@ public actor ClearVoice {
     ///
     /// - Parameter audio: Audio buffer (will be resampled to 16kHz if needed)
     /// - Returns: L2-normalized embedding vector (typically 256 dimensions)
-    /// - Throws: `ClearVoiceError.modelNotLoaded` if no embedding extractor registered
+    /// - Throws: `AudioToolError.modelNotLoaded` if no embedding extractor registered
     ///
     /// Example:
     /// ```swift
-    /// let voice = ClearVoice()
+    /// let voice = AudioEngine()
     /// voice.register(embeddingExtractor: speakerEmbeddingProvider)
     /// 
     /// let embedding1 = try await voice.extractSpeakerEmbedding(audio1)
@@ -749,10 +749,10 @@ public actor ClearVoice {
     /// let similarity = cosineSimilarity(embedding1, embedding2)
     /// ```
     public func extractSpeakerEmbedding(
-        _ audio: ClearVoiceCore.AudioBuffer
+        _ audio: AudioToolCore.AudioBuffer
     ) async throws -> [Float] {
         guard let extractor = embeddingExtractorProvider else {
-            throw ClearVoiceError.modelNotLoaded("SpeakerEmbeddingExtractor")
+            throw AudioToolError.modelNotLoaded("SpeakerEmbeddingExtractor")
         }
         return try await extractor.extractEmbedding(audio)
     }
@@ -764,10 +764,10 @@ public actor ClearVoice {
     /// - Parameter audioSegments: Array of audio buffers
     /// - Returns: Array of embedding vectors
     public func extractSpeakerEmbeddings(
-        _ audioSegments: [ClearVoiceCore.AudioBuffer]
+        _ audioSegments: [AudioToolCore.AudioBuffer]
     ) async throws -> [[Float]] {
         guard let extractor = embeddingExtractorProvider else {
-            throw ClearVoiceError.modelNotLoaded("SpeakerEmbeddingExtractor")
+            throw AudioToolError.modelNotLoaded("SpeakerEmbeddingExtractor")
         }
         return try await extractor.extractEmbeddings(audioSegments)
     }
@@ -806,12 +806,12 @@ public actor ClearVoice {
     /// )
     /// ```
     public func identifyByEmbedding(
-        tracks: [ClearVoiceCore.AudioBuffer],
+        tracks: [AudioToolCore.AudioBuffer],
         referenceEmbeddings: [SpeakerID: [Float]],
         threshold: Float = 0.7
     ) async throws -> [EmbeddingIdentificationResult] {
         guard let extractor = embeddingExtractorProvider else {
-            throw ClearVoiceError.modelNotLoaded("SpeakerEmbeddingExtractor")
+            throw AudioToolError.modelNotLoaded("SpeakerEmbeddingExtractor")
         }
         
         // Extract embeddings for all tracks
@@ -879,9 +879,9 @@ public actor ClearVoice {
         _ text: String,
         voice: String,
         model: SynthesisModel = .kokoro(language: .americanEnglish, voice: "af_heart")
-    ) async throws -> ClearVoiceCore.AudioBuffer {
+    ) async throws -> AudioToolCore.AudioBuffer {
         guard let synthesizer = synthesizerProviders[model.modelName] else {
-            throw ClearVoiceError.modelNotLoaded(model.modelName)
+            throw AudioToolError.modelNotLoaded(model.modelName)
         }
         return try await synthesizer.synthesize(text, voice: voice)
     }
@@ -896,10 +896,10 @@ public actor ClearVoice {
         _ text: String,
         voice: String,
         model: SynthesisModel = .kokoro(language: .americanEnglish, voice: "af_heart")
-    ) -> AsyncThrowingStream<ClearVoiceCore.AudioBuffer, Error> {
+    ) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
         guard let synthesizer = synthesizerProviders[model.modelName] else {
             return AsyncThrowingStream { continuation in
-                continuation.finish(throwing: ClearVoiceError.modelNotLoaded(model.modelName))
+                continuation.finish(throwing: AudioToolError.modelNotLoaded(model.modelName))
             }
         }
         return synthesizer.streamSynthesis(text, voice: voice)
@@ -921,7 +921,7 @@ public actor ClearVoice {
         model: TranslationModel = .appleTranslation
     ) async throws -> TranslationResult {
         guard let translator = translatorProviders[model] else {
-            throw ClearVoiceError.modelNotLoaded(model.modelName)
+            throw AudioToolError.modelNotLoaded(model.modelName)
         }
         return try await translator.translate(text, from: source, to: target)
     }
@@ -940,7 +940,7 @@ public actor ClearVoice {
         model: TranslationModel = .appleTranslation
     ) async throws -> BatchTranslationResult {
         guard let translator = translatorProviders[model] else {
-            throw ClearVoiceError.modelNotLoaded(model.modelName)
+            throw AudioToolError.modelNotLoaded(model.modelName)
         }
         return try await translator.translateBatch(texts, from: source, to: target)
     }
@@ -967,7 +967,7 @@ public actor ClearVoice {
         model: TextPreprocessorModel
     ) throws -> String {
         guard let preprocessor = textPreprocessorProviders[model.modelName] else {
-            throw ClearVoiceError.modelNotLoaded(model.modelName)
+            throw AudioToolError.modelNotLoaded(model.modelName)
         }
         return try preprocessor.process(text)
     }
@@ -984,7 +984,7 @@ public actor ClearVoice {
     /// Execute pipeline (internal)
     internal func executePipeline(
         _ pipeline: PipelineBuilder,
-        audio: ClearVoiceCore.AudioBuffer,
+        audio: AudioToolCore.AudioBuffer,
         eventHandler: (@Sendable (PipelineEvent) async -> Void)? = nil
     ) async throws -> PipelineResult {
         let startTime = ContinuousClock.now
@@ -1023,7 +1023,7 @@ public actor ClearVoice {
                     let input = try context.currentAudio.resampled(to: model.sampleRate)
                     segments = try await vad.detect(input, onProgress: progressCallback)
                 } else {
-                    throw ClearVoiceError.modelNotLoaded("VAD")
+                    throw AudioToolError.modelNotLoaded("VAD")
                 }
                 
                 let timeline = SpeakerTimeline(segments: [])
@@ -1060,7 +1060,7 @@ public actor ClearVoice {
                     let input = try context.currentAudio.resampled(to: 16000)
                     timeline = try await diarizer.diarize(input, onProgress: progressCallback)
                 } else {
-                    throw ClearVoiceError.modelNotLoaded("Diarization")
+                    throw AudioToolError.modelNotLoaded("Diarization")
                 }
                 
                 let segments = context.analysis?.segments ?? []
@@ -1103,10 +1103,10 @@ public actor ClearVoice {
             case .enhance(let model):
                 await eventHandler?(.progress(stage: stageName, percent: 0))
                 guard let enhancer = enhancerProviders[model] else {
-                    throw ClearVoiceError.modelNotLoaded(model.modelName)
+                    throw AudioToolError.modelNotLoaded(model.modelName)
                 }
                 let speechSegments = context.analysis?.speechSegments ?? []
-                let enhanced: ClearVoiceCore.AudioBuffer
+                let enhanced: AudioToolCore.AudioBuffer
                 if let eventHandler, let streamable = enhancer as? StreamableOutput {
                     let resampledAudio = try context.currentAudio.resampled(to: model.sampleRate)
                     if !speechSegments.isEmpty {
@@ -1217,7 +1217,7 @@ public actor ClearVoice {
                 await eventHandler?(.progress(stage: stageName, percent: 0))
                 
                 guard let analysis = context.analysis else {
-                    throw ClearVoiceError.pipelineConfigurationInvalid("separateOverlap requires diarize() stage first")
+                    throw AudioToolError.pipelineConfigurationInvalid("separateOverlap requires diarize() stage first")
                 }
                 
                 // Skip if not handling overlaps
@@ -1311,7 +1311,7 @@ public actor ClearVoice {
             case .separateUSS(let types):
                 await eventHandler?(.progress(stage: stageName, percent: 0))
                 guard let uss = ussProvider else {
-                    throw ClearVoiceError.modelNotLoaded("USS")
+                    throw AudioToolError.modelNotLoaded("USS")
                 }
                 
                 // Resample to USS sample rate (32kHz)
@@ -1327,7 +1327,7 @@ public actor ClearVoice {
                 }
                 
                 // Process each type and emit per-embedding progress
-                var ussSeparatedResults: [USSSoundType: ClearVoiceCore.AudioBuffer] = [:]
+                var ussSeparatedResults: [USSSoundType: AudioToolCore.AudioBuffer] = [:]
                 for (idx, type) in types.enumerated() {
                     let separated = try await uss.separateSound(ussInput, type: type)
                     ussSeparatedResults[type] = separated
@@ -1355,10 +1355,10 @@ public actor ClearVoice {
             case .upscale:
                 await eventHandler?(.progress(stage: stageName, percent: 0))
                 guard let upscaler = upscalerProvider else {
-                    throw ClearVoiceError.modelNotLoaded("Upscaler")
+                    throw AudioToolError.modelNotLoaded("Upscaler")
                 }
                 
-                let upscaled: ClearVoiceCore.AudioBuffer
+                let upscaled: AudioToolCore.AudioBuffer
                 
                 // Use streaming for progress reporting if supported
                 if let eventHandler, let streamable = upscaler as? StreamableOutput {
@@ -1435,12 +1435,12 @@ public actor ClearVoice {
                 
                 // Merge transcription with diarization by timestamp alignment
                 guard let transcription = result.transcription else {
-                    throw ClearVoiceError.pipelineConfigurationInvalid(
+                    throw AudioToolError.pipelineConfigurationInvalid(
                         "mergeTranscriptionWithDiarization requires transcription - add .transcribe() before this stage"
                     )
                 }
                 guard let analysis = result.analysis ?? context.analysis else {
-                    throw ClearVoiceError.pipelineConfigurationInvalid(
+                    throw AudioToolError.pipelineConfigurationInvalid(
                         "mergeTranscriptionWithDiarization requires diarization - add .diarize() before this stage"
                     )
                 }
@@ -1576,7 +1576,7 @@ public actor ClearVoice {
             case .forEach(let transform):
                 // Apply transform to each separated track
                 if let tracks = result.separatedTracks {
-                    var processedTracks: [ClearVoiceCore.AudioBuffer] = []
+                    var processedTracks: [AudioToolCore.AudioBuffer] = []
                     for track in tracks {
                         let subBuilder = transform(PipelineBuilder(voice: self))
                         let trackResult = try await executePipeline(subBuilder, audio: track, eventHandler: eventHandler)

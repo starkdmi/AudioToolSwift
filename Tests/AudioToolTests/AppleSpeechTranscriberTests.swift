@@ -1,15 +1,15 @@
 //
 //  AppleSpeechTranscriberTests.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Tests for Apple Speech transcriber (SpeechAnalyzer, iOS 26+)
 //
 
 import Foundation
 import Testing
-@testable import ClearVoice
-@testable import ClearVoiceCore
-@testable import ClearVoiceSpeech
+@testable import AudioTool
+@testable import AudioToolCore
+@testable import AudioToolSpeech
 
 @Suite("Apple Speech Transcriber Tests")
 struct AppleSpeechTranscriberTests {
@@ -111,12 +111,12 @@ struct AppleSpeechTranscriberTests {
         #expect(transcriber.sampleRate == 16000)
     }
     
-    // MARK: - ClearVoice Integration
+    // MARK: - AudioTool Integration
     
     @available(iOS 26.0, macOS 26.0, *)
-    @Test("ClearVoice register transcriber")
-    func testClearVoiceRegistration() async {
-        let voice = ClearVoice()
+    @Test("AudioTool register transcriber")
+    func testAudioToolRegistration() async {
+        let voice = AudioEngine()
         let transcriber = SpeechProviders.appleSpeech(locale: "en-US")
         await voice.register(transcriber: transcriber, for: .appleSpeech)
         #expect(Bool(true))

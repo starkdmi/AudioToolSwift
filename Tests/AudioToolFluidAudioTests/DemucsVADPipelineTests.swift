@@ -1,14 +1,14 @@
 //
 //  DemucsVADPipelineTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Tests for Demucs → VAD pipeline on music/singing
 //
 
 import XCTest
-import ClearVoiceFluidAudio
-import ClearVoiceMLX
-import ClearVoiceCore
+import AudioToolFluidAudio
+import AudioToolMLX
+import AudioToolCore
 import AudioUtils
 import MLX
 

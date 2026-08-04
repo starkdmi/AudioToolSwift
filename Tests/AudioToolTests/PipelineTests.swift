@@ -1,13 +1,13 @@
 //
 //  PipelineTests.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Tests for pipeline execution
 //
 
 import Testing
-@testable import ClearVoice
-@testable import ClearVoiceCore
+@testable import AudioTool
+@testable import AudioToolCore
 
 @Suite("Pipeline Tests")
 struct PipelineTests {
@@ -17,7 +17,7 @@ struct PipelineTests {
     @Test("Pipeline detects audio with mock VAD")
     func testVADPipeline() async throws {
         let mockVAD = MockVAD()
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             vad: mockVAD
         )
@@ -35,7 +35,7 @@ struct PipelineTests {
     @Test("Pipeline enhances audio with mock enhancer")
     func testEnhancementPipeline() async throws {
         let mockEnhancer = MockEnhancer()
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             enhancer: (.mossformerSE16k, mockEnhancer)
         )
@@ -53,7 +53,7 @@ struct PipelineTests {
     @Test("Pipeline transcribes with mock transcriber")
     func testTranscriptionPipeline() async throws {
         let mockTranscriber = MockTranscriber()
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             transcriber: (.parakeet, mockTranscriber)
         )
@@ -70,7 +70,7 @@ struct PipelineTests {
     @Test("Pipeline separates speakers with mock separator")
     func testSeparationPipeline() async throws {
         let mockSeparator = MockSeparator()
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             separator: (.mossformer2spk, mockSeparator)
         )
@@ -89,7 +89,7 @@ struct PipelineTests {
         let mockVAD = MockVAD()
         let mockEnhancer = MockEnhancer()
         
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             vad: mockVAD,
             enhancer: (.mossformerSE16k, mockEnhancer)
@@ -111,7 +111,7 @@ struct PipelineTests {
         let mockVAD = MockVAD()
         let mockDiarization = MockDiarization()
         
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             vad: mockVAD,
             diarization: mockDiarization
@@ -139,7 +139,7 @@ struct PipelineTests {
             DiarizedSegment(timeRange: TimeRange(start: 2, end: 5), speakerID: SpeakerID(1), confidence: 0.85),
         ])
         
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             vad: mockVAD,
             diarization: mockDiarization,
@@ -170,7 +170,7 @@ struct PipelineTests {
             DiarizedSegment(timeRange: TimeRange(start: 3, end: 5), speakerID: SpeakerID(1), confidence: 0.85),
         ])
         
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             vad: mockVAD,
             diarization: mockDiarization,
@@ -193,14 +193,14 @@ struct PipelineTests {
     
     @Test("Pipeline throws when model not loaded")
     func testModelNotLoaded() async throws {
-        let voice = ClearVoice()
+        let voice = AudioEngine()
         
         let audio = AudioBuffer.silence(duration: 1.0, sampleRate: 16000)
         
         do {
             _ = try await voice.detect(audio)
             Issue.record("Should have thrown modelNotLoaded")
-        } catch let error as ClearVoiceError {
+        } catch let error as AudioToolError {
             if case .modelNotLoaded = error {
                 // Expected
             } else {
@@ -216,7 +216,7 @@ struct PipelineTests {
         let mockVAD = MockVAD()
         mockVAD.processDelay = .milliseconds(50)
         
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             vad: mockVAD
         )

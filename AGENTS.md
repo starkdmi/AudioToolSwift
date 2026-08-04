@@ -1,10 +1,10 @@
-# AGENTS.md - ClearVoice Swift Framework
+# AGENTS.md - AudioTool Swift Framework
 
 Guidelines for AI coding agents working on this Swift audio processing framework.
 
 ## Project Overview
 
-ClearVoice is a Swift package for audio processing: speech enhancement, speaker separation, 
+AudioTool is a Swift package for audio processing: speech enhancement, speaker separation, 
 super-resolution, TTS, transcription, and diarization. Uses MLX for GPU acceleration on Apple Silicon.
 
 ## Build Commands
@@ -19,10 +19,10 @@ MLX error: Failed to load the default metallib. library not found
 **Always use xcodebuild:**
 
 ```bash
-cd ClearVoice
+cd AudioTool
 
 # Build
-xcodebuild build -scheme ClearVoice-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData
+xcodebuild build -scheme AudioToolSwift-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData
 
 # Build Generate CLI
 xcodebuild build -scheme Generate -destination 'platform=macOS' -derivedDataPath .build/DerivedData
@@ -32,32 +32,32 @@ xcodebuild build -scheme Generate -destination 'platform=macOS' -derivedDataPath
 
 ```bash
 # Run ALL tests (requires Metal)
-xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData
+xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData
 
 # Run specific test suite
-xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' \
+xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' \
   -derivedDataPath .build/DerivedData \
-  -only-testing:ClearVoiceMLXIntegrationTests
+  -only-testing:AudioToolMLXIntegrationTests
 
 # Run single test class
-xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' \
+xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' \
   -derivedDataPath .build/DerivedData \
-  -only-testing:ClearVoiceMLXIntegrationTests/FRCRNChunkingIntegrationTests
+  -only-testing:AudioToolMLXIntegrationTests/FRCRNChunkingIntegrationTests
 
 # Run single test method
-xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' \
+xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' \
   -derivedDataPath .build/DerivedData \
-  -only-testing:ClearVoiceMLXIntegrationTests/FRCRNChunkingIntegrationTests/testFRCRNWithChunking
+  -only-testing:AudioToolMLXIntegrationTests/FRCRNChunkingIntegrationTests/testFRCRNWithChunking
 ```
 
 ### Test Suites
 
 | Suite | Target | Description |
 |-------|--------|-------------|
-| `ClearVoiceMLXIntegrationTests` | MLX models | FRCRN, MossFormer2 SE/SS/SR |
-| `ClearVoiceUSSTests` | USS/Demucs/GAN | Background extraction tests |
-| `ClearVoiceFluidAudioTests` | VAD/Diarization | Silero VAD, Pyannote, Sortformer |
-| `ClearVoiceTests` | Core types | AudioBuffer, chunking, protocols |
+| `AudioToolMLXIntegrationTests` | MLX models | FRCRN, MossFormer2 SE/SS/SR |
+| `AudioToolUSSTests` | USS/Demucs/GAN | Background extraction tests |
+| `AudioToolFluidAudioTests` | VAD/Diarization | Silero VAD, Pyannote, Sortformer |
+| `AudioToolTests` | Core types | AudioBuffer, chunking, protocols |
 
 ### Running Generate CLI
 
@@ -83,13 +83,13 @@ Available models: `frcrn`, `frcrn-bg`, `se48k`, `se48k-bg`, `demucs`, `ss_2spk`,
 
 ### Imports Order
 1. Foundation/System frameworks
-2. ClearVoice modules (ClearVoice, ClearVoiceCore, ClearVoiceMLX)
+2. AudioTool modules (AudioTool, AudioToolCore, AudioToolMLX)
 3. External dependencies with `@preconcurrency` for non-Sendable types
 
 ```swift
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 @preconcurrency import MLX
 @preconcurrency import MLXNN
 @preconcurrency import AudioUtils
@@ -113,7 +113,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
 
 ### Naming Conventions
 
-- **Types**: PascalCase (`AudioBuffer`, `ClearVoiceError`)
+- **Types**: PascalCase (`AudioBuffer`, `AudioToolError`)
 - **Functions/Properties**: camelCase (`sampleRate`, `processWithChunking`)
 - **Provider classes**: `<Model><Task>Provider` (e.g., `FRCRNSE16KProvider`)
 - **Constants**: camelCase or SCREAMING_SNAKE for ML config
@@ -121,10 +121,10 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
 
 ### Error Handling
 
-Use `ClearVoiceError` enum for all framework errors:
+Use `AudioToolError` enum for all framework errors:
 
 ```swift
-public enum ClearVoiceError: Error, Sendable {
+public enum AudioToolError: Error, Sendable {
     case modelNotFound(String)
     case modelNotLoaded(String)
     case sampleRateMismatch(expected: Int, found: Int)
@@ -133,7 +133,7 @@ public enum ClearVoiceError: Error, Sendable {
 }
 
 // Usage
-throw ClearVoiceError.modelNotLoaded("MossFormer2_SE_48K")
+throw AudioToolError.modelNotLoaded("MossFormer2_SE_48K")
 ```
 
 ### AudioBuffer
@@ -161,7 +161,7 @@ private let projectRoot: String = {
 
 ```swift
 import Testing
-@testable import ClearVoiceMLX
+@testable import AudioToolMLX
 
 @Suite("Model Name Tests", .tags(.integration))
 struct ModelNameTests {
@@ -225,18 +225,18 @@ if let cached = ModelDownloader.shared.localPath(for: "starkdmi/ModelName") {
 ## Directory Structure
 
 ```
-ClearVoice/
+AudioTool/
 ├── Sources/
-│   ├── ClearVoice/          # Main pipeline API
-│   ├── ClearVoiceCore/      # Core types (AudioBuffer, Errors, Protocols)
-│   ├── ClearVoiceMLX/       # MLX providers (SE, SS, SR)
-│   ├── ClearVoiceTTS/       # Kokoro, Chatterbox TTS
-│   ├── ClearVoiceFluidAudio/# VAD, Diarization integration
+│   ├── AudioTool/          # Main pipeline API
+│   ├── AudioToolCore/      # Core types (AudioBuffer, Errors, Protocols)
+│   ├── AudioToolMLX/       # MLX providers (SE, SS, SR)
+│   ├── AudioToolTTS/       # Kokoro, Chatterbox TTS
+│   ├── AudioToolFluidAudio/# VAD, Diarization integration
 │   └── Generate/            # CLI tool
 ├── Tests/
-│   ├── ClearVoiceMLXIntegrationTests/
-│   ├── ClearVoiceUSSTests/
-│   └── ClearVoiceFluidAudioTests/
+│   ├── AudioToolMLXIntegrationTests/
+│   ├── AudioToolUSSTests/
+│   └── AudioToolFluidAudioTests/
 └── Package.swift
 
 ../Models/                   # Model weights (sibling directory)

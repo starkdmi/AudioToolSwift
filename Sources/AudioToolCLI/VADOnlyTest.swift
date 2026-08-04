@@ -1,28 +1,28 @@
 //
 //  VADOnlyTest.swift
-//  ClearVoice
+//  AudioTool
 //
 //  VAD test on harry_potter.wav
 //
 
 import Foundation
 import AVFoundation
-import ClearVoiceCore
-@preconcurrency import ClearVoiceFluidAudio
+import AudioToolCore
+@preconcurrency import AudioToolFluidAudio
 
 // MARK: - VAD Test
 
 // Compute project root from source file path
 private let projectRoot: String = {
     var url = URL(fileURLWithPath: #filePath)
-    for _ in 0..<4 { url.deleteLastPathComponent() } // file → Generate → Sources → ClearVoice → ProjectTwo
+    for _ in 0..<4 { url.deleteLastPathComponent() } // file → Generate → Sources → AudioTool → ProjectTwo
     return url.path
 }()
 
 func runVADOnlyTest() async throws {
     print("\n=== VAD Test on Harry Potter Audio ===\n")
     
-    let testFile = "\(projectRoot)/ClearVoice/Docs/harry_potter.wav"
+    let testFile = "\(projectRoot)/AudioTool/Docs/harry_potter.wav"
     
     guard FileManager.default.fileExists(atPath: testFile) else {
         print("❌ File not found: \(testFile)")

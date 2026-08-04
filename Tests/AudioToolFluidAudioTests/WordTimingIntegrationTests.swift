@@ -1,14 +1,14 @@
 //
 //  WordTimingIntegrationTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Integration tests for word-level timing using harry_potter.wav
 //  Compares ASR word timings against manual sentence-level annotations
 //
 
 import XCTest
-@testable import ClearVoiceFluidAudio
-import ClearVoiceCore
+@testable import AudioToolFluidAudio
+import AudioToolCore
 import AudioUtils
 import MLX
 
@@ -41,9 +41,9 @@ final class WordTimingIntegrationTests: XCTestCase {
         let possiblePaths = [
             "/path/to/ProjectTwo/Docs/harry_potter.json",
             URL(fileURLWithPath: #file)
-                .deletingLastPathComponent() // Tests/ClearVoiceFluidAudioTests
+                .deletingLastPathComponent() // Tests/AudioToolFluidAudioTests
                 .deletingLastPathComponent() // Tests
-                .deletingLastPathComponent() // ClearVoice
+                .deletingLastPathComponent() // AudioTool
                 .deletingLastPathComponent() // ProjectTwo
                 .appendingPathComponent("Docs/harry_potter.json").path
         ]

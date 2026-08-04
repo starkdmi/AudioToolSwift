@@ -1,13 +1,13 @@
 //
 //  AudioBufferTests.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Tests for AudioBuffer operations
 //
 
 import Testing
-@testable import ClearVoice
-@testable import ClearVoiceCore
+@testable import AudioTool
+@testable import AudioToolCore
 
 @Suite("AudioBuffer Tests")
 struct AudioBufferTests {

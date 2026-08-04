@@ -1,6 +1,6 @@
 //
 //  RUAccentProvider.swift
-//  ClearVoiceTTS
+//  AudioToolTTS
 //
 //  Russian stress/accent marking using CoreML
 //
@@ -10,7 +10,7 @@
 
 import Foundation
 import CoreML
-import ClearVoiceCore
+import AudioToolCore
 import Compression
 
 /// Russian stress/accent text preprocessor using CoreML
@@ -807,7 +807,7 @@ public final class RUAccentProvider: TextPreprocessor, @unchecked Sendable {
             return try MLModel(contentsOf: compiledModelURL, configuration: configuration)
         }
         
-        throw ClearVoiceError.modelNotFound("RUAccent model '\(name)' not found in \(directory.path)")
+        throw AudioToolError.modelNotFound("RUAccent model '\(name)' not found in \(directory.path)")
     }
     
     // MARK: - JSON/Dict Loading
@@ -1013,7 +1013,7 @@ private extension Data {
         
         var status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
         guard status != COMPRESSION_STATUS_ERROR else {
-            throw ClearVoiceError.resourceUnavailable("zlib init failed")
+            throw AudioToolError.resourceUnavailable("zlib init failed")
         }
         defer { compression_stream_destroy(&stream) }
         
@@ -1043,7 +1043,7 @@ private extension Data {
             } while status == COMPRESSION_STATUS_OK
             
             if status != COMPRESSION_STATUS_END {
-                throw ClearVoiceError.resourceUnavailable("zlib decode failed")
+                throw AudioToolError.resourceUnavailable("zlib decode failed")
             }
             
             return output

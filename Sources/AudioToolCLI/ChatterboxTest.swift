@@ -1,14 +1,14 @@
 //
 //  ChatterboxTest.swift
-//  ClearVoice  
+//  AudioTool  
 //
 //  Full pipeline test with all fixes
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
-@preconcurrency import ClearVoiceTTS  
+import AudioTool
+import AudioToolCore
+@preconcurrency import AudioToolTTS  
 @preconcurrency import AudioUtils
 @preconcurrency import MLX
 

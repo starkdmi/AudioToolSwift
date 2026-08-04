@@ -1,8 +1,8 @@
 //
-//  ClearVoiceCore.swift
-//  ClearVoice
+//  AudioToolCore.swift
+//  AudioTool
 //
-//  Public exports for ClearVoiceCore module
+//  Public exports for AudioToolCore module
 //
 
 // Types

@@ -1,6 +1,6 @@
 //
 //  ModelLifecycleManager.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  Centralized model lifecycle management with memory tracking and LRU eviction
 //
@@ -97,7 +97,7 @@ public actor ModelLifecycleManager {
         // Preflight check: reject models that exceed memory limit entirely
         let requiredMemory = model.estimatedMemoryBytes
         if requiredMemory > memoryLimitBytes {
-            throw ClearVoiceError.memoryExhausted(
+            throw AudioToolError.memoryExhausted(
                 required: requiredMemory,
                 available: memoryLimitBytes
             )

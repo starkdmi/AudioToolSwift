@@ -1,13 +1,13 @@
 //
 //  SpeakerEmbeddingProvider.swift
-//  ClearVoiceFluidAudio
+//  AudioToolFluidAudio
 //
 //  Speaker embedding extraction using FluidAudio's WeSpeaker model
 //
 
 import Foundation
 @preconcurrency import FluidAudio
-import ClearVoiceCore
+import AudioToolCore
 import AVFoundation
 
 // MARK: - Speaker Embedding Provider
@@ -149,18 +149,18 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
     ///
     /// - Parameter audio: Audio samples at 16kHz mono
     /// - Returns: 256-dimensional L2-normalized embedding vector
-    /// - Throws: `ClearVoiceError.modelNotLoaded` if not loaded
+    /// - Throws: `AudioToolError.modelNotLoaded` if not loaded
     ///
     /// ## Performance
     /// - ~50-70ms on Apple Silicon (VAD adds ~5-10ms)
     /// - Memory: ~100MB peak during inference
     public func extractEmbedding(_ audio: [Float]) async throws -> [Float] {
         guard let extractor = embeddingExtractor else {
-            throw ClearVoiceError.modelNotLoaded("SpeakerEmbeddingProvider")
+            throw AudioToolError.modelNotLoaded("SpeakerEmbeddingProvider")
         }
         
         guard !audio.isEmpty else {
-            throw ClearVoiceError.resourceUnavailable("Empty audio provided for embedding extraction")
+            throw AudioToolError.resourceUnavailable("Empty audio provided for embedding extraction")
         }
         
         // Step 1: Run VAD to detect speech regions (if enabled)
@@ -321,7 +321,7 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
     ///
     /// - Parameter audio: Audio buffer (16kHz mono expected)
     /// - Returns: 256-dimensional L2-normalized embedding vector
-    public func extractEmbedding(_ audio: ClearVoiceCore.AudioBuffer) async throws -> [Float] {
+    public func extractEmbedding(_ audio: AudioToolCore.AudioBuffer) async throws -> [Float] {
         // Resample to 16kHz if needed
         let samples: [Float]
         if audio.sampleRate != sampleRate {
@@ -362,9 +362,9 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
     /// This method throws an error as embeddings should be extracted via `extractEmbedding()`.
     ///
     /// - Parameter input: Input audio buffer
-    /// - Throws: `ClearVoiceError.resourceUnavailable` - use `extractEmbedding()` instead
-    public func process(_ input: ClearVoiceCore.AudioBuffer) async throws -> ClearVoiceCore.AudioBuffer {
-        throw ClearVoiceError.resourceUnavailable(
+    /// - Throws: `AudioToolError.resourceUnavailable` - use `extractEmbedding()` instead
+    public func process(_ input: AudioToolCore.AudioBuffer) async throws -> AudioToolCore.AudioBuffer {
+        throw AudioToolError.resourceUnavailable(
             "SpeakerEmbeddingProvider does not process audio. Use extractEmbedding() instead."
         )
     }
@@ -504,13 +504,13 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
         let frameCount = AVAudioFrameCount(file.length)
         
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            throw ClearVoiceError.resourceUnavailable("Failed to create audio buffer")
+            throw AudioToolError.resourceUnavailable("Failed to create audio buffer")
         }
         
         try file.read(into: buffer)
         
         guard let channelData = buffer.floatChannelData else {
-            throw ClearVoiceError.resourceUnavailable("No audio data in buffer")
+            throw AudioToolError.resourceUnavailable("No audio data in buffer")
         }
         
         let samples = Array(UnsafeBufferPointer(start: channelData[0], count: Int(frameCount)))

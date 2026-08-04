@@ -1,15 +1,15 @@
 //
 //  TranslateGemmaProviderTests.swift
-//  ClearVoiceMLXTranslationTests
+//  AudioToolMLXTranslationTests
 //
 //  Integration tests for TranslateGemma translation provider
 //
 
 import Testing
 import Foundation
-@testable import ClearVoice
-@testable import ClearVoiceCore
-@testable import ClearVoiceMLXTranslation
+@testable import AudioTool
+@testable import AudioToolCore
+@testable import AudioToolMLXTranslation
 
 /// Whether MLX tests should run (default: yes, set SKIP_MLX_TESTS=1 to skip)
 private var shouldRunMLXTests: Bool {
@@ -148,20 +148,20 @@ struct TranslateGemmaProviderTests {
         }
     }
     
-    // MARK: - ClearVoice Integration
+    // MARK: - AudioTool Integration
     
-    @Test("ClearVoice integration with TranslateGemma", .enabledForMLX)
-    func testClearVoiceIntegration() async throws {
-        // Create a fresh ClearVoice and explicitly register TranslateGemma
-        // Note: ClearVoice is a shared actor, so we specify the model explicitly
-        let voice = ClearVoice()
+    @Test("AudioTool integration with TranslateGemma", .enabledForMLX)
+    func testAudioToolIntegration() async throws {
+        // Create a fresh AudioTool and explicitly register TranslateGemma
+        // Note: AudioTool is a shared actor, so we specify the model explicitly
+        let voice = AudioEngine()
         let provider = TranslateGemmaProvider(maxTokens: 64)
         await voice.register(translator: provider, for: .translateGemma)
         
         // Use translateGemma model explicitly to avoid conflicts with other registered translators
         let result = try await voice.translate("Hello", from: "en", to: "de-DE", model: .translateGemma)
         
-        print("ClearVoice translation: '\(result.sourceText)' -> '\(result.translatedText)'")
+        print("AudioTool translation: '\(result.sourceText)' -> '\(result.translatedText)'")
         
         #expect(!result.translatedText.isEmpty)
         #expect(result.targetLanguage == "de-DE")

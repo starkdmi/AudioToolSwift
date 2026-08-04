@@ -1,14 +1,14 @@
 //
 //  VADSEIntegrationTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Full integration test: VAD → SE 48K pipeline with real audio
 //
 
 import XCTest
-import ClearVoiceFluidAudio
-import ClearVoiceMLX
-import ClearVoiceCore
+import AudioToolFluidAudio
+import AudioToolMLX
+import AudioToolCore
 import AudioUtils
 import MLX
 

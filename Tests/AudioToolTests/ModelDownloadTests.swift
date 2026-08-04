@@ -1,14 +1,14 @@
 //
 //  ModelDownloadTests.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Tests for model download system: types, coordinator, and manager
 //
 
 import Testing
 import Foundation
-@testable import ClearVoice
-@testable import ClearVoiceCore
+@testable import AudioTool
+@testable import AudioToolCore
 
 // MARK: - Type Tests
 

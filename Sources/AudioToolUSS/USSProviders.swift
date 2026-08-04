@@ -1,12 +1,12 @@
 //
 //  USSProviders.swift
-//  ClearVoiceUSS
+//  AudioToolUSS
 //
 //  Factory for USS-based providers
 //
 
 import Foundation
-import ClearVoiceCore
+import AudioToolCore
 @preconcurrency import USSMLXSwift
 
 // MARK: - USS Providers Factory
@@ -156,5 +156,5 @@ public struct USSProviders {
     }
 }
 
-// NOTE: USSSoundType is defined in ClearVoiceCore.Configuration
-// Use ClearVoiceCore.USSSoundType in protocol methods for pipeline integration
+// NOTE: USSSoundType is defined in AudioToolCore.Configuration
+// Use AudioToolCore.USSSoundType in protocol methods for pipeline integration

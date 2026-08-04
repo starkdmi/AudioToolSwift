@@ -5,9 +5,9 @@
 
 import Foundation
 import Testing
-@testable import ClearVoice
-@testable import ClearVoiceCore
-@testable import ClearVoiceSpeech
+@testable import AudioTool
+@testable import AudioToolCore
+@testable import AudioToolSpeech
 import AudioUtils
 import MLX
 

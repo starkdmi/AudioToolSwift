@@ -1,4 +1,4 @@
-# ClearVoice Testing Guide
+# AudioTool Testing Guide
 
 ## Running Tests
 
@@ -17,15 +17,15 @@ MLX-based tests require Metal hardware and must be run via `xcodebuild`:
 ```bash
 # Full test suite
 xcodebuild test \
-  -scheme ClearVoice-Package \
+  -scheme AudioToolSwift-Package \
   -destination 'platform=macOS' \
   -derivedDataPath .build/DerivedData
 
 # MLX tests only
 RUN_MLX_TESTS=1 xcodebuild test \
-  -scheme ClearVoice-Package \
+  -scheme AudioToolSwift-Package \
   -destination 'platform=macOS' \
-  -only-testing:ClearVoiceMLXIntegrationTests
+  -only-testing:AudioToolMLXIntegrationTests
 ```
 
 ### Environment Variables
@@ -43,16 +43,16 @@ RUN_MLX_TESTS=1 xcodebuild test \
 ```bash
 # Voice Matching Tests
 xcodebuild test \
-  -scheme ClearVoice-Package \
+  -scheme AudioToolSwift-Package \
   -destination 'platform=macOS' \
   -derivedDataPath .build/DerivedData \
-  -only-testing:ClearVoiceMLXIntegrationTests/VoiceMatchingIntegrationTests
+  -only-testing:AudioToolMLXIntegrationTests/VoiceMatchingIntegrationTests
 
 # Enhancer Tests
 xcodebuild test \
-  -scheme ClearVoice-Package \
+  -scheme AudioToolSwift-Package \
   -destination 'platform=macOS' \
-  -only-testing:ClearVoiceMLXIntegrationTests/MLXEnhancerIntegrationTests
+  -only-testing:AudioToolMLXIntegrationTests/MLXEnhancerIntegrationTests
 ```
 
 ## Why xcodebuild?
@@ -65,5 +65,5 @@ SPM's `swift test` doesn't properly initialize Metal resources needed by MLX. Us
 
 ## Test Fixtures
 
-Place test audio files in `Tests/ClearVoiceMLXIntegrationTests/Fixtures/`:
+Place test audio files in `Tests/AudioToolMLXIntegrationTests/Fixtures/`:
 - `noisy.wav` - Noisy speech sample for enhancement tests

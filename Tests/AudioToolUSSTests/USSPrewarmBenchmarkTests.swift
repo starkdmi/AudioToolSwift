@@ -1,14 +1,14 @@
 //
 //  USSPrewarmBenchmarkTests.swift
-//  ClearVoiceUSSTests
+//  AudioToolUSSTests
 //
 //  Benchmark tests to measure prewarming impact on embedding swap performance.
 //  Tests whether prewarming with multiple embeddings improves chunked processing.
 //
 
 import XCTest
-import ClearVoiceUSS
-import ClearVoiceCore
+import AudioToolUSS
+import AudioToolCore
 import AudioUtils
 import MLX
 @preconcurrency import USSMLXSwift

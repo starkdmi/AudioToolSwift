@@ -1,6 +1,6 @@
 //
 //  AppleTTSProvider.swift
-//  ClearVoiceTTS
+//  AudioToolTTS
 //
 //  Apple AVSpeechSynthesizer TTS provider for multilingual speech synthesis
 //  Works in headless/CLI environments - no UI required
@@ -8,7 +8,7 @@
 
 import Foundation
 import AVFoundation
-import ClearVoiceCore
+import AudioToolCore
 
 /// Apple TTS provider using AVSpeechSynthesizer
 ///
@@ -57,7 +57,7 @@ public actor AppleTTSProvider: SpeechSynthesizer {
     ///   - text: Text to synthesize
     ///   - voice: Voice identifier or name (e.g., "Thomas") - empty for default
     /// - Returns: Audio buffer with synthesized speech
-    public func synthesize(_ text: String, voice: String) async throws -> ClearVoiceCore.AudioBuffer {
+    public func synthesize(_ text: String, voice: String) async throws -> AudioToolCore.AudioBuffer {
         try await withCheckedThrowingContinuation { continuation in
             // Run on a background thread with its own run loop
             DispatchQueue.global(qos: .userInitiated).async {
@@ -98,16 +98,16 @@ public actor AppleTTSProvider: SpeechSynthesizer {
                 }
                 
                 if !isComplete {
-                    synthesisError = ClearVoiceError.resourceUnavailable("Synthesis timed out after \(Int(self.synthesisTimeout)) seconds")
+                    synthesisError = AudioToolError.resourceUnavailable("Synthesis timed out after \(Int(self.synthesisTimeout)) seconds")
                 }
                 
                 // Return result on main continuation
                 if let error = synthesisError {
                     continuation.resume(throwing: error)
                 } else if allSamples.isEmpty {
-                    continuation.resume(throwing: ClearVoiceError.resourceUnavailable("No audio generated"))
+                    continuation.resume(throwing: AudioToolError.resourceUnavailable("No audio generated"))
                 } else {
-                    let result = ClearVoiceCore.AudioBuffer(
+                    let result = AudioToolCore.AudioBuffer(
                         samples: allSamples,
                         sampleRate: Int(outputSampleRate),
                         channels: Int(outputChannels)
@@ -119,7 +119,7 @@ public actor AppleTTSProvider: SpeechSynthesizer {
     }
     
     /// Stream synthesized audio chunks
-    public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<ClearVoiceCore.AudioBuffer, Error> {
+    public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let synthesizer = AVSpeechSynthesizer()
@@ -137,7 +137,7 @@ public actor AppleTTSProvider: SpeechSynthesizer {
                 synthesizer.write(utterance) { buffer in
                     if let pcmBuffer = buffer as? AVAudioPCMBuffer, pcmBuffer.frameLength > 0 {
                         let samples = self.extractSamples(from: pcmBuffer)
-                        let chunk = ClearVoiceCore.AudioBuffer(
+                        let chunk = AudioToolCore.AudioBuffer(
                             samples: samples,
                             sampleRate: Int(pcmBuffer.format.sampleRate),
                             channels: Int(pcmBuffer.format.channelCount)

@@ -1,13 +1,13 @@
 //
 //  VADPipelineTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Tests for chaining VAD with other processors (SE, SS, etc.)
 //
 
 import XCTest
-import ClearVoiceFluidAudio
-import ClearVoiceCore
+import AudioToolFluidAudio
+import AudioToolCore
 
 final class VADPipelineTests: XCTestCase {
     

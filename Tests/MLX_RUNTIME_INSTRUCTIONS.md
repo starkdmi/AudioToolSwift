@@ -26,24 +26,24 @@ Instead of running the binary directly, use **xcodebuild test** or **run from Xc
 ### Option 1: Run Tests via xcodebuild (Recommended)
 
 ```bash
-cd ~/Downloads/clear_voice_research/ClearVoice
+cd ~/Downloads/clear_voice_research/AudioTool
 
 # Run all MLX integration tests
 xcodebuild test \
-  -scheme ClearVoice-Package \
+  -scheme AudioToolSwift-Package \
   -destination 'platform=macOS' \
   -derivedDataPath .build/DerivedData \
-  -only-testing:ClearVoiceMLXIntegrationTests
+  -only-testing:AudioToolMLXIntegrationTests
 
 # Skip MLX tests
 SKIP_MLX_TESTS=1 xcodebuild test \
-  -scheme ClearVoice-Package \
+  -scheme AudioToolSwift-Package \
   -destination 'platform=macOS'
 ```
 
 ### Option 2: Run CVGenerate from Xcode IDE
 
-1. Open `ClearVoice` in Xcode
+1. Open `AudioTool` in Xcode
 2. Select the `CVGenerate` scheme
 3. Edit Scheme → Run → Arguments: `-m chatterbox`
 4. Run (⌘R)

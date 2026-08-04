@@ -1,13 +1,13 @@
 //
 //  HarryPotterDiarizationTest.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Test diarization on Harry Potter trailer (~10 speakers, background music)
 //
 
 import XCTest
-import ClearVoiceFluidAudio
-import ClearVoiceCore
+import AudioToolFluidAudio
+import AudioToolCore
 import AudioUtils
 import MLX
 

@@ -1,6 +1,6 @@
 //
 //  MLXSTFT.swift
-//  ClearVoiceCoreML
+//  AudioToolCoreML
 //
 //  MLX-based STFT/ISTFT for MossFormer GAN SE CoreML
 //  Adapted from mossformer_gan_se_coreml/mlx_stft/STFT.swift

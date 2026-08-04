@@ -22,15 +22,15 @@ Set these before running tests:
 ```bash
 # Build with xcodebuild (required for Metal/MLX)
 xcodebuild test \
-  -scheme ClearVoice-Package \
+  -scheme AudioToolSwift-Package \
   -destination 'platform=macOS' \
   -derivedDataPath .build/DerivedData
 
 # Or for specific test suite
 RUN_MLX_TESTS=1 xcodebuild test \
-  -scheme ClearVoice-Package \
+  -scheme AudioToolSwift-Package \
   -destination 'platform=macOS' \
-  -only-testing:ClearVoiceMLXIntegrationTests
+  -only-testing:AudioToolMLXIntegrationTests
 ```
 
 ## Running MLX CLI Commands (Generate)

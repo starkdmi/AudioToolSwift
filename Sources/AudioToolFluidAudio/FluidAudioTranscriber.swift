@@ -1,13 +1,13 @@
 //
 //  FluidAudioTranscriber.swift
-//  ClearVoiceFluidAudio
+//  AudioToolFluidAudio
 //
 //  Parakeet v3 transcription provider using FluidAudio
 //
 
 import Foundation
 @preconcurrency import FluidAudio
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - Model Version Enum
 
@@ -27,7 +27,7 @@ public enum ParakeetVersion: Sendable {
 // MARK: - FluidAudio Transcriber
 
 /// Parakeet v3 transcription provider using FluidAudio's ASR
-/// Implements Transcriber protocol for integration with ClearVoice pipeline
+/// Implements Transcriber protocol for integration with AudioTool pipeline
 public actor FluidAudioTranscriber: Transcriber {
     
     // MARK: - AudioProcessor Conformance
@@ -64,7 +64,7 @@ public actor FluidAudioTranscriber: Transcriber {
     /// - Returns: Transcription with text and word-level segments
     public func transcribe(_ audio: AudioBuffer) async throws -> Transcription {
         guard let manager = asrManager else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio ASR")
+            throw AudioToolError.modelNotLoaded("FluidAudio ASR")
         }
         
         let result = try await manager.transcribe(audio.samples)
@@ -111,7 +111,7 @@ public actor FluidAudioTranscriber: Transcriber {
         AsyncThrowingStream { continuation in
             Task {
                 guard let manager = await self.asrManager else {
-                    continuation.finish(throwing: ClearVoiceError.modelNotLoaded("FluidAudio ASR"))
+                    continuation.finish(throwing: AudioToolError.modelNotLoaded("FluidAudio ASR"))
                     return
                 }
                 
@@ -175,7 +175,7 @@ public actor FluidAudioTranscriber: Transcriber {
     /// For real per-segment progress, use streaming API or pre-segmented audio
     public func transcribe(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> Transcription {
         guard let manager = asrManager else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio ASR")
+            throw AudioToolError.modelNotLoaded("FluidAudio ASR")
         }
         
         // Report initial progress

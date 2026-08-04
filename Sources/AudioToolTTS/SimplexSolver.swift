@@ -1,6 +1,6 @@
 //
 //  SimplexSolver.swift
-//  ClearVoiceTTS
+//  AudioToolTTS
 //
 //  vDSP-accelerated simplex-constrained least squares solver
 //  for voice weight optimization

@@ -1,12 +1,12 @@
 //
 //  Mocks.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Mock implementations for testing
 //
 
 import Foundation
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - Mock VAD
 

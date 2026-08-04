@@ -12,51 +12,51 @@ let commonSwiftSettings: [SwiftSetting] = [
 let fluidAudioSwiftSettings: [SwiftSetting] = []
 
 let package = Package(
-    name: "ClearVoice",
+    name: "AudioToolSwift",
     platforms: [
         .iOS(.v18),
         .macOS(.v15)
     ],
     products: [
         .library(
-            name: "ClearVoice",
-            targets: ["ClearVoice"]
+            name: "AudioTool",
+            targets: ["AudioTool"]
         ),
         .library(
-            name: "ClearVoiceMLX",
-            targets: ["ClearVoiceMLX"]
+            name: "AudioToolMLX",
+            targets: ["AudioToolMLX"]
         ),
         .library(
-            name: "ClearVoiceCoreML",
-            targets: ["ClearVoiceCoreML"]
+            name: "AudioToolCoreML",
+            targets: ["AudioToolCoreML"]
         ),
         .library(
-            name: "ClearVoiceFluidAudio",
-            targets: ["ClearVoiceFluidAudio"]
+            name: "AudioToolFluidAudio",
+            targets: ["AudioToolFluidAudio"]
         ),
         .library(
-            name: "ClearVoiceUSS",
-            targets: ["ClearVoiceUSS"]
+            name: "AudioToolUSS",
+            targets: ["AudioToolUSS"]
         ),
         .library(
-            name: "ClearVoiceTTS",
-            targets: ["ClearVoiceTTS"]
+            name: "AudioToolTTS",
+            targets: ["AudioToolTTS"]
         ),
         .library(
-            name: "ClearVoiceSpeech",
-            targets: ["ClearVoiceSpeech"]
+            name: "AudioToolSpeech",
+            targets: ["AudioToolSpeech"]
         ),
         .library(
-            name: "ClearVoiceTranslation",
-            targets: ["ClearVoiceTranslation"]
+            name: "AudioToolTranslation",
+            targets: ["AudioToolTranslation"]
         ),
         .library(
-            name: "ClearVoiceMLXTranslation",
-            targets: ["ClearVoiceMLXTranslation"]
+            name: "AudioToolMLXTranslation",
+            targets: ["AudioToolMLXTranslation"]
         ),
         .executable(
-            name: "Generate",
-            targets: ["Generate"]
+            name: "audiotool",
+            targets: ["AudioToolCLI"]
         ),
     ],
     dependencies: [
@@ -95,31 +95,31 @@ let package = Package(
     targets: [
         // Core shared infrastructure
         .target(
-            name: "ClearVoiceCore",
+            name: "AudioToolCore",
             dependencies: [
                 .product(name: "Hub", package: "swift-transformers"),
             ],
-            path: "Sources/ClearVoiceCore",
+            path: "Sources/AudioToolCore",
             swiftSettings: commonSwiftSettings
         ),
         
         // Main public API (no MLX/CoreML dependency)
         .target(
-            name: "ClearVoice",
+            name: "AudioTool",
             dependencies: [
-                "ClearVoiceCore",
+                "AudioToolCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/ClearVoice",
+            path: "Sources/AudioTool",
             swiftSettings: commonSwiftSettings
         ),
         
         // MLX Backend providers
         .target(
-            name: "ClearVoiceMLX",
+            name: "AudioToolMLX",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceCore",
+                "AudioTool",
+                "AudioToolCore",
                 .product(name: "Mossformer2MLXSwift", package: "Mossformer2MLXSwift"),
                 .product(name: "FRCRNMLXSwift", package: "FRCRNMLXSwift"),
                 .product(name: "MossFormer2SS", package: "MossFormer2SS"),
@@ -127,105 +127,105 @@ let package = Package(
                 .product(name: "DemucsMLXSwift", package: "DemucsMLXSwift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/ClearVoiceMLX",
+            path: "Sources/AudioToolMLX",
             swiftSettings: commonSwiftSettings
         ),
         
         // CoreML Backend providers
         .target(
-            name: "ClearVoiceCoreML",
+            name: "AudioToolCoreML",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceCore",
+                "AudioTool",
+                "AudioToolCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
             ],
-            path: "Sources/ClearVoiceCoreML",
+            path: "Sources/AudioToolCoreML",
             swiftSettings: commonSwiftSettings
         ),
         
         // FluidAudio Backend providers (VAD, transcription, diarization)
         // Note: FluidAudio has Sendable issues in upstream - excluded from strict warnings
         .target(
-            name: "ClearVoiceFluidAudio",
+            name: "AudioToolFluidAudio",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceCore",
+                "AudioTool",
+                "AudioToolCore",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
-            path: "Sources/ClearVoiceFluidAudio",
+            path: "Sources/AudioToolFluidAudio",
             swiftSettings: fluidAudioSwiftSettings
         ),
         
         // USS MLX Backend providers (speech separation)
         .target(
-            name: "ClearVoiceUSS",
+            name: "AudioToolUSS",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceCore",
+                "AudioTool",
+                "AudioToolCore",
                 .product(name: "USSMLXSwift", package: "USSMLXSwift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/ClearVoiceUSS",
+            path: "Sources/AudioToolUSS",
             swiftSettings: commonSwiftSettings
         ),
         
         // TTS Backend providers (Kokoro with MisakiSwift G2P)
         .target(
-            name: "ClearVoiceTTS",
+            name: "AudioToolTTS",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceCore",
-                "ClearVoiceFluidAudio",  // For VAD-based audio trimming
+                "AudioTool",
+                "AudioToolCore",
+                "AudioToolFluidAudio",  // For VAD-based audio trimming
                 .product(name: "KokoroSwift", package: "KokoroSwift"),
                 .product(name: "ChatterboxMLXSwift", package: "ChatterboxMLXSwift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/ClearVoiceTTS",
+            path: "Sources/AudioToolTTS",
             swiftSettings: commonSwiftSettings
         ),
         
         // Speech-to-Text Backend (Apple SpeechAnalyzer, iOS 26+)
         .target(
-            name: "ClearVoiceSpeech",
+            name: "AudioToolSpeech",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceCore",
+                "AudioTool",
+                "AudioToolCore",
             ],
-            path: "Sources/ClearVoiceSpeech",
+            path: "Sources/AudioToolSpeech",
             swiftSettings: commonSwiftSettings
         ),
         
         // Translation Backend (Apple Translation framework)
         .target(
-            name: "ClearVoiceTranslation",
+            name: "AudioToolTranslation",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceCore",
+                "AudioTool",
+                "AudioToolCore",
             ],
-            path: "Sources/ClearVoiceTranslation",
+            path: "Sources/AudioToolTranslation",
             swiftSettings: commonSwiftSettings
         ),
         
         // MLX Translation Backend (TranslateGemma, 55+ languages)
         .target(
-            name: "ClearVoiceMLXTranslation",
+            name: "AudioToolMLXTranslation",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceCore",
+                "AudioTool",
+                "AudioToolCore",
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
-            path: "Sources/ClearVoiceMLXTranslation",
+            path: "Sources/AudioToolMLXTranslation",
             swiftSettings: commonSwiftSettings
         ),
         
         // Unit tests with mocks (swift test compatible)
         .testTarget(
-            name: "ClearVoiceTests",
-            dependencies: ["ClearVoice", "ClearVoiceTTS", "ClearVoiceSpeech"],
-            path: "Tests/ClearVoiceTests",
+            name: "AudioToolTests",
+            dependencies: ["AudioTool", "AudioToolTTS", "AudioToolSpeech"],
+            path: "Tests/AudioToolTests",
             resources: [
                 .copy("Fixtures/")
             ],
@@ -233,18 +233,18 @@ let package = Package(
         ),
         
         // MLX Integration tests (requires xcodebuild for Metal)
-        // Run with: xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS'
+        // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS'
         .testTarget(
-            name: "ClearVoiceMLXIntegrationTests",
+            name: "AudioToolMLXIntegrationTests",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceCore",
-                "ClearVoiceMLX",
-                "ClearVoiceTTS",
-                "ClearVoiceFluidAudio",
+                "AudioTool",
+                "AudioToolCore",
+                "AudioToolMLX",
+                "AudioToolTTS",
+                "AudioToolFluidAudio",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Tests/ClearVoiceMLXIntegrationTests",
+            path: "Tests/AudioToolMLXIntegrationTests",
             resources: [
                 .copy("Fixtures/")
             ],
@@ -252,18 +252,18 @@ let package = Package(
         ),
         
         // FluidAudio Integration tests (VAD, transcription, diarization)
-        // Run with: xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' -only-testing:ClearVoiceFluidAudioTests
+        // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolFluidAudioTests
         .testTarget(
-            name: "ClearVoiceFluidAudioTests",
+            name: "AudioToolFluidAudioTests",
             dependencies: [
-                "ClearVoice",
-                "ClearVoiceFluidAudio",
-                "ClearVoiceMLX",
-                "ClearVoiceCore",
-                "ClearVoiceUSS",
+                "AudioTool",
+                "AudioToolFluidAudio",
+                "AudioToolMLX",
+                "AudioToolCore",
+                "AudioToolUSS",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Tests/ClearVoiceFluidAudioTests",
+            path: "Tests/AudioToolFluidAudioTests",
             resources: [
                 .copy("Fixtures/")
             ],
@@ -271,17 +271,17 @@ let package = Package(
         ),
         
         // USS MLX Integration tests (speech separation)
-        // Run with: xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' -only-testing:ClearVoiceUSSTests
+        // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolUSSTests
         .testTarget(
-            name: "ClearVoiceUSSTests",
+            name: "AudioToolUSSTests",
             dependencies: [
-                "ClearVoiceUSS",
-                "ClearVoiceCoreML",
-                "ClearVoiceMLX",
-                "ClearVoiceCore",
+                "AudioToolUSS",
+                "AudioToolCoreML",
+                "AudioToolMLX",
+                "AudioToolCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Tests/ClearVoiceUSSTests",
+            path: "Tests/AudioToolUSSTests",
             resources: [
                 .copy("Fixtures/")
             ],
@@ -289,32 +289,32 @@ let package = Package(
         ),
         
         // MLX Translation Integration tests (TranslateGemma)
-        // Run with: xcodebuild test -scheme ClearVoice-Package -destination 'platform=macOS' -only-testing:ClearVoiceMLXTranslationTests
+        // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolMLXTranslationTests
         .testTarget(
-            name: "ClearVoiceMLXTranslationTests",
+            name: "AudioToolMLXTranslationTests",
             dependencies: [
-                "ClearVoiceMLXTranslation",
-                "ClearVoice",
-                "ClearVoiceCore",
+                "AudioToolMLXTranslation",
+                "AudioTool",
+                "AudioToolCore",
             ],
-            path: "Tests/ClearVoiceMLXTranslationTests",
+            path: "Tests/AudioToolMLXTranslationTests",
             swiftSettings: commonSwiftSettings
         ),
         // CLI executable for testing MLX providers (use xcodebuild + run directly)
-        // Build: xcodebuild build -scheme Generate -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
-        // Run: .build/DerivedData/Build/Products/Release/Generate --model frcrn --input test.wav --output enhanced.wav
-        // Note: ClearVoiceSpeech (Apple SpeechAnalyzer) requires macOS 26+ and is only conditionally imported
+        // Build: xcodebuild build -scheme audiotool -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
+        // Run: .build/DerivedData/Build/Products/Release/audiotool --model frcrn --input test.wav --output enhanced.wav
+        // Note: AudioToolSpeech (Apple SpeechAnalyzer) requires macOS 26+ and is only conditionally imported
         .executableTarget(
-            name: "Generate",
+            name: "AudioToolCLI",
             dependencies: [
-                "ClearVoiceMLX",
-                "ClearVoiceTTS",
-                "ClearVoiceFluidAudio",  // For voice matching
-                "ClearVoiceSpeech", // Required for linking even with conditional import
-                "ClearVoiceCore",
+                "AudioToolMLX",
+                "AudioToolTTS",
+                "AudioToolFluidAudio",  // For voice matching
+                "AudioToolSpeech", // Required for linking even with conditional import
+                "AudioToolCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
-            path: "Sources/Generate",
+            path: "Sources/AudioToolCLI",
             swiftSettings: commonSwiftSettings
         ),
     ],

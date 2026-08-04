@@ -1,6 +1,6 @@
 //
 //  BoundedChannel.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Bounded async channel with backpressure support
 //
@@ -63,7 +63,7 @@ public actor BoundedChannel<T: Sendable> {
             
             group.addTask {
                 try await Task.sleep(for: timeout)
-                throw ClearVoiceError.backpressureTimeout
+                throw AudioToolError.backpressureTimeout
             }
             
             // First to complete wins

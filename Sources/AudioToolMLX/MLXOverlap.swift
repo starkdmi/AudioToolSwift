@@ -1,6 +1,6 @@
 //
 //  MLXOverlap.swift
-//  ClearVoiceMLX
+//  AudioToolMLX
 //
 //  MLX-based overlap-add utilities for audio chunking.
 //  Ported from Python benchmark_chunking.py using vectorized MLX operations.

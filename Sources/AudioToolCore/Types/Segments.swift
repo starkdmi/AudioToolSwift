@@ -1,6 +1,6 @@
 //
 //  Segments.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Segment types for VAD, diarization, and transcription results
 //

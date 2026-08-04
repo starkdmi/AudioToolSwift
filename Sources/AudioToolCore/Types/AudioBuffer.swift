@@ -1,6 +1,6 @@
 //
 //  AudioBuffer.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Core immutable audio buffer type - thread-safe across isolation boundaries
 //

@@ -1,6 +1,6 @@
 //
 //  DownloadCoordinator.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  Central coordinator for all model downloads with cancellation support
 //

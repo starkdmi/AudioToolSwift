@@ -1,6 +1,6 @@
 //
 //  RUAccentCharTokenizer.swift
-//  ClearVoiceTTS
+//  AudioToolTTS
 //
 //  Character-level tokenizer for RUAccent accent model
 //

@@ -1,6 +1,6 @@
 //
 //  ModelRegistry.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  Static catalog of available models, variants, and packages
 //

@@ -1,6 +1,6 @@
 //
 //  AppleTranslationProvider.swift
-//  ClearVoiceTranslation
+//  AudioToolTranslation
 //
 //  Apple Translation framework provider (iOS 26+, macOS 26+)
 //
@@ -9,7 +9,7 @@
 //
 
 import Foundation
-import ClearVoiceCore
+import AudioToolCore
 
 // Check for Translation framework and compiler version
 #if canImport(Translation) && compiler(>=6.2)
@@ -156,7 +156,7 @@ public actor AppleTranslationProvider: TextTranslator {
 /// This placeholder is compiled when the programmatic TranslationSession API is not available.
 /// To use actual Apple Translation, build with Xcode 26+ on macOS 26+.
 ///
-/// Alternative: Use TranslateGemmaProvider from ClearVoiceMLXTranslation for on-device translation.
+/// Alternative: Use TranslateGemmaProvider from AudioToolMLXTranslation for on-device translation.
 @available(iOS 26.0, macOS 26.0, *)
 public actor AppleTranslationProvider: TextTranslator {
     
@@ -167,7 +167,7 @@ public actor AppleTranslationProvider: TextTranslator {
         from source: String?,
         to target: String
     ) async throws -> TranslationResult {
-        throw ClearVoiceError.resourceUnavailable(
+        throw AudioToolError.resourceUnavailable(
             "Apple Translation programmatic API requires macOS 26+ and Xcode 26+ SDK. " +
             "Use TranslateGemmaProvider for on-device translation on macOS 15."
         )
@@ -178,7 +178,7 @@ public actor AppleTranslationProvider: TextTranslator {
         from source: String?,
         to target: String
     ) async throws -> BatchTranslationResult {
-        throw ClearVoiceError.resourceUnavailable(
+        throw AudioToolError.resourceUnavailable(
             "Apple Translation programmatic API requires macOS 26+ and Xcode 26+ SDK."
         )
     }
@@ -188,7 +188,7 @@ public actor AppleTranslationProvider: TextTranslator {
     }
     
     public func prepareLanguagePair(from source: String, to target: String) async throws {
-        throw ClearVoiceError.resourceUnavailable(
+        throw AudioToolError.resourceUnavailable(
             "Apple Translation programmatic API requires macOS 26+ and Xcode 26+ SDK."
         )
     }

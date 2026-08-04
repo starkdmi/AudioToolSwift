@@ -1,6 +1,6 @@
 //
 //  AudioChunking.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  Audio chunking utilities with various overlap strategies
 //

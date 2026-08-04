@@ -1,12 +1,12 @@
 //
 //  SimplexSolverTests.swift
-//  ClearVoiceTests
+//  AudioToolTests
 //
 //  Unit tests for SimplexSolver
 //
 
 import XCTest
-@testable import ClearVoiceTTS
+@testable import AudioToolTTS
 
 final class SimplexSolverTests: XCTestCase {
     

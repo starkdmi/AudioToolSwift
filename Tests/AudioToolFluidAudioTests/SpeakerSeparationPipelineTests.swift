@@ -1,16 +1,16 @@
 //
 //  SpeakerSeparationPipelineTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Tests for speaker separation pipeline with re-identification
 //  Phase 3: Full pipeline example/tests
 //
 
 import XCTest
-@testable import ClearVoice
-import ClearVoiceCore
-import ClearVoiceFluidAudio
-import ClearVoiceMLX
+@testable import AudioTool
+import AudioToolCore
+import AudioToolFluidAudio
+import AudioToolMLX
 import AudioUtils
 import MLX
 
@@ -215,7 +215,7 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
     
     func testPipelineBuilderSeparateOverlapStage() {
         // Test that separateOverlap stage is added correctly
-        let voice = ClearVoice()
+        let voice = AudioEngine()
         let pipeline = voice.pipeline()
             .diarize()
             .separateOverlap(.separate)
@@ -227,7 +227,7 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
     
     func testPipelineBuilderWithAllOptions() {
         // Test full pipeline with all overlap options
-        let voice = ClearVoice()
+        let voice = AudioEngine()
         
         // Test .skip option
         let skipPipeline = voice.pipeline()
@@ -258,8 +258,8 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
         let audio = try loadAudio(at: url, sampleRate: 16000)
         XCTAssertGreaterThan(audio.duration, 5.0, "Audio should be at least 5 seconds")
         
-        // Initialize ClearVoice
-        let voice = ClearVoice()
+        // Initialize AudioTool
+        let voice = AudioEngine()
         
         // Initialize and register Sortformer
         let sortformer = FluidAudioSortformerProvider()
@@ -313,8 +313,8 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
         let url = try harryPotterURL()
         let audio = try loadAudio(at: url, sampleRate: 16000)
         
-        // Initialize ClearVoice with all required providers
-        let voice = ClearVoice()
+        // Initialize AudioTool with all required providers
+        let voice = AudioEngine()
         
         // Register Sortformer
         let sortformer = FluidAudioSortformerProvider()
@@ -370,7 +370,7 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
         let url = try harryPotterURL()
         let audio = try loadAudio(at: url, sampleRate: 16000)
         
-        let voice = ClearVoice()
+        let voice = AudioEngine()
         
         // Register Sortformer only (no separator needed for skip)
         let sortformer = FluidAudioSortformerProvider()

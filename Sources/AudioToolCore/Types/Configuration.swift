@@ -1,6 +1,6 @@
 //
 //  Configuration.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Framework configuration and model enums
 //
@@ -10,7 +10,7 @@ import Foundation
 // MARK: - Configuration
 
 /// Global framework configuration
-public struct ClearVoiceConfiguration: Sendable {
+public struct AudioToolConfiguration: Sendable {
     
     /// Compute precision
     public var precision: Precision
@@ -46,7 +46,7 @@ public struct ClearVoiceConfiguration: Sendable {
         self.channelCapacity = channelCapacity
     }
     
-    public static let `default` = ClearVoiceConfiguration()
+    public static let `default` = AudioToolConfiguration()
     
     public enum Precision: Sendable {
         case float16

@@ -1,6 +1,6 @@
 //
 //  SegmentPool.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Memory pool for efficient audio segment reuse
 //

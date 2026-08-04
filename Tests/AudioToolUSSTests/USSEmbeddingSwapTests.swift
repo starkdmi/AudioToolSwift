@@ -1,6 +1,6 @@
 //
 //  USSEmbeddingSwapTests.swift
-//  ClearVoiceUSSTests
+//  AudioToolUSSTests
 //
 //  Tests for USS embedding swap functionality:
 //  - Efficient multi-type separation with single model load
@@ -10,8 +10,8 @@
 //
 
 import XCTest
-import ClearVoiceUSS
-import ClearVoiceCore
+import AudioToolUSS
+import AudioToolCore
 import AudioUtils
 import MLX
 @preconcurrency import USSMLXSwift
@@ -233,7 +233,7 @@ final class USSEmbeddingSwapTests: XCTestCase {
         do {
             _ = try await uss.process(chunk)
             XCTFail("process() should throw after unload")
-        } catch let error as ClearVoiceError {
+        } catch let error as AudioToolError {
             print("Expected error: \(error.localizedDescription)")
             XCTAssertTrue(error.localizedDescription.contains("not loaded") || 
                           error.localizedDescription.contains("USS MLX"))

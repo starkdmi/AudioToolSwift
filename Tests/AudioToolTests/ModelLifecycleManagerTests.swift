@@ -1,13 +1,13 @@
 //
 //  ModelLifecycleManagerTests.swift
-//  ClearVoiceTests
+//  AudioToolTests
 //
 //  Tests for ModelLifecycleManager memory tracking and LRU eviction
 //
 
 import Testing
 import Foundation
-@testable import ClearVoiceCore
+@testable import AudioToolCore
 
 // MARK: - Mock ManagedModel
 

@@ -1,6 +1,6 @@
 //
 //  FileManagerExtensions.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  FileManager extensions for storage management
 //

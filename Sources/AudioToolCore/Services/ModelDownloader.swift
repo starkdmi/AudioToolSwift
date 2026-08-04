@@ -1,6 +1,6 @@
 //
 //  ModelDownloader.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  HuggingFace Hub model downloading with progress and cancellation
 //

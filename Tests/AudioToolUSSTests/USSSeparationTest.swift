@@ -1,13 +1,13 @@
 //
 //  USSSeparationTest.swift
-//  ClearVoiceUSSTests
+//  AudioToolUSSTests
 //
 //  Test USS speech and music separation on test.wav
 //
 
 import XCTest
-import ClearVoiceUSS
-import ClearVoiceCore
+import AudioToolUSS
+import AudioToolCore
 import AudioUtils
 import MLX
 

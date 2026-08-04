@@ -1,14 +1,14 @@
 //
 //  SortformerComparisonTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Comprehensive comparison tests between Pyannote and Sortformer diarization
 //  Tests on multiple audio files to evaluate performance differences
 //
 
 import XCTest
-import ClearVoiceFluidAudio
-import ClearVoiceCore
+import AudioToolFluidAudio
+import AudioToolCore
 import AudioUtils
 import MLX
 

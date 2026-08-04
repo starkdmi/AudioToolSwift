@@ -1,6 +1,6 @@
 //
 //  WordTimingMerger.swift
-//  ClearVoiceFluidAudio
+//  AudioToolFluidAudio
 //
 //  Merges BPE subword tokens into word-level timing information.
 //  Adapted from FluidAudio CLI's TranscribeCommand.swift

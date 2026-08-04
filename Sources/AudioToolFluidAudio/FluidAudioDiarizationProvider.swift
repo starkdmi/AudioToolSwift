@@ -1,6 +1,6 @@
 //
 //  FluidAudioDiarizationProvider.swift
-//  ClearVoiceFluidAudio
+//  AudioToolFluidAudio
 //
 //  Pyannote speaker diarization provider using FluidAudio
 //  Multi-stage pipeline: segmentation → WeSpeaker embeddings → VBx clustering
@@ -8,7 +8,7 @@
 
 import Foundation
 @preconcurrency import FluidAudio
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - FluidAudio Diarization Provider (Pyannote)
 
@@ -64,12 +64,12 @@ public actor FluidAudioDiarizationProvider: DiarizationProvider {
     /// This uses the memory-mapped streaming API for efficiency
     public func diarize(url: URL) async throws -> SpeakerTimeline {
         guard let manager = manager else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio Diarization")
+            throw AudioToolError.modelNotLoaded("FluidAudio Diarization")
         }
         
         let result = try await manager.process(url)
         
-        // Convert FluidAudio segments to ClearVoice DiarizedSegment
+        // Convert FluidAudio segments to AudioTool DiarizedSegment
         let segments = result.segments.map { segment in
             DiarizedSegment(
                 timeRange: TimeRange(start: Double(segment.startTimeSeconds), end: Double(segment.endTimeSeconds)),
@@ -85,12 +85,12 @@ public actor FluidAudioDiarizationProvider: DiarizationProvider {
     /// - Returns: Speaker timeline with labeled segments
     public func diarize(_ audio: AudioBuffer) async throws -> SpeakerTimeline {
         guard let manager = manager else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio Diarization")
+            throw AudioToolError.modelNotLoaded("FluidAudio Diarization")
         }
         
         let result = try await manager.process(audio: audio.samples)
         
-        // Convert FluidAudio segments to ClearVoice DiarizedSegment
+        // Convert FluidAudio segments to AudioTool DiarizedSegment
         let segments = result.segments.map { segment in
             DiarizedSegment(
                 timeRange: TimeRange(start: Double(segment.startTimeSeconds), end: Double(segment.endTimeSeconds)),

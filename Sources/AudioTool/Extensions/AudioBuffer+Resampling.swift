@@ -1,6 +1,6 @@
 //
 //  AudioBuffer+Resampling.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Native Swift resampling for AudioBuffer - follows SwiftAudio/AudioUtils algorithms
 //  without MLXArray conversion overhead.
@@ -9,10 +9,10 @@
 import Foundation
 @preconcurrency import AVFoundation
 import Accelerate
-import ClearVoiceCore
+import AudioToolCore
 
 /// Type alias to disambiguate from AVFoundation's AudioBuffer
-public typealias CVAudioBuffer = ClearVoiceCore.AudioBuffer
+public typealias CVAudioBuffer = AudioToolCore.AudioBuffer
 
 // MARK: - Resampling Quality
 

@@ -1,13 +1,13 @@
 //
 //  MLXSuperResolutionProvider.swift
-//  ClearVoiceMLX
+//  AudioToolMLX
 //
 //  MLX-based super resolution provider with chunking support
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 import MLX
 import MLXNN
 import AudioUtils
@@ -74,7 +74,7 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
                     resolvedWeightsPath = modelPath
                     resolvedConfigPath = configPathLocal
                 } else {
-                    throw ClearVoiceError.modelNotFound("Precision \(precision.rawValue) weights or config not found for MossFormer2SR48K")
+                    throw AudioToolError.modelNotFound("Precision \(precision.rawValue) weights or config not found for MossFormer2SR48K")
                 }
             } else {
                 // Auto-download from HuggingFace
@@ -109,7 +109,7 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     /// Upsample audio to 48kHz
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("MossFormer2_SR_48K")
+            throw AudioToolError.modelNotLoaded("MossFormer2_SR_48K")
         }
         
         // Resample input to 48kHz first
@@ -255,7 +255,7 @@ extension MossFormer2SR48KProvider: StreamableOutput {
     /// Internal implementation for streaming with overlap buffer
     private func processStreamImpl(_ input: AudioBuffer, continuation: AsyncThrowingStream<AudioBuffer, Error>.Continuation) async throws {
         guard let model = model else {
-            throw ClearVoiceError.modelNotLoaded("MossFormer2_SR_48K")
+            throw AudioToolError.modelNotLoaded("MossFormer2_SR_48K")
         }
         
         // Resample to 48kHz first

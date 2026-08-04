@@ -1,13 +1,13 @@
 //
 //  MLXOverlapTests.swift
-//  ClearVoiceMLXIntegrationTests
+//  AudioToolMLXIntegrationTests
 //
 //  Tests for MLXOverlap using xcodebuild for Metal support
 //
 
 import XCTest
 import MLX
-@testable import ClearVoiceMLX
+@testable import AudioToolMLX
 
 final class MLXOverlapTests: XCTestCase {
     

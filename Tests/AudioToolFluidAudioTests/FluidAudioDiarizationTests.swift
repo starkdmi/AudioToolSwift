@@ -1,13 +1,13 @@
 //
 //  FluidAudioDiarizationTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Tests for pyannote speaker diarization using FluidAudio
 //
 
 import XCTest
-import ClearVoiceFluidAudio
-import ClearVoiceCore
+import AudioToolFluidAudio
+import AudioToolCore
 import AudioUtils
 import MLX
 

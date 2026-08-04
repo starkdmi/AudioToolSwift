@@ -1,17 +1,17 @@
 //
-//  ClearVoiceTranslation.swift
-//  ClearVoiceTranslation
+//  AudioToolTranslation.swift
+//  AudioToolTranslation
 //
 //  Public exports and convenience factory for translation providers
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 
 // Re-export core types
-@_exported import ClearVoice
-@_exported import ClearVoiceCore
+@_exported import AudioTool
+@_exported import AudioToolCore
 
 /// Factory for creating translation providers
 public struct TranslationProviders {
@@ -30,9 +30,9 @@ public struct TranslationProviders {
     }
 }
 
-/// ClearVoice extension for registering translation providers
+/// AudioEngine extension for registering translation providers
 @available(iOS 26.0, macOS 26.0, *)
-extension ClearVoice {
+extension AudioEngine {
     
     /// Configure with Apple Translation provider
     public func configureAppleTranslation() {

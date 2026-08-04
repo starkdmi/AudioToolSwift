@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the design for handling overlapping speech in ClearVoice, including:
+This document outlines the design for handling overlapping speech in AudioTool, including:
 - Diarization model selection (Sortformer vs Pyannote)
 - Overlap detection and speaker separation
 - Speaker re-identification after separation
@@ -185,7 +185,7 @@ public struct SeparatedSpeakerTrack: Sendable {
 **1.3 Add `separateAndIdentify` to pipeline**
 
 ```swift
-extension ClearVoice {
+extension AudioEngine {
     /// Separate overlapping speech and identify speakers
     /// - Parameters:
     ///   - audio: Mixed audio with overlapping speakers
@@ -248,7 +248,7 @@ public enum PipelineEvent {
 #### Phase 3: Full Pipeline Example (Priority: Medium)
 
 ```swift
-let voice = ClearVoice(...)
+let voice = AudioEngine(...)
 
 // Register providers
 let sortformer = FluidAudioProviders.sortformerLowLatency()
@@ -288,7 +288,7 @@ For 5+ speakers (where Sortformer can't be used):
 **4.1 WeSpeaker embedding extraction**
 
 ```swift
-extension ClearVoice {
+extension AudioEngine {
     /// Extract speaker embedding from audio
     /// Uses WeSpeaker via Pyannote's EmbeddingExtractor
     public func extractSpeakerEmbedding(_ audio: AudioBuffer) async throws -> [Float]
@@ -343,7 +343,7 @@ public enum OverlapHandling: Sendable {
 // Sortformer provider
 func identifySpeaker(_ audio: AudioBuffer) async throws -> SpeakerIdentification
 
-// ClearVoice
+// AudioTool
 func separateAndIdentify(_:timeline:diarizer:) async throws -> [SeparatedSpeakerTrack]
 func extractSpeakerEmbedding(_:) async throws -> [Float]  // Pyannote fallback
 
@@ -428,5 +428,5 @@ case trackIdentified(track: SeparatedSpeakerTrack)
 
 - FluidAudio Sortformer docs: `Docs/temp/FluidAudio/Documentation/Sortformer.md`
 - FluidAudio SpeakerManager docs: `Docs/temp/FluidAudio/Documentation/SpeakerManager.md`
-- MossFormer2 SS implementation: `Sources/ClearVoiceMLX/MLXSeparatorProvider.swift`
-- Current separation tests: `Tests/ClearVoiceFluidAudioTests/StreamingPipelineTests.swift`
+- MossFormer2 SS implementation: `Sources/AudioToolMLX/MLXSeparatorProvider.swift`
+- Current separation tests: `Tests/AudioToolFluidAudioTests/StreamingPipelineTests.swift`

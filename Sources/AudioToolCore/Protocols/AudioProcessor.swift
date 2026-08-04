@@ -1,6 +1,6 @@
 //
 //  AudioProcessor.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Core processing protocols for audio ML models
 //

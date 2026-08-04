@@ -1,13 +1,13 @@
 //
 //  KokoroVoiceMatcherTests.swift
-//  ClearVoiceTests
+//  AudioToolTests
 //
 //  Unit and integration tests for KokoroVoiceMatcher
 //
 
 import XCTest
-@preconcurrency @testable import ClearVoiceTTS
-@testable import ClearVoiceCore
+@preconcurrency @testable import AudioToolTTS
+@testable import AudioToolCore
 
 final class KokoroVoiceMatcherTests: XCTestCase {
     

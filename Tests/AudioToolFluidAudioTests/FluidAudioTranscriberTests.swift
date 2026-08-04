@@ -1,13 +1,13 @@
 //
 //  FluidAudioTranscriberTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Tests for Parakeet transcription using FluidAudio
 //
 
 import XCTest
-import ClearVoiceFluidAudio
-import ClearVoiceCore
+import AudioToolFluidAudio
+import AudioToolCore
 import AudioUtils
 import MLX
 

@@ -1,17 +1,17 @@
 //
-//  ClearVoiceMLX.swift
-//  ClearVoiceMLX
+//  AudioToolMLX.swift
+//  AudioToolMLX
 //
 //  Public exports and convenience factory for MLX providers
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 
 // Re-export core types
-@_exported import ClearVoice
-@_exported import ClearVoiceCore
+@_exported import AudioTool
+@_exported import AudioToolCore
 
 /// Factory for creating MLX-based providers
 public struct MLXProviders {
@@ -36,7 +36,7 @@ public struct MLXProviders {
         FRCRNSE16KProvider(weightsPath: weightsPath)
     }
     
-    // Note: MossFormer GAN SE 16K is now in ClearVoiceCoreML
+    // Note: MossFormer GAN SE 16K is now in AudioToolCoreML
     // Use CoreMLProviders.mossformerGANSE16K() instead
     
     // MARK: - Speaker Separation
@@ -81,8 +81,8 @@ public struct MLXProviders {
     }
 }
 
-/// ClearVoice extension for registering MLX providers
-extension ClearVoice {
+/// AudioEngine extension for registering MLX providers
+extension AudioEngine {
     
     /// Configure with MLX enhancement provider
     public func configure(enhancer: MossFormer2SE48KProvider, for model: EnhancementModel = .mossformerSE48k) async throws {
@@ -96,7 +96,7 @@ extension ClearVoice {
         self.register(enhancer: enhancer, for: model)
     }
     
-    // Note: MossFormer GAN SE configure is now in ClearVoiceCoreML
+    // Note: MossFormer GAN SE configure is now in AudioToolCoreML
     
     /// Configure with MLX speaker separator
     public func configure(separator: MossFormer2SSProvider, for model: SeparationModel = .mossformer2spk) async throws {

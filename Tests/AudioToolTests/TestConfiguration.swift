@@ -1,6 +1,6 @@
 //
 //  TestConfiguration.swift
-//  ClearVoiceTests
+//  AudioToolTests
 //
 //  Shared test configuration and skip utilities for consistent test behavior.
 //  Use these helpers to properly skip integration tests instead of silent returns.
@@ -11,7 +11,7 @@ import Testing
 
 // MARK: - Test Configuration
 
-/// Centralized test configuration for ClearVoice tests.
+/// Centralized test configuration for AudioTool tests.
 ///
 /// Environment variables for controlling test execution:
 /// - `SKIP_INTEGRATION_TESTS=1`: Skip all integration tests (default: run them)

@@ -159,7 +159,7 @@ XCTAssertEqual(audio.sampleRate, 32000, "USS requires 32kHz input")
 
 ### 1.1 Factory Methods (Implemented)
 
-**File:** `Sources/ClearVoiceUSS/USSProviders.swift`
+**File:** `Sources/AudioToolUSS/USSProviders.swift`
 
 All 7 embedding types now have factory methods:
 
@@ -178,7 +178,7 @@ USSProviders.separation(type: .animal)
 
 ### 1.2 Embedding Switching API (Implemented)
 
-**File:** `Sources/ClearVoiceUSS/USSMLXProvider.swift`
+**File:** `Sources/AudioToolUSS/USSMLXProvider.swift`
 
 Key features:
 - **Embedding cache**: All 7 embeddings loaded on init (~14KB total)
@@ -248,7 +248,7 @@ CoreML models have **static input shapes baked in at conversion time**. The conf
 
 ### 2.3 Factory Presets (Implemented)
 
-**File:** `Sources/ClearVoiceFluidAudio/FluidAudioProviders.swift`
+**File:** `Sources/AudioToolFluidAudio/FluidAudioProviders.swift`
 
 ```swift
 // Low latency (~1.04s) - uses default CoreML model (RECOMMENDED)
@@ -266,7 +266,7 @@ FluidAudioProviders.sortformer(config: .default)
 
 ### 2.4 Provider Enhancements (Implemented)
 
-**File:** `Sources/ClearVoiceFluidAudio/FluidAudioSortformerProvider.swift`
+**File:** `Sources/AudioToolFluidAudio/FluidAudioSortformerProvider.swift`
 
 New features added:
 - **`configuration` property**: Exposes the Sortformer config used by the provider
@@ -290,16 +290,16 @@ print(provider.configuration.chunkLen)  // 6 frames
 
 ## Phase 3: StreamingPipelineTests.swift [COMPLETED]
 
-**File:** `Tests/ClearVoiceFluidAudioTests/StreamingPipelineTests.swift`
+**File:** `Tests/AudioToolFluidAudioTests/StreamingPipelineTests.swift`
 
 ### Test Suite Structure
 
 ```swift
 import XCTest
-import ClearVoiceFluidAudio
-import ClearVoiceMLX
-import ClearVoiceUSS
-import ClearVoiceCore
+import AudioToolFluidAudio
+import AudioToolMLX
+import AudioToolUSS
+import AudioToolCore
 import AudioUtils
 import MLX
 
@@ -446,13 +446,13 @@ Progress events will be wired for **all stages that support chunked/streaming pr
 
 ### 4.3 Implementation Details
 
-**File:** `Sources/ClearVoice/ClearVoice.swift` (executePipeline method)
+**File:** `Sources/AudioTool/AudioTool.swift` (executePipeline method)
 
 #### Enhancement Stage (StreamableOutput)
 
 ```swift
 case .enhance(let model):
-    let enhanced: ClearVoiceCore.AudioBuffer
+    let enhanced: AudioToolCore.AudioBuffer
     
     // Check if provider supports streaming output
     if let streamable = enhancerProviders[model.modelName] as? StreamableOutput {
@@ -643,7 +643,7 @@ Merge non-speech + SE background by timestamp into continuous track, then chunk 
 | `FluidAudioProviders.swift` | Modify | **DONE** | Added `sortformerLowLatency()`, `sortformerHighLatency()`, `sortformerNVIDIALowLatency()` |
 | `FluidAudioSortformerProvider.swift` | Modify | **DONE** | Added `configuration`, `estimatedLatency`, `validateConfigCompatibility()` |
 | `StreamingPipelineTests.swift` | **Create** | **DONE** | Comprehensive pipeline test file |
-| `ClearVoice.swift` | Modify | **DONE** | Wire progress events for all pipeline stages |
+| `AudioTool.swift` | Modify | **DONE** | Wire progress events for all pipeline stages |
 | `AudioBuffer+Resampling.swift` | Consider | N/A | Resampling implemented inline in tests |
 
 ### Test File Internal Structure

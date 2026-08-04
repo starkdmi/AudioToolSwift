@@ -1,18 +1,18 @@
 //
-//  ClearVoiceCoreML.swift
-//  ClearVoiceCoreML
+//  AudioToolCoreML.swift
+//  AudioToolCoreML
 //
 //  CoreML-based audio processing providers
 //
 
 import Foundation
 import CoreML
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 
 // Re-export core types
-@_exported import ClearVoice
-@_exported import ClearVoiceCore
+@_exported import AudioTool
+@_exported import AudioToolCore
 
 // MARK: - CoreML Providers Factory
 
@@ -32,9 +32,9 @@ public struct CoreMLProviders {
     }
 }
 
-// MARK: - ClearVoice Extension
+// MARK: - AudioTool Extension
 
-public extension ClearVoice {
+public extension AudioEngine {
     
     /// Configure with MossFormer GAN SE 16K (CoreML)
     /// - Parameters:

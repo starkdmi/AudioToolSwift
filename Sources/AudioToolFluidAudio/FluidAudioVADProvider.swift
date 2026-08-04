@@ -1,18 +1,18 @@
 //
 //  FluidAudioVADProvider.swift
-//  ClearVoiceFluidAudio
+//  AudioToolFluidAudio
 //
 //  Silero VAD provider using FluidAudio
 //
 
 import Foundation
 @preconcurrency import FluidAudio
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - FluidAudio VAD Provider
 
 /// Silero VAD provider using FluidAudio's VadManager
-/// Implements VADProvider protocol for integration with ClearVoice pipeline
+/// Implements VADProvider protocol for integration with AudioTool pipeline
 public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
     
     // MARK: - ChunkedProgressProvider Conformance
@@ -79,7 +79,7 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
     /// - Returns: Array of VAD segments with speech/silence labels
     public func detect(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> [VADSegment] {
         guard let manager = manager else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio VAD")
+            throw AudioToolError.modelNotLoaded("FluidAudio VAD")
         }
         
         let samples = audio.samples
@@ -117,7 +117,7 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
         
         await onProgress?(95.0)
         
-        // Convert FluidAudio segments to ClearVoice VADSegment
+        // Convert FluidAudio segments to AudioTool VADSegment
         let vadSegments = segments.map { segment in
             VADSegment(
                 timeRange: TimeRange(start: segment.startTime, end: segment.endTime),
@@ -136,7 +136,7 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
         AsyncThrowingStream { continuation in
             Task {
                 guard let manager = await self.manager else {
-                    continuation.finish(throwing: ClearVoiceError.modelNotLoaded("FluidAudio VAD"))
+                    continuation.finish(throwing: AudioToolError.modelNotLoaded("FluidAudio VAD"))
                     return
                 }
                 

@@ -1,16 +1,16 @@
 //
 //  StreamingPipelineTests.swift
-//  ClearVoiceFluidAudioTests
+//  AudioToolFluidAudioTests
 //
 //  Streaming pipeline tests for VAD -> diarization -> enhancement -> USS workflows
 //
 
 import XCTest
-@testable import ClearVoice
-import ClearVoiceCore
-import ClearVoiceFluidAudio
-import ClearVoiceMLX
-import ClearVoiceUSS
+@testable import AudioTool
+import AudioToolCore
+import AudioToolFluidAudio
+import AudioToolMLX
+import AudioToolUSS
 import AudioUtils
 import MLX
 import USSMLXSwift
@@ -982,7 +982,7 @@ final class StreamingPipelineTests: XCTestCase {
         try await diarizer.load()
         try await enhancer.load()
         
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             vad: vad,
             diarization: diarizer,
@@ -1301,7 +1301,7 @@ final class StreamingPipelineTests: XCTestCase {
         try await vad.load()
         try await diarizer.load()
         
-        let voice = ClearVoice(
+        let voice = AudioEngine(
             configuration: .default,
             vad: vad,
             diarization: diarizer
@@ -1371,8 +1371,8 @@ final class StreamingPipelineTests: XCTestCase {
         let loadTime = Date().timeIntervalSince(loadStart)
         print("Models loaded in \(String(format: "%.2f", loadTime))s (parallel)")
         
-        // Create ClearVoice instance with both providers
-        let voice = ClearVoice(
+        // Create AudioEngine instance with both providers
+        let voice = AudioEngine(
             configuration: .default,
             diarization: diarizer,
             transcriber: (TranscriptionModel.parakeet, transcriber)
@@ -1488,8 +1488,8 @@ final class StreamingPipelineTests: XCTestCase {
         let loadTime = Date().timeIntervalSince(loadStart)
         print("Models loaded in \(String(format: "%.2f", loadTime))s (parallel)")
         
-        // Create ClearVoice instance
-        let voice = ClearVoice(
+        // Create AudioEngine instance
+        let voice = AudioEngine(
             configuration: .default,
             diarization: diarizer,
             transcriber: (TranscriptionModel.parakeet, transcriber)
@@ -1590,8 +1590,8 @@ final class StreamingPipelineTests: XCTestCase {
         let loadTime = Date().timeIntervalSince(loadStart)
         print("All models loaded in \(String(format: "%.2f", loadTime))s")
         
-        // Create ClearVoice instance
-        let voice = ClearVoice(
+        // Create AudioEngine instance
+        let voice = AudioEngine(
             configuration: .default,
             vad: vad,
             diarization: diarizer,

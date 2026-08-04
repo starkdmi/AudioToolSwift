@@ -1,6 +1,6 @@
 //
 //  ManagedModel.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  Protocol for models that support memory lifecycle management
 //

@@ -1,20 +1,20 @@
 //
 //  KokoroTTSProvider.swift
-//  ClearVoiceTTS
+//  AudioToolTTS
 //
 //  Kokoro TTS provider with MisakiSwift G2P (MIT license)
 //
 
 import Foundation
-import ClearVoice
-import ClearVoiceCore
+import AudioTool
+import AudioToolCore
 import KokoroSwift
 import MLX
 import MLXNN
 import CoreMedia
 
 /// Typealias to avoid conflict with CoreAudio.AudioBuffer
-public typealias TTSAudioBuffer = ClearVoiceCore.AudioBuffer
+public typealias TTSAudioBuffer = AudioToolCore.AudioBuffer
 
 /// Kokoro TTS provider using MisakiSwift for G2P (MIT license, no ESpeakNG)
 ///
@@ -208,7 +208,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
                 } else if let anyFile = files.first(where: { $0.pathExtension == "safetensors" }) {
                     weightsPath = anyFile
                 } else {
-                    throw ClearVoiceError.modelNotFound("No .safetensors file found in \(path.lastPathComponent)")
+                    throw AudioToolError.modelNotFound("No .safetensors file found in \(path.lastPathComponent)")
                 }
             }
             
@@ -252,7 +252,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
         if voicePath.pathExtension == "safetensors" {
             let arrays = try MLX.loadArrays(url: voicePath)
             guard let voiceArray = arrays["voice"] ?? arrays.values.first else {
-                throw ClearVoiceError.resourceUnavailable("No voice tensor found in \(voicePath.lastPathComponent)")
+                throw AudioToolError.resourceUnavailable("No voice tensor found in \(voicePath.lastPathComponent)")
             }
             embedding = voiceArray
         } else {
@@ -289,22 +289,22 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     ///
     /// - Parameter voices: Array of (voiceName, weight) tuples. Weights are normalized automatically.
     /// - Returns: Blended MLXArray voice embedding
-    /// - Throws: `ClearVoiceError.resourceUnavailable` if any voice is not loaded
+    /// - Throws: `AudioToolError.resourceUnavailable` if any voice is not loaded
     public func mixVoices(_ voices: [(name: String, weight: Float)]) throws -> MLXArray {
         guard !voices.isEmpty else {
-            throw ClearVoiceError.resourceUnavailable("No voices provided for mixing")
+            throw AudioToolError.resourceUnavailable("No voices provided for mixing")
         }
         
         // Normalize weights to sum to 1.0
         let totalWeight = voices.map(\.weight).reduce(0, +)
         guard totalWeight > 0 else {
-            throw ClearVoiceError.resourceUnavailable("Total weight must be greater than 0")
+            throw AudioToolError.resourceUnavailable("Total weight must be greater than 0")
         }
         
         var mixed: MLXArray? = nil
         for (name, weight) in voices {
             guard let embedding = voiceEmbeddings[name] else {
-                throw ClearVoiceError.resourceUnavailable("Voice '\(name)' not loaded. Call loadVoice(from:) first.")
+                throw AudioToolError.resourceUnavailable("Voice '\(name)' not loaded. Call loadVoice(from:) first.")
             }
             let normalizedWeight = weight / totalWeight
             let weighted = embedding * MLXArray(normalizedWeight)
@@ -319,9 +319,9 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     ///   - text: Text to synthesize
     ///   - voiceEmbedding: Raw MLXArray voice embedding (from mixVoices or custom)
     /// - Returns: Audio buffer with synthesized speech (24kHz mono)
-    public func synthesize(_ text: String, voiceEmbedding: MLXArray) async throws -> ClearVoiceCore.AudioBuffer {
+    public func synthesize(_ text: String, voiceEmbedding: MLXArray) async throws -> AudioToolCore.AudioBuffer {
         guard let tts = tts else {
-            throw ClearVoiceError.modelNotLoaded("KokoroTTS")
+            throw AudioToolError.modelNotLoaded("KokoroTTS")
         }
         
         // Map KokoroLanguage to KokoroSwift.Language
@@ -344,7 +344,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
             text: text
         )
         
-        return ClearVoiceCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
+        return AudioToolCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
     }
     
     // MARK: - SpeechSynthesizer Protocol
@@ -354,13 +354,13 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     ///   - text: Text to synthesize
     ///   - voice: Voice name (must be loaded via `loadVoice`)
     /// - Returns: Audio buffer with synthesized speech (24kHz mono)
-    public func synthesize(_ text: String, voice: String) async throws -> ClearVoiceCore.AudioBuffer {
+    public func synthesize(_ text: String, voice: String) async throws -> AudioToolCore.AudioBuffer {
         guard let tts = tts else {
-            throw ClearVoiceError.modelNotLoaded("KokoroTTS")
+            throw AudioToolError.modelNotLoaded("KokoroTTS")
         }
         
         guard let voiceEmbedding = voiceEmbeddings[voice] else {
-            throw ClearVoiceError.resourceUnavailable("Voice '\(voice)' not loaded. Call loadVoice(from:) first.")
+            throw AudioToolError.resourceUnavailable("Voice '\(voice)' not loaded. Call loadVoice(from:) first.")
         }
         
         // Map KokoroLanguage to KokoroSwift.Language
@@ -385,7 +385,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
             text: text
         )
         
-        return ClearVoiceCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
+        return AudioToolCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
     }
     
     /// Stream synthesized audio chunks
@@ -393,7 +393,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     ///   - text: Text to synthesize
     ///   - voice: Voice name
     /// - Returns: Async stream of audio chunks
-    public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<ClearVoiceCore.AudioBuffer, Error> {
+    public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -414,8 +414,8 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     public var inputChannels: Int { 0 }  // Text input, no audio channels
     public var outputChannels: Int { 1 }
     
-    public func process(_ input: ClearVoiceCore.AudioBuffer) async throws -> ClearVoiceCore.AudioBuffer {
-        throw ClearVoiceError.pipelineConfigurationInvalid("KokoroTTS is a synthesizer, use synthesize() instead of process()")
+    public func process(_ input: AudioToolCore.AudioBuffer) async throws -> AudioToolCore.AudioBuffer {
+        throw AudioToolError.pipelineConfigurationInvalid("KokoroTTS is a synthesizer, use synthesize() instead of process()")
     }
 }
 
@@ -438,7 +438,7 @@ extension KokoroTTSProvider {
     ///
     /// - Parameter matchResult: Voice match result from `KokoroVoiceMatcher`
     /// - Returns: Blended MLXArray voice embedding
-    /// - Throws: `ClearVoiceError.resourceUnavailable` if any voice is not loaded
+    /// - Throws: `AudioToolError.resourceUnavailable` if any voice is not loaded
     public func blendedVoice(from matchResult: VoiceMatchResult) throws -> MLXArray {
         try mixVoices(matchResult.weights)
     }

@@ -1,6 +1,6 @@
 //
 //  FluidAudioSortformerProvider.swift
-//  ClearVoiceFluidAudio
+//  AudioToolFluidAudio
 //
 //  Sortformer speaker diarization provider using FluidAudio
 //  End-to-end neural model from NVIDIA, optimized for ≤4 speakers
@@ -8,7 +8,7 @@
 
 import Foundation
 @preconcurrency import FluidAudio
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - FluidAudio Sortformer Provider
 
@@ -155,7 +155,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     /// This loads audio from file and processes in batch mode
     public func diarize(url: URL) async throws -> SpeakerTimeline {
         guard let diarizer = diarizer, diarizer.isAvailable else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio Sortformer")
+            throw AudioToolError.modelNotLoaded("FluidAudio Sortformer")
         }
         
         // Load audio at 16kHz mono using FluidAudio's converter
@@ -170,7 +170,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     /// - Returns: Speaker timeline with labeled segments
     public func diarize(_ audio: AudioBuffer) async throws -> SpeakerTimeline {
         guard let diarizer = diarizer, diarizer.isAvailable else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio Sortformer")
+            throw AudioToolError.modelNotLoaded("FluidAudio Sortformer")
         }
         
         return try diarizeInternal(samples: audio.samples)
@@ -211,7 +211,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     
     private func diarizeInternal(samples: [Float]) throws -> SpeakerTimeline {
         guard let diarizer = diarizer else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio Sortformer")
+            throw AudioToolError.modelNotLoaded("FluidAudio Sortformer")
         }
         
         // Apply preprocessing normalization if configured
@@ -220,7 +220,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         // Use batch processing for complete audio
         let timeline = try diarizer.processComplete(processedSamples)
         
-        // Convert Sortformer timeline to ClearVoice DiarizedSegment format
+        // Convert Sortformer timeline to AudioTool DiarizedSegment format
         // Sortformer timeline.segments is [[SortformerSegment]] - array per speaker
         var segments: [DiarizedSegment] = []
         
@@ -293,7 +293,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     /// - Returns: Optional result with speaker predictions for this chunk
     public func processChunk(_ samples: [Float]) throws -> SortformerChunkResult? {
         guard let diarizer = diarizer else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio Sortformer")
+            throw AudioToolError.modelNotLoaded("FluidAudio Sortformer")
         }
         
         return try diarizer.processSamples(samples)
@@ -347,7 +347,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     ///
     /// - Parameter audio: Audio segment to identify (will be resampled to 16kHz)
     /// - Returns: Speaker identification with slot, confidence, and probabilities
-    /// - Throws: `ClearVoiceError.modelNotLoaded` if Sortformer not initialized
+    /// - Throws: `AudioToolError.modelNotLoaded` if Sortformer not initialized
     ///
     /// Example:
     /// ```swift
@@ -358,7 +358,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     /// ```
     public func identifySpeaker(_ audio: AudioBuffer) async throws -> SpeakerIdentification {
         guard let diarizer = diarizer, diarizer.isAvailable else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio Sortformer")
+            throw AudioToolError.modelNotLoaded("FluidAudio Sortformer")
         }
         
         // Resample to 16kHz if needed (e.g., from 8kHz WHAMR output)
@@ -418,7 +418,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     /// while preserving the spkcache state.
     private func identifySpeakerBatch(_ samples: [Float]) throws -> SpeakerIdentification {
         guard let diarizer = diarizer else {
-            throw ClearVoiceError.modelNotLoaded("FluidAudio Sortformer")
+            throw AudioToolError.modelNotLoaded("FluidAudio Sortformer")
         }
         
         // For very short audio, processComplete would reset state
@@ -482,7 +482,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
     ///
     /// - Parameter tracks: Array of separated audio tracks
     /// - Returns: Array of (track, identification) pairs sorted by speaker slot
-    /// - Throws: `ClearVoiceError.modelNotLoaded` if Sortformer not initialized
+    /// - Throws: `AudioToolError.modelNotLoaded` if Sortformer not initialized
     public func identifySpeakers(_ tracks: [AudioBuffer]) async throws -> [(audio: AudioBuffer, identification: SpeakerIdentification)] {
         var results: [(audio: AudioBuffer, identification: SpeakerIdentification)] = []
         

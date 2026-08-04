@@ -1,13 +1,13 @@
 //
 //  AudioChunkingTests.swift
-//  ClearVoiceTests
+//  AudioToolTests
 //
 //  Unit tests for AudioChunking
 //
 
 import Testing
 import Foundation
-@testable import ClearVoiceCore
+@testable import AudioToolCore
 
 @Suite("Audio Chunking")
 struct AudioChunkingTests {

@@ -1,14 +1,14 @@
 //
 //  AppleTranslationIntegrationTests.swift
-//  ClearVoiceTranslation
+//  AudioToolTranslation
 //
 //  Integration tests for Apple Translation API
 //
 
 import Testing
 import Foundation
-@testable import ClearVoice
-@testable import ClearVoiceCore
+@testable import AudioTool
+@testable import AudioToolCore
 
 #if canImport(Translation)
 import Translation

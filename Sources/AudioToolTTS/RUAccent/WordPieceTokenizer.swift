@@ -1,6 +1,6 @@
 //
 //  WordPieceTokenizer.swift
-//  ClearVoiceTTS
+//  AudioToolTTS
 //
 //  WordPiece tokenization for RUAccent sentence-level models
 //

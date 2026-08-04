@@ -1,6 +1,6 @@
 //
 //  TextPreprocessor.swift
-//  ClearVoiceCore
+//  AudioToolCore
 //
 //  Protocol for text-to-text preprocessing (stress marking, phonetization, etc.)
 //

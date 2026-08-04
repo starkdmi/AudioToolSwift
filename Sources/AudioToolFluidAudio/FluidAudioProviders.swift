@@ -1,13 +1,13 @@
 //
 //  FluidAudioProviders.swift
-//  ClearVoiceFluidAudio
+//  AudioToolFluidAudio
 //
 //  Factory for FluidAudio-based providers
 //
 
 import Foundation
 @preconcurrency import FluidAudio
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - FluidAudio Providers Factory
 
@@ -162,7 +162,7 @@ public struct FluidAudioProviders {
     }
 }
 
-// MARK: - ClearVoiceFluidAudio Module Exports
+// MARK: - AudioToolFluidAudio Module Exports
 
 /// Re-export key types for convenience
 public typealias SileroVADProvider = FluidAudioVADProvider

@@ -1,12 +1,12 @@
 //
 //  PipelineEvent.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Pipeline streaming events and results
 //
 
 import Foundation
-import ClearVoiceCore
+import AudioToolCore
 
 // MARK: - Pipeline Events
 

@@ -1,6 +1,6 @@
 //
 //  ModelDownloadIntegrationTests.swift
-//  ClearVoice
+//  AudioTool
 //
 //  Integration tests for model download system with real HuggingFace models
 //  Uses small models (GAN SE CoreML ~2MB, Silero VAD ~2MB) for fast testing
@@ -8,8 +8,8 @@
 
 import Testing
 import Foundation
-@testable import ClearVoice
-@testable import ClearVoiceCore
+@testable import AudioTool
+@testable import AudioToolCore
 
 // MARK: - Real Download Tests
 
