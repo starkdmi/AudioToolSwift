@@ -44,13 +44,13 @@ public struct PipelineStage: Sendable {
 public struct PipelineBuilder: Sendable {
     
     internal var stages: [PipelineStage] = []
-    internal weak var voice: AudioTool?
+    internal weak var voice: AudioEngine?
     
     internal var onStageCompleteHandler: (@Sendable (String, Duration) async -> Void)?
     internal var onSegmentHandler: (@Sendable (PipelineEvent) async -> Void)?
     
     // Internal initializer
-    init(voice: AudioTool? = nil) {
+    init(voice: AudioEngine? = nil) {
         self.voice = voice
     }
     

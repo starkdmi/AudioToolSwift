@@ -11,6 +11,22 @@ let commonSwiftSettings: [SwiftSetting] = [
 // FluidAudio wrapper has Sendable issues in upstream dependency - exclude from strict mode
 let fluidAudioSwiftSettings: [SwiftSetting] = []
 
+// Model implementation targets are vendored under Sources/Models. They keep their
+// original module names so imports elsewhere are unchanged, but live in directories
+// named after the model rather than after the package they came from.
+//
+// They build in Swift 5 language mode. That is not a concession: as separate packages
+// they all declared swift-tools-version 5.9, so Swift 5 is the mode they were written
+// and validated against. Folding them into a package whose root is swiftLanguageModes
+// [.v6] would silently promote them and turn MLX's non-Sendable MLXArray and the
+// models' kernel caches into ~20 hard errors. The public API in Sources/AudioTool* is
+// fully Swift 6; these are inference internals behind it. Migrating them is real work
+// with real risk of changing numerical behaviour, so it belongs in its own pass with
+// benchmarks either side, not smuggled into a repo move.
+let modelSwiftSettings: [SwiftSetting] = [
+    .swiftLanguageMode(.v5)
+]
+
 let package = Package(
     name: "AudioToolSwift",
     platforms: [
@@ -60,40 +76,159 @@ let package = Package(
         ),
     ],
     dependencies: [
-        // SwiftAudio for resampling, STFT, and audio I/O (local with buffer capacity fix)
-        .package(name: "SwiftAudio", path: "../SwiftAudio"),
-        
-        // MLX Model packages (local development)
-        .package(name: "Mossformer2MLXSwift", path: "../Models/mossformer2_se_mlx_swift"),
-        .package(name: "FRCRNMLXSwift", path: "../Models/frcrn_se_mlx_swift"),
-        .package(name: "MossFormer2SS", path: "../Models/mosforrmer2_ss_mlx_swift"),
-        .package(name: "MossFormer2SR", path: "../Models/mossformer2_sr_mlx_swift"),
-        .package(name: "DemucsMLXSwift", path: "../Models/demucs_mlx_swift"),
-        .package(name: "USSMLXSwift", path: "../Models/uss_mlx_swift"),
-        
         // MLX for neural engine operations
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.29.1")),
-        
-        // FluidAudio for VAD, transcription, diarization (local fork with mel context fix)
-        // Fixes: Chunk boundary truncation bug where audio at exact chunk boundaries caused all-blank predictions
-        // TODO: Switch back to hosted version after PR is merged: https://github.com/FluidInference/FluidAudio/pull/XXX
-        .package(name: "FluidAudio", path: "../Docs/temp/FluidAudio"),
-        
-        // Kokoro TTS with MisakiSwift G2P (MIT license, no ESpeakNG)
-        // Using local fork with extended misaki[en] language support
-        .package(name: "KokoroSwift", path: "../Models/kokoro-ios"),
-        
-        // ChatterBox Multilingual TTS (MLX, 25 languages)
-        .package(name: "ChatterboxMLXSwift", path: "../Models/chatterbox_swift"),
-        
-        // HuggingFace Hub for model downloading 
-        .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMinor(from: "1.1.6")),
-        
+
         // MLX LLM for TranslateGemma translation
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMinor(from: "2.29.3")),
+
+        // HuggingFace Hub for model downloading
+        .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMinor(from: "1.1.6")),
+
+        // Resampling, STFT, and audio I/O.
+        .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.0.0"),
+
+        // G2P for Kokoro TTS. Upstream rather than vendored: the local copy's Swift
+        // source was byte-identical to the 1.0.6 tag, so there is nothing of ours to
+        // keep, and its 18 MB of pronunciation dictionaries and BART weights stay
+        // upstream's problem instead of becoming ours to host.
+        //
+        // Pinned to 1.0.5, not 1.0.6: 1.0.6 requires mlx-swift exactly 0.30.2, which
+        // conflicts with the 0.29.x every model target here was built against. The
+        // local copy worked around this by hand-editing its manifest; 1.0.5 declares
+        // a range instead and resolves cleanly. Revisit when the models move to 0.30.
+        .package(url: "https://github.com/mlalma/MisakiSwift", exact: "1.0.5"),
+        .package(url: "https://github.com/mlalma/MLXUtilsLibrary.git", from: "0.0.6"),
+
+        // VAD, transcription, diarization. Upstream, not a fork.
+        //
+        // Pinned to a revision rather than a version range because the newest tag,
+        // v0.9.1, predates FluidInference/FluidAudio#264 - the mel-context fix for
+        // chunk-boundary transcription loss, authored here and merged upstream on
+        // 2026-01-23. Without it, audio landing on a chunk boundary produces
+        // all-blank predictions. No tagged release contains that commit yet, so a
+        // revision pin is the only way to depend on correct behaviour. Switch to a
+        // version range once upstream cuts a release past it.
+        .package(
+            url: "https://github.com/FluidInference/FluidAudio",
+            revision: "5390df9752c8fc583596018360c5fd70d6fa6c75"
+        ),
     ],
     targets: [
-        // Core shared infrastructure
+        // MARK: - Vendored model implementations
+        //
+        // Previously six separate local SwiftPM packages plus a fork checkout. Source
+        // only: every weight is fetched at runtime from HuggingFace, never committed.
+
+        .target(
+            name: "Mossformer2MLXSwift",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Sources/Models/MossFormer2SE",
+            swiftSettings: modelSwiftSettings
+        ),
+        .target(
+            name: "FRCRNMLXSwift",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Sources/Models/FRCRN",
+            swiftSettings: modelSwiftSettings
+        ),
+        .target(
+            name: "MossFormer2SS",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+            ],
+            path: "Sources/Models/MossFormer2SS",
+            swiftSettings: modelSwiftSettings
+        ),
+        .target(
+            name: "MossFormer2SR",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Sources/Models/MossFormer2SR",
+            swiftSettings: modelSwiftSettings
+        ),
+        .target(
+            name: "DemucsMLXSwift",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Sources/Models/Demucs",
+            swiftSettings: modelSwiftSettings
+        ),
+        .target(
+            name: "USSMLXSwift",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXFFT", package: "mlx-swift"),
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Sources/Models/USS",
+            // The ResUNet30 weights this target used to bundle (~106 MB) now come from
+            // HuggingFace. What stays are the 527-d AudioSet class vectors, 2 KB each,
+            // which select what to separate - they are inputs, not weights.
+            resources: [
+                .copy("Embeddings")
+            ],
+            swiftSettings: modelSwiftSettings
+        ),
+        .target(
+            name: "KokoroSwift",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFFT", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "MisakiSwift", package: "MisakiSwift"),
+                .product(name: "MLXUtilsLibrary", package: "MLXUtilsLibrary"),
+            ],
+            path: "Sources/Models/Kokoro",
+            exclude: ["LICENSE"],
+            resources: [
+                .copy("Resources")
+            ],
+            swiftSettings: modelSwiftSettings
+        ),
+        .target(
+            name: "ChatterboxMLXSwift",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Sources/Models/Chatterbox",
+            swiftSettings: modelSwiftSettings
+        ),
+
+        // MARK: - Core shared infrastructure
+
         .target(
             name: "AudioToolCore",
             dependencies: [
@@ -102,7 +237,7 @@ let package = Package(
             path: "Sources/AudioToolCore",
             swiftSettings: commonSwiftSettings
         ),
-        
+
         // Main public API (no MLX/CoreML dependency)
         .target(
             name: "AudioTool",
@@ -113,25 +248,24 @@ let package = Package(
             path: "Sources/AudioTool",
             swiftSettings: commonSwiftSettings
         ),
-        
-        // MLX Backend providers
+
+        // MARK: - Backends
+
         .target(
             name: "AudioToolMLX",
             dependencies: [
                 "AudioTool",
                 "AudioToolCore",
-                .product(name: "Mossformer2MLXSwift", package: "Mossformer2MLXSwift"),
-                .product(name: "FRCRNMLXSwift", package: "FRCRNMLXSwift"),
-                .product(name: "MossFormer2SS", package: "MossFormer2SS"),
-                .product(name: "MossFormer2SR", package: "MossFormer2SR"),
-                .product(name: "DemucsMLXSwift", package: "DemucsMLXSwift"),
+                "Mossformer2MLXSwift",
+                "FRCRNMLXSwift",
+                "MossFormer2SS",
+                "MossFormer2SR",
+                "DemucsMLXSwift",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/AudioToolMLX",
             swiftSettings: commonSwiftSettings
         ),
-        
-        // CoreML Backend providers
         .target(
             name: "AudioToolCoreML",
             dependencies: [
@@ -144,9 +278,7 @@ let package = Package(
             path: "Sources/AudioToolCoreML",
             swiftSettings: commonSwiftSettings
         ),
-        
-        // FluidAudio Backend providers (VAD, transcription, diarization)
-        // Note: FluidAudio has Sendable issues in upstream - excluded from strict warnings
+        // Note: FluidAudio has Sendable issues upstream - excluded from strict warnings
         .target(
             name: "AudioToolFluidAudio",
             dependencies: [
@@ -157,35 +289,30 @@ let package = Package(
             path: "Sources/AudioToolFluidAudio",
             swiftSettings: fluidAudioSwiftSettings
         ),
-        
-        // USS MLX Backend providers (speech separation)
         .target(
             name: "AudioToolUSS",
             dependencies: [
                 "AudioTool",
                 "AudioToolCore",
-                .product(name: "USSMLXSwift", package: "USSMLXSwift"),
+                "USSMLXSwift",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/AudioToolUSS",
             swiftSettings: commonSwiftSettings
         ),
-        
-        // TTS Backend providers (Kokoro with MisakiSwift G2P)
         .target(
             name: "AudioToolTTS",
             dependencies: [
                 "AudioTool",
                 "AudioToolCore",
                 "AudioToolFluidAudio",  // For VAD-based audio trimming
-                .product(name: "KokoroSwift", package: "KokoroSwift"),
-                .product(name: "ChatterboxMLXSwift", package: "ChatterboxMLXSwift"),
+                "KokoroSwift",
+                "ChatterboxMLXSwift",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/AudioToolTTS",
             swiftSettings: commonSwiftSettings
         ),
-        
         // Speech-to-Text Backend (Apple SpeechAnalyzer, iOS 26+)
         .target(
             name: "AudioToolSpeech",
@@ -196,7 +323,6 @@ let package = Package(
             path: "Sources/AudioToolSpeech",
             swiftSettings: commonSwiftSettings
         ),
-        
         // Translation Backend (Apple Translation framework)
         .target(
             name: "AudioToolTranslation",
@@ -207,7 +333,6 @@ let package = Package(
             path: "Sources/AudioToolTranslation",
             swiftSettings: commonSwiftSettings
         ),
-        
         // MLX Translation Backend (TranslateGemma, 55+ languages)
         .target(
             name: "AudioToolMLXTranslation",
@@ -220,18 +345,16 @@ let package = Package(
             path: "Sources/AudioToolMLXTranslation",
             swiftSettings: commonSwiftSettings
         ),
-        
+
+        // MARK: - Tests
+
         // Unit tests with mocks (swift test compatible)
         .testTarget(
             name: "AudioToolTests",
             dependencies: ["AudioTool", "AudioToolTTS", "AudioToolSpeech"],
             path: "Tests/AudioToolTests",
-            resources: [
-                .copy("Fixtures/")
-            ],
             swiftSettings: commonSwiftSettings
         ),
-        
         // MLX Integration tests (requires xcodebuild for Metal)
         // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS'
         .testTarget(
@@ -245,13 +368,8 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Tests/AudioToolMLXIntegrationTests",
-            resources: [
-                .copy("Fixtures/")
-            ],
             swiftSettings: commonSwiftSettings
         ),
-        
-        // FluidAudio Integration tests (VAD, transcription, diarization)
         // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolFluidAudioTests
         .testTarget(
             name: "AudioToolFluidAudioTests",
@@ -264,13 +382,8 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Tests/AudioToolFluidAudioTests",
-            resources: [
-                .copy("Fixtures/")
-            ],
             swiftSettings: commonSwiftSettings
         ),
-        
-        // USS MLX Integration tests (speech separation)
         // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolUSSTests
         .testTarget(
             name: "AudioToolUSSTests",
@@ -282,13 +395,8 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Tests/AudioToolUSSTests",
-            resources: [
-                .copy("Fixtures/")
-            ],
             swiftSettings: commonSwiftSettings
         ),
-        
-        // MLX Translation Integration tests (TranslateGemma)
         // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolMLXTranslationTests
         .testTarget(
             name: "AudioToolMLXTranslationTests",
@@ -300,7 +408,9 @@ let package = Package(
             path: "Tests/AudioToolMLXTranslationTests",
             swiftSettings: commonSwiftSettings
         ),
-        // CLI executable for testing MLX providers (use xcodebuild + run directly)
+
+        // MARK: - CLI
+
         // Build: xcodebuild build -scheme audiotool -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
         // Run: .build/DerivedData/Build/Products/Release/audiotool --model frcrn --input test.wav --output enhanced.wav
         // Note: AudioToolSpeech (Apple SpeechAnalyzer) requires macOS 26+ and is only conditionally imported
