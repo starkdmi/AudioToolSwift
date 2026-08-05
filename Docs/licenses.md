@@ -38,7 +38,13 @@ Covered by the USS/ResUNet30 entry below once that audit is complete.
 
 `Tests/**/Fixtures/*.wav` - see those directories' README for a per-file table.
 
-- Speech samples from [ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio),
+- Six files - `test.wav`, `test_48k.wav`, `sr_input_16k.wav`, `speech_dialogue.wav`,
+  `mix_8k.wav`, `mix3_8k.wav` - are the inputs each model's conversion was validated
+  against, carried over from the conversion working trees. Confirmed redistributable
+  by the author. **Their exact upstream should be pinned during the Phase 4 audit**;
+  they are believed to share the ClearerVoice-Studio lineage but that is not verified
+  here, and this file should not imply otherwise.
+- Speech samples fetched from [ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio),
   **Apache-2.0**. That project is the upstream of MossFormer2 SE/SS/SR and FRCRN, so
   these are the clips those models are demoed on.
 - `music.wav` is an excerpt of *Distant Wonders* from "CC0 Instruments, Volume I" on
@@ -46,8 +52,8 @@ Covered by the USS/ResUNet30 entry below once that audit is complete.
 - Derived fixtures (resampled, concatenated or mixed) inherit the licence of their
   sources, all Apache-2.0.
 
-Reproducible via `Scripts/fetch-fixtures.sh`, which regenerates every committed
-fixture byte-for-byte.
+`Scripts/fetch-fixtures.sh` regenerates the fetched and derived fixtures
+byte-for-byte. It deliberately does not touch the six conversion inputs.
 
 ## Model weights
 
