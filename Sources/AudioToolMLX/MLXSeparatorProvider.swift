@@ -302,6 +302,19 @@ public actor DemucsProvider: MusicSeparator {
         case bass = "bass"
         case vocals = "vocals"
         case other = "other"
+
+        /// Position of this stem on axis 1 of the model output, which is
+        /// (batch, source, channel, time). Fixed by the HTDemucs architecture; each
+        /// per-stem weight file still emits all four, so the right one must be
+        /// selected rather than reduced over.
+        var sourceIndex: Int {
+            switch self {
+            case .drums: return 0
+            case .bass: return 1
+            case .other: return 2
+            case .vocals: return 3
+            }
+        }
     }
     
     public nonisolated let sampleRate: Int = 44100
@@ -374,14 +387,7 @@ public actor DemucsProvider: MusicSeparator {
             throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
         }
         
-        // Source indices in Demucs output: drums=0, bass=1, other=2, vocals=3
-        let sourceIndex: Int
-        switch stem {
-        case .drums: sourceIndex = 0
-        case .bass: sourceIndex = 1
-        case .other: sourceIndex = 2
-        case .vocals: sourceIndex = 3
-        }
+        let sourceIndex = stem.sourceIndex
         
         let result = try await MLXOverlap.processWithChunking(
             audio: inputMLX,
@@ -427,19 +433,20 @@ public actor DemucsProvider: MusicSeparator {
         
         inputMLX = inputMLX.expandedDimensions(axis: 0)
         
-        print("DEBUG separateChunk: input shape=\(inputMLX.shape)")
-        
+        // Model output is (batch, source, channel, time) - four sources, always.
+        //
+        // This used to squeeze the batch axis and take mean(axis: 0), which averaged
+        // the four *stems* into each other rather than selecting one, and left the
+        // result still stereo: a 4s mono request came back with 2x the samples,
+        // labelled mono, containing a blend of drums, bass, vocals and other. The
+        // chunked path indexed correctly, so which one ran depended only on whether
+        // the input was longer than maxDirectDuration.
         let output = model(inputMLX)
         eval(output)
         
-        print("DEBUG separateChunk: output shape=\(output.shape)")
-        
-        let squeezed = output.squeezed(axis: 0)
-        print("DEBUG separateChunk: squeezed shape=\(squeezed.shape)")
-        
-        // Average stereo channels to mono - mean along channel axis (axis 0)
-        let mono = mean(squeezed, axis: 0)
-        print("DEBUG separateChunk: mono shape=\(mono.shape)")
+        let sourceOutput = output[0, stem.sourceIndex]   // (channel, time)
+        let mono = mean(sourceOutput, axis: 0)           // (time)
+        eval(mono)
         
         return AudioBuffer(samples: mono.asArray(Float.self), sampleRate: sampleRate, channels: 1)
     }
