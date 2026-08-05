@@ -108,10 +108,4 @@ public actor FluidAudioDiarizationProvider: DiarizationProvider {
         return try await diarize(audio)
     }
     
-    // MARK: - AudioProcessor Conformance
-    
-    /// Process audio (passthrough - diarization doesn't modify audio)
-    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
-        return input
-    }
 }

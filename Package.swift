@@ -382,6 +382,11 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Tests/AudioToolFluidAudioTests",
+            // Declared so SwiftPM emits a resource bundle and Bundle.module exists.
+            // The audio itself is gitignored - see Fixtures/README.md.
+            resources: [
+                .copy("Fixtures")
+            ],
             swiftSettings: commonSwiftSettings
         ),
         // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolUSSTests
@@ -395,6 +400,11 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Tests/AudioToolUSSTests",
+            // Declared so SwiftPM emits a resource bundle and Bundle.module exists.
+            // The audio itself is gitignored - see Fixtures/README.md.
+            resources: [
+                .copy("Fixtures")
+            ],
             swiftSettings: commonSwiftSettings
         ),
         // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolMLXTranslationTests

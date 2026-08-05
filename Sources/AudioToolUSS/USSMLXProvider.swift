@@ -213,19 +213,6 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         }
     }
     
-    // MARK: - AudioProcessor Conformance
-    
-    /// Process audio - separate target sound type using current embedding
-    /// - Parameter input: Input audio buffer at 32kHz
-    /// - Returns: Separated audio buffer
-    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
-        guard let inference = inference, let conditioning = conditioning else {
-            throw AudioToolError.modelNotLoaded("USS MLX")
-        }
-        
-        return try separateWithConditioning(input, conditioning: conditioning, inference: inference)
-    }
-    
     /// Process audio with specific embedding type (one-off, doesn't change stored state).
     /// 
     /// **This is the recommended approach for multi-type separation.**
@@ -337,11 +324,6 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     }
     
     // MARK: - Separation API
-    
-    /// Separate target sound from audio (alias for process)
-    public func separate(_ audio: AudioBuffer) async throws -> AudioBuffer {
-        return try await process(audio)
-    }
     
     /// Separate specific sound type from audio (alias for process with type)
     public func separate(_ audio: AudioBuffer, type: EmbeddingLoader.EmbeddingType) async throws -> AudioBuffer {

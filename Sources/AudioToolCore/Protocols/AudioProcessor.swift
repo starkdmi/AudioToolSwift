@@ -9,17 +9,36 @@ import Foundation
 
 // MARK: - Base Protocol
 
-/// Base protocol for all audio processors
+/// Format contract shared by everything that consumes audio.
+///
+/// This describes only what a processor expects and produces. It deliberately does
+/// **not** require a `process` method: most audio models are not one-buffer-in,
+/// one-buffer-out. A separator returns N tracks, a transcriber returns text, a
+/// classifier returns labels. Forcing them all through a single `AudioBuffer ->
+/// AudioBuffer` signature meant those types had to invent a return value, and the
+/// values they invented silently discarded results - a separator returning only its
+/// first speaker, a music separator returning only vocals.
+///
+/// Conform to ``AudioTransform`` instead when a type genuinely is 1-to-1.
 public protocol AudioProcessor: Sendable {
     /// Preferred sample rate (Hz)
     var sampleRate: Int { get }
-    
+
     /// Expected input channels
     var inputChannels: Int { get }
-    
+
     /// Output channels produced
     var outputChannels: Int { get }
-    
+}
+
+// MARK: - Audio Transform
+
+/// A processor that genuinely maps one audio buffer to one audio buffer.
+///
+/// Enhancement, denoising and super-resolution belong here. Anything whose natural
+/// output is a list, a transcript, or a set of labels should conform to
+/// ``AudioProcessor`` and expose its own honestly-typed method instead.
+public protocol AudioTransform: AudioProcessor {
     /// Process audio buffer
     func process(_ input: AudioBuffer) async throws -> AudioBuffer
 }
@@ -27,7 +46,7 @@ public protocol AudioProcessor: Sendable {
 // MARK: - Streamable Processor
 
 /// Processor supporting streaming/chunked processing
-public protocol StreamableProcessor: AudioProcessor {
+public protocol StreamableProcessor: AudioTransform {
     /// Minimum chunk size for streaming (samples)
     var minChunkSize: Int { get }
     
@@ -59,7 +78,7 @@ public protocol ChunkedProgressProvider: Sendable {
 /// Protocol for processors that can stream output chunks during processing.
 /// This allows yielding processed audio chunks as they become ready,
 /// rather than waiting for complete processing.
-public protocol StreamableOutput: AudioProcessor {
+public protocol StreamableOutput: AudioTransform {
     /// Process audio and stream output chunks as they're ready.
     /// Each yielded chunk represents a portion of the processed audio.
     /// Consumers can play/save chunks immediately for lower latency.
@@ -71,10 +90,28 @@ public protocol StreamableOutput: AudioProcessor {
 // MARK: - Specialized Protocols
 
 /// Voice Activity Detection
-public protocol VADProvider: StreamableProcessor {
+///
+/// Refines ``AudioProcessor`` rather than ``StreamableProcessor``: VAD reports where
+/// speech is, it does not alter audio. Inheriting the transform protocol forced two
+/// meaningless members on every conformer - a `process` that returned its input and
+/// a `stream` that yielded its input back unchanged - which is the same defect that
+/// splitting ``AudioTransform`` out of ``AudioProcessor`` exists to remove. The real
+/// streaming entry point is ``streamDetection(_:)``.
+public protocol VADProvider: AudioProcessor {
+    /// Minimum chunk size the detector accepts (samples).
+    /// Silero requires exactly 512-sample frames at 16 kHz, so this is a hard
+    /// constraint on callers rather than a performance hint.
+    var minChunkSize: Int { get }
+
+    /// Recommended chunk size for optimal performance
+    var recommendedChunkSize: Int { get }
+
+    /// Reset internal state between streams
+    func reset() async
+
     /// Detect speech segments in audio
     func detect(_ audio: AudioBuffer) async throws -> [VADSegment]
-    
+
     /// Detect speech segments with progress reporting
     /// - Parameters:
     ///   - audio: Input audio buffer
@@ -160,7 +197,7 @@ public extension SpeakerIdentifier {
 
 /// Speech Enhancement (denoising, cleanup)
 public protocol SpeechEnhancer: StreamableProcessor {
-    // Inherits process() from AudioProcessor
+    // Inherits process() from AudioTransform: enhancement is genuinely 1-to-1.
 }
 
 /// Speech Separation (multi-speaker)
@@ -192,7 +229,7 @@ public extension SpeechSeparator {
 }
 
 /// Audio Super-Resolution (upscaling)
-public protocol AudioUpscaler: AudioProcessor {
+public protocol AudioUpscaler: AudioTransform {
     /// Input sample rate
     var inputSampleRate: Int { get }
     

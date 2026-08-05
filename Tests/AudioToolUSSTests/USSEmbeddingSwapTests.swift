@@ -231,7 +231,7 @@ final class USSEmbeddingSwapTests: XCTestCase {
         // Process should throw after unload
         let chunk = try loadTestChunk()
         do {
-            _ = try await uss.process(chunk)
+            _ = try await uss.process(chunk, type: .speech)
             XCTFail("process() should throw after unload")
         } catch let error as AudioToolError {
             print("Expected error: \(error.localizedDescription)")
@@ -251,7 +251,7 @@ final class USSEmbeddingSwapTests: XCTestCase {
         // First load
         try await uss.load()
         let chunk = try loadTestChunk()
-        let output1 = try await uss.process(chunk)
+        let output1 = try await uss.process(chunk, type: .speech)
         print("First load: output max = \(String(format: "%.4f", output1.samples.max() ?? 0))")
         
         // Unload
@@ -265,7 +265,7 @@ final class USSEmbeddingSwapTests: XCTestCase {
         XCTAssertTrue(isLoaded)
         
         // Process again
-        let output2 = try await uss.process(chunk)
+        let output2 = try await uss.process(chunk, type: .speech)
         print("After reload: output max = \(String(format: "%.4f", output2.samples.max() ?? 0))")
         
         // Just verify we got output (amplitude depends on test audio content)

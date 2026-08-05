@@ -269,9 +269,6 @@ public actor AppleSpeechTranscriber: Transcriber {
     
     // MARK: - AudioProcessor Conformance
     
-    public func process(_ input: AudioToolCore.AudioBuffer) async throws -> AudioToolCore.AudioBuffer {
-        return input
-    }
     
     // MARK: - Progress-Aware Transcription
     
@@ -447,9 +444,6 @@ public actor AppleSpeechTranscriber: Transcriber {
         }
     }
     
-    public func process(_ input: AudioToolCore.AudioBuffer) async throws -> AudioToolCore.AudioBuffer {
-        return input
-    }
 }
 
 #endif // compiler(>=6.2)

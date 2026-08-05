@@ -167,13 +167,6 @@ public actor FluidAudioTranscriber: Transcriber {
         }
     }
     
-    // MARK: - AudioProcessor Conformance
-    
-    /// Process audio (passthrough - transcription doesn't modify audio)
-    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
-        return input
-    }
-    
     // MARK: - Progress-Aware Transcription
     
     /// Transcribe with progress reporting and word-level timing

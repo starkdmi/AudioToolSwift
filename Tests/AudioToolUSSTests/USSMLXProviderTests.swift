@@ -48,7 +48,7 @@ final class USSMLXProviderTests: XCTestCase {
         let startProcess = Date()
         
         let inputBuffer = AudioBuffer(samples: samples, sampleRate: 32000)
-        let outputBuffer = try await uss.process(inputBuffer)
+        let outputBuffer = try await uss.process(inputBuffer, type: .speech)
         
         let processTime = Date().timeIntervalSince(startProcess)
         let rtf = duration / processTime

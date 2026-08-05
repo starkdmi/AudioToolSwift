@@ -203,11 +203,6 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         return normalized
     }
     
-    /// AudioProcessor conformance - returns first separated track
-    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
-        let separated = try await separate(input, speakers: modelType.numSpeakers)
-        return separated.first ?? input
-    }
     
     /// Process with chunking using MLXOverlap
     /// Uses triangular weighted overlap-add for each speaker independently
@@ -515,8 +510,4 @@ public actor DemucsProvider: SpeechSeparator {
         ].compactMap { $0 }
     }
     
-    /// AudioProcessor conformance - returns vocals track
-    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
-        return try await separate(input, source: .vocals)
-    }
 }

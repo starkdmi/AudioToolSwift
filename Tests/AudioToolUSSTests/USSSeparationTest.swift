@@ -45,7 +45,7 @@ final class USSSeparationTest: XCTestCase {
         try await speechProvider.load()
         
         let startSpeech = Date()
-        let speechOutput = try await speechProvider.process(inputBuffer)
+        let speechOutput = try await speechProvider.process(inputBuffer, type: .speech)
         let speechTime = Date().timeIntervalSince(startSpeech)
         let speechRTF = duration / speechTime
         
@@ -59,7 +59,7 @@ final class USSSeparationTest: XCTestCase {
         try await musicProvider.load()  // Will reuse cached model but different embedding
         
         let startMusic = Date()
-        let musicOutput = try await musicProvider.process(inputBuffer)
+        let musicOutput = try await musicProvider.process(inputBuffer, type: .music)
         let musicTime = Date().timeIntervalSince(startMusic)
         let musicRTF = duration / musicTime
         

@@ -177,31 +177,10 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
         }
     }
     
-    // MARK: - StreamableProcessor Conformance
-    
-    /// Stream processing (passthrough with VAD overlay)
-    public nonisolated func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
-        // For VAD, we just pass through the audio (VAD is metadata, not audio modification)
-        AsyncThrowingStream { continuation in
-            Task {
-                for await chunk in input {
-                    continuation.yield(chunk)
-                }
-                continuation.finish()
-            }
-        }
-    }
+    // MARK: - Lifecycle
     
     /// Reset streaming state
     public func reset() async {
         // State is managed per-stream, no global reset needed
-    }
-    
-    // MARK: - AudioProcessor Conformance
-    
-    /// Process audio (passthrough - VAD doesn't modify audio)
-    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
-        // VAD is detection only, return input unchanged
-        return input
     }
 }

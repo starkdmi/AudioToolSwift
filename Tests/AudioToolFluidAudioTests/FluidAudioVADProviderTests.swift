@@ -96,23 +96,6 @@ final class FluidAudioVADProviderTests: XCTestCase {
         XCTAssertGreaterThan(totalSpeech, 0.5, "Should detect at least 0.5s of speech")
     }
     
-    // MARK: - Process Tests (Passthrough)
-    
-    func testProcessPassthrough() async throws {
-        // VAD process should pass audio through unchanged
-        let input = AudioBuffer(
-            samples: [1.0, 0.5, -0.5, -1.0],
-            sampleRate: 16000,
-            channels: 1
-        )
-        
-        let output = try await provider.process(input)
-        
-        XCTAssertEqual(output.samples, input.samples, "Process should passthrough audio unchanged")
-        XCTAssertEqual(output.sampleRate, input.sampleRate)
-        XCTAssertEqual(output.channels, input.channels)
-    }
-    
     // MARK: - Performance Tests
     
     func testDetectionPerformance() async throws {

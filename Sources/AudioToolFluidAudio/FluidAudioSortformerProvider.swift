@@ -286,13 +286,6 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         }
     }
     
-    // MARK: - AudioProcessor Conformance
-    
-    /// Process audio (passthrough - diarization doesn't modify audio)
-    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
-        return input
-    }
-    
     // MARK: - Streaming Support
     
     /// Process audio samples for streaming diarization
