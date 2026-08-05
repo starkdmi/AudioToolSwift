@@ -114,3 +114,62 @@ struct SoundEmbeddingTests {
         #expect(SoundEmbedding.speech != SoundEmbedding.music)
     }
 }
+
+// MARK: - AudioSet ontology
+
+@Suite("AudioSet class table")
+struct AudioSetClassTableTests {
+
+    @Test("Table covers all 527 classes")
+    func tableIsComplete() {
+        #expect(SoundEmbedding.audioSetClassNames.count == SoundEmbedding.dimension)
+        #expect(SoundEmbedding.audioSetClassIDs.count == SoundEmbedding.dimension)
+    }
+
+    /// Index 0 being "Speech" is the anchor the presets rely on: the speech preset is
+    /// classes 0-39, so if the table were offset or reordered the presets would be
+    /// describing the wrong sounds.
+    @Test("Known indices match the published ontology")
+    func knownIndices() {
+        #expect(SoundEmbedding.audioSetClassName(0) == "Speech")
+        #expect(SoundEmbedding.audioSetClassIDs[0] == "/m/09x0r")
+        #expect(SoundEmbedding.audioSetClassName(137) == "Music")
+        #expect(SoundEmbedding.audioSetClassIDs[137] == "/m/04rlf")
+        #expect(SoundEmbedding.audioSetClassName(526) != nil)
+        #expect(SoundEmbedding.audioSetClassName(527) == nil)
+        #expect(SoundEmbedding.audioSetClassName(-1) == nil)
+    }
+
+    /// Cross-check against the presets: the speech preset should be exactly the
+    /// classes the ontology groups under speech, starting at index 0.
+    @Test("Presets line up with the class table")
+    func presetsAlignWithTable() {
+        #expect(SoundEmbedding.speech.activeClasses.first == 0)
+        #expect(SoundEmbedding.speech.activeClassNames.first == "Speech")
+        #expect(SoundEmbedding.music.activeClasses.first == 137)
+        #expect(SoundEmbedding.music.activeClassNames.first == "Music")
+        #expect(SoundEmbedding.speech.activeClassNames.count == 40)
+    }
+
+    @Test("Embeddings can be built from names")
+    func buildFromNames() throws {
+        let byName = try SoundEmbedding(audioSetClassNames: ["Speech", "Music"], label: "both")
+        let byIndex = try SoundEmbedding(audioSetClasses: [0, 137], label: "both")
+        #expect(byName.weights == byIndex.weights)
+        #expect(byName.activeClassNames == ["Speech", "Music"])
+    }
+
+    @Test("Unknown names are rejected, not silently dropped")
+    func unknownNameThrows() {
+        #expect(throws: AudioToolError.self) {
+            _ = try SoundEmbedding(audioSetClassNames: ["Speech", "Not A Real Class"])
+        }
+    }
+
+    @Test("Name lookup is case-insensitive")
+    func lookupIsCaseInsensitive() {
+        #expect(SoundEmbedding.audioSetClassIndex(named: "speech") == 0)
+        #expect(SoundEmbedding.audioSetClassIndex(named: "SPEECH") == 0)
+        #expect(SoundEmbedding.audioSetClassIndex(named: "nope") == nil)
+    }
+}
