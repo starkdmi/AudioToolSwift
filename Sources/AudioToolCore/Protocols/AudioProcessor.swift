@@ -21,7 +21,13 @@ import Foundation
 ///
 /// Conform to ``AudioTransform`` instead when a type genuinely is 1-to-1.
 public protocol AudioProcessor: Sendable {
-    /// Preferred sample rate (Hz)
+    /// Sample rate this processor consumes, in Hz.
+    ///
+    /// This is a requirement, not a hint. A provider is exact about its rate and
+    /// throws ``AudioToolError/sampleRateMismatch(expected:found:)`` on anything else;
+    /// adapting audio is the caller's job, so that a chain of operations can convert
+    /// once rather than once per step. Processors whose output rate differs from their
+    /// input rate declare it separately - see ``AudioUpscaler/outputSampleRate``.
     var sampleRate: Int { get }
 
     /// Expected input channels

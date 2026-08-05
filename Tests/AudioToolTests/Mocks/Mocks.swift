@@ -116,11 +116,22 @@ public final class MockEnhancer: SpeechEnhancer, @unchecked Sendable {
     public var processDelay: Duration = .milliseconds(10)
     public var scaleFactor: Float = 0.99
     public var processCallCount = 0
+
+    /// Rate of every buffer handed to `process`, in order. Lets tests assert how many
+    /// conversions a chain actually performed rather than inferring it.
+    public var receivedSampleRates: [Int] = []
+
+    /// Enforce the provider contract, as a real provider does.
+    public var enforcesSampleRate = true
     
     public init() {}
     
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
         processCallCount += 1
+        receivedSampleRates.append(input.sampleRate)
+        if enforcesSampleRate {
+            try validateSampleRate(input)
+        }
         try await Task.sleep(for: processDelay)
         return AudioBuffer(
             samples: input.samples.map { $0 * scaleFactor },
@@ -239,11 +250,21 @@ public final class MockUpscaler: AudioUpscaler, @unchecked Sendable {
     
     public var processDelay: Duration = .milliseconds(10)
     public var processCallCount = 0
+
+    /// Rate of every buffer handed to `process`, in order.
+    public var receivedSampleRates: [Int] = []
+
+    /// Exact samples of the last buffer received. Lets a test detect whether audio
+    /// was round-tripped through another rate before arriving.
+    public var lastReceivedSamples: [Float] = []
     
     public init() {}
     
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
         processCallCount += 1
+        receivedSampleRates.append(input.sampleRate)
+        lastReceivedSamples = input.samples
+        try validateSampleRate(input)
         try await Task.sleep(for: processDelay)
         
         // Simple upsampling by tripling samples

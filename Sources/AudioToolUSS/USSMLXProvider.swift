@@ -226,6 +226,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         guard let inference = inference else {
             throw AudioToolError.modelNotLoaded("USS MLX")
         }
+        try validateSampleRate(input)
         
         guard let cachedConditioning = embeddingCache[type] else {
             throw AudioToolError.modelNotFound("USS embedding for \(type.rawValue) not in cache")
@@ -434,6 +435,7 @@ extension USSMLXProvider: UniversalSoundSeparator {
         guard let inference = inference else {
             throw AudioToolError.modelNotLoaded("USS MLX")
         }
+        try validateSampleRate(audio)
         return try separateWithConditioning(
             audio,
             conditioning: conditioningTensor(for: target),
@@ -467,6 +469,7 @@ extension USSMLXProvider: UniversalSoundSeparator {
         guard let inference = inference else {
             throw AudioToolError.modelNotLoaded("USS MLX")
         }
+        try validateSampleRate(audio)
         let result = try separateWithBackgroundInternal(
             audio,
             conditioning: conditioningTensor(for: target),

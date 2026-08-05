@@ -29,8 +29,14 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     public nonisolated var inputSampleRate: Int { 16000 }
     public nonisolated var outputSampleRate: Int { 48000 }
     
-    // AudioProcessor conformance
-    public nonisolated var sampleRate: Int { 48000 }
+    // AudioProcessor conformance.
+    //
+    // sampleRate is the rate this provider *consumes*, so it is 16 kHz - the same as
+    // inputSampleRate. It used to report 48000, which made the facade upsample input
+    // to 48 kHz before handing it over, only for the provider to be asked to
+    // reconstruct detail that upsampling cannot restore. Feeding a super-resolution
+    // model its own output rate is self-defeating; it wants the real 16 kHz signal.
+    public nonisolated var sampleRate: Int { inputSampleRate }
     public nonisolated let inputChannels: Int = 1
     public nonisolated let outputChannels: Int = 1
     
@@ -112,7 +118,12 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
             throw AudioToolError.modelNotLoaded("MossFormer2_SR_48K")
         }
         
-        // Resample input to 48kHz first
+        try validateSampleRate(input)
+        
+        // Interpolate up to the output rate. This is not a format conversion the
+        // caller could have done instead - the model operates at 48 kHz and
+        // reconstructs the band that 16 kHz input cannot carry, so the upsample is
+        // the first step of inference rather than plumbing.
         let audio48k = try await resampleTo48k(input)
         
         let durationSeconds = Float(audio48k.count) / Float(outputSampleRate)

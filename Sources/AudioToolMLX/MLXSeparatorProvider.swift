@@ -157,9 +157,10 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         _ audio: AudioBuffer,
         onProgress: ProgressCallback?
     ) async throws -> [AudioBuffer] {
+        try validateSampleRate(audio)
         await onProgress?(0.0)
         
-        let durationSeconds = Float(audio.samples.count) / Float(sampleRate)
+        let durationSeconds = Float(audio.samples.count) / Float(audio.sampleRate)
         
         // Use chunking for longer audio
         var results: [AudioBuffer]
@@ -352,7 +353,8 @@ public actor DemucsProvider: MusicSeparator {
     
     /// Separate a specific source from the audio
     public func separate(_ input: AudioBuffer, stem: Stem) async throws -> AudioBuffer {
-        let durationSeconds = Float(input.samples.count) / Float(sampleRate)
+        try validateSampleRate(input)
+        let durationSeconds = Float(input.samples.count) / Float(input.sampleRate)
         
         // Use chunking for longer audio
         if durationSeconds > maxDirectDuration {

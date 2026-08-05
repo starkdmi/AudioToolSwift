@@ -70,6 +70,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         guard let model = model else {
             throw AudioToolError.modelNotLoaded("MossFormerGAN_CoreML")
         }
+        try validateSampleRate(input)
         
         // Process in segments for long audio
         if input.samples.count <= segmentSamples {

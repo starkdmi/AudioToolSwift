@@ -296,37 +296,48 @@ public actor AudioEngine {
     // MARK: - Enhancement
     
     /// Enhance full audio
+    ///
+    /// - Parameters:
+    ///   - audio: Input audio, at any rate
+    ///   - model: Enhancement model to use
+    ///   - preservingSampleRate: Return audio at the input's rate. On by default so a
+    ///     single call is lossless in format terms. Pass `false` when composing
+    ///     operations by hand, so the result can go straight into the next model
+    ///     without a pointless round trip - a 16 kHz enhancer's output upsampled back
+    ///     to 48 kHz and then downsampled again by the next stage is strictly worse
+    ///     than leaving it at 16 kHz.
     public func enhance(
         _ audio: AudioToolCore.AudioBuffer,
-        model: EnhancementModel = .mossformerSE16k
+        model: EnhancementModel = .mossformerSE16k,
+        preservingSampleRate: Bool = true
     ) async throws -> AudioToolCore.AudioBuffer {
         guard let enhancer = enhancerProviders[model] else {
             throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
-        // Resample to model's expected sample rate if needed
-        let input = try audio.resampled(to: model.sampleRate)
+        // Adapt to the provider's rate - it validates rather than resampling.
+        let input = try audio.resampled(to: enhancer.sampleRate)
         let output = try await enhancer.process(input)
         
-        // Resample back to original rate if different
-        if audio.sampleRate != model.sampleRate {
-            return try output.resampled(to: audio.sampleRate)
+        guard preservingSampleRate, output.sampleRate != audio.sampleRate else {
+            return output
         }
-        return output
+        return try output.resampled(to: audio.sampleRate)
     }
     
     /// Enhance only speech segments (VAD-gated)
     public func enhance(
         _ audio: AudioToolCore.AudioBuffer,
         segments: [VADSegment],
-        model: EnhancementModel = .mossformerSE16k
+        model: EnhancementModel = .mossformerSE16k,
+        preservingSampleRate: Bool = true
     ) async throws -> AudioToolCore.AudioBuffer {
         guard let enhancer = enhancerProviders[model] else {
             throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
-        // Resample full audio to model's expected sample rate
-        let resampledAudio = try audio.resampled(to: model.sampleRate)
+        // Adapt to the provider's rate - it validates rather than resampling.
+        let resampledAudio = try audio.resampled(to: enhancer.sampleRate)
         
         var result = resampledAudio
         let speechSegments = segments.filter(\.isSpeech)
@@ -340,11 +351,10 @@ public actor AudioEngine {
             result = result.replacing(scaledStart..<scaledEnd, with: enhanced)
         }
         
-        // Resample back to original rate if different
-        if audio.sampleRate != model.sampleRate {
-            return try result.resampled(to: audio.sampleRate)
+        guard preservingSampleRate, result.sampleRate != audio.sampleRate else {
+            return result
         }
-        return result
+        return try result.resampled(to: audio.sampleRate)
     }
     
     // MARK: - Separation
@@ -375,9 +385,11 @@ public actor AudioEngine {
     /// disagree with it.
     public func separate(
         _ audio: AudioToolCore.AudioBuffer,
-        model: SeparationModel = .mossformer2spk
+        model: SeparationModel = .mossformer2spk,
+        preservingSampleRate: Bool = true
     ) async throws -> [AudioToolCore.AudioBuffer] {
-        try await separate(audio, model: model, onProgress: nil)
+        try await separate(audio, model: model,
+                           preservingSampleRate: preservingSampleRate, onProgress: nil)
     }
     
     /// Separate speakers with progress reporting
@@ -389,23 +401,23 @@ public actor AudioEngine {
     public func separate(
         _ audio: AudioToolCore.AudioBuffer,
         model: SeparationModel = .mossformer2spk,
+        preservingSampleRate: Bool = true,
         onProgress: ProgressCallback?
     ) async throws -> [AudioToolCore.AudioBuffer] {
         guard let separator = separatorProviders[model] else {
             throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
-        // Resample to model's expected sample rate if needed
-        let input = try audio.resampled(to: model.sampleRate)
+        // Adapt to the provider's rate - it validates rather than resampling.
+        let input = try audio.resampled(to: separator.sampleRate)
         
         // Use progress-aware separation
         let outputs = try await separator.separate(input, onProgress: onProgress)
         
-        // Resample all outputs back to original rate if different
-        if audio.sampleRate != model.sampleRate {
-            return try outputs.map { try $0.resampled(to: audio.sampleRate) }
+        guard preservingSampleRate, separator.sampleRate != audio.sampleRate else {
+            return outputs
         }
-        return outputs
+        return try outputs.map { try $0.resampled(to: audio.sampleRate) }
     }
     
     // MARK: - Speaker Separation with Re-identification (NOT YET WORKING)
@@ -607,8 +619,10 @@ public actor AudioEngine {
             throw AudioToolError.modelNotLoaded("Upscaler")
         }
         
-        // Upscaler expects 16kHz input, outputs 48kHz
-        let input = try audio.resampled(to: 16000)
+        // Adapt to the upscaler's input rate. There is deliberately no
+        // preservingSampleRate here: changing the rate is the entire operation, so
+        // the result always comes back at the upscaler's output rate.
+        let input = try audio.resampled(to: upscaler.sampleRate)
         return try await upscaler.process(input)
     }
     
@@ -1002,9 +1016,21 @@ public actor AudioEngine {
     // MARK: - Pipeline Execution
     
     /// Execute pipeline (internal)
+    /// Run a pipeline.
+    ///
+    /// Audio is carried between stages at whatever rate the previous stage produced,
+    /// and converted only when the next stage needs a different one. Stages used to
+    /// resample to their model's rate and then back again, so a chain compounded
+    /// conversions: enhance at 16 kHz followed by upscale, on 48 kHz input, ran
+    /// 48 -> 16 -> 48 -> 16 -> 48. The two middle conversions cancelled out on paper
+    /// and destroyed signal in practice.
+    ///
+    /// - Parameter outputSampleRate: Rate for the returned audio. Defaults to the
+    ///   input's rate, so callers who do not care see no change.
     internal func executePipeline(
         _ pipeline: PipelineBuilder,
         audio: AudioToolCore.AudioBuffer,
+        outputSampleRate: Int? = nil,
         eventHandler: (@Sendable (PipelineEvent) async -> Void)? = nil
     ) async throws -> PipelineResult {
         let startTime = ContinuousClock.now
@@ -1017,6 +1043,13 @@ public actor AudioEngine {
         )
         
         var result = PipelineResult(metrics: metrics)
+
+        // Where the audio should end up. Defaults to the caller's rate so a pipeline
+        // is format-neutral, but a stage whose whole purpose is to change the rate -
+        // upscaling - raises it, because converting that back down would discard
+        // exactly what the stage was asked to produce. An explicit outputSampleRate
+        // always wins.
+        var targetOutputRate = outputSampleRate ?? audio.sampleRate
         
         for stage in pipeline.stages {
             try Task.checkCancellation()
@@ -1152,11 +1185,8 @@ public actor AudioEngine {
                             )
                             resultBuffer = resultBuffer.replacing(segment.timeRange.start..<segment.timeRange.end, with: processedSegment)
                         }
-                        if context.currentAudio.sampleRate != model.sampleRate {
-                            enhanced = try resultBuffer.resampled(to: context.currentAudio.sampleRate)
-                        } else {
-                            enhanced = resultBuffer
-                        }
+                        // Stays at the model's rate; converted once on the way out.
+                        enhanced = resultBuffer
                     } else {
                         let totalSamples = resampledAudio.samples.count
                         var processedSamples = 0
@@ -1173,17 +1203,16 @@ public actor AudioEngine {
                             sampleRate: resampledAudio.sampleRate,
                             channels: resampledAudio.channels
                         )
-                        if context.currentAudio.sampleRate != model.sampleRate {
-                            enhanced = try streamed.resampled(to: context.currentAudio.sampleRate)
-                        } else {
-                            enhanced = streamed
-                        }
+                        // Stays at the model's rate; converted once on the way out.
+                        enhanced = streamed
                     }
                 } else {
                     if !speechSegments.isEmpty {
-                        enhanced = try await enhance(context.currentAudio, segments: speechSegments, model: model)
+                        enhanced = try await enhance(context.currentAudio, segments: speechSegments,
+                                                     model: model, preservingSampleRate: false)
                     } else {
-                        enhanced = try await enhance(context.currentAudio, model: model)
+                        enhanced = try await enhance(context.currentAudio, model: model,
+                                                     preservingSampleRate: false)
                     }
                 }
                 await eventHandler?(.progress(stage: stageName, percent: 100))
@@ -1407,6 +1436,10 @@ public actor AudioEngine {
                     upscaled = try await upscale(context.currentAudio)
                 }
                 
+                if outputSampleRate == nil {
+                    targetOutputRate = upscaled.sampleRate
+                }
+                
                 context = PipelineContext(
                     analysis: context.analysis,
                     currentAudio: upscaled,
@@ -1621,6 +1654,22 @@ public actor AudioEngine {
             metrics.stageDurations[stage.name] = stageDuration
             await pipeline.onStageCompleteHandler?(stage.name, stageDuration)
             await eventHandler?(.stageComplete(stage: stage.name, duration: stageDuration))
+        }
+        
+        // The single conversion at the edge. Everything above ran at whatever rate
+        // each model wanted; this is where the caller's expectation is honoured.
+        let targetRate = targetOutputRate
+        if let produced = result.audio, produced.sampleRate != targetRate {
+            result = PipelineResult(
+                audio: try produced.resampled(to: targetRate),
+                separatedTracks: try result.separatedTracks?.map { try $0.resampled(to: targetRate) },
+                ussSeparated: result.ussSeparated,
+                transcription: result.transcription,
+                diarizedTranscription: result.diarizedTranscription,
+                classifications: result.classifications,
+                analysis: result.analysis,
+                metrics: result.metrics
+            )
         }
         
         metrics.totalDuration = ContinuousClock.now - startTime

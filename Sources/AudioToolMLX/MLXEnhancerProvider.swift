@@ -104,7 +104,8 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
             throw AudioToolError.modelNotLoaded("MossFormer2SE48K")
         }
         
-        let durationSeconds = Float(input.samples.count) / Float(sampleRate)
+        try validateSampleRate(input)
+        let durationSeconds = Float(input.samples.count) / Float(input.sampleRate)
         
         // Use chunking for longer audio
         if durationSeconds > maxDirectDuration {
@@ -385,6 +386,7 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
         guard let model = model else {
             throw AudioToolError.modelNotLoaded("FRCRN_SE_16K")
         }
+        try validateSampleRate(input)
         
         // Always use chunking for consistent quality
         return try await processWithChunking(input, model: model)
