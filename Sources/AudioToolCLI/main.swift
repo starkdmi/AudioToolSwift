@@ -12,7 +12,6 @@ import Foundation
 import AudioTool
 import AudioToolCore
 import AudioToolMLX
-import AudioToolFluidAudio
 #if canImport(AudioToolSpeech)
 import AudioToolSpeech
 #endif

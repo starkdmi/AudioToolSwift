@@ -1446,7 +1446,10 @@ public actor AudioEngine {
                     originalAudio: context.originalAudio
                 )
                 result = PipelineResult(
-                    audio: result.audio,
+                    // Must be `upscaled`, not `result.audio`. Carrying the previous
+                    // stage's buffer forward ran the upscaler and threw its output
+                    // away, returning the enhancer's audio merely resampled up.
+                    audio: upscaled,
                     separatedTracks: result.separatedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,

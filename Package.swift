@@ -433,8 +433,12 @@ let package = Package(
             name: "AudioToolCLI",
             dependencies: [
                 "AudioToolMLX",
-                "AudioToolTTS",
-                "AudioToolFluidAudio",  // For voice matching
+                // Deliberately NOT AudioToolTTS or AudioToolFluidAudio. Neither is
+                // used since the scratch subcommands were removed, and AudioToolTTS
+                // drags in MisakiSwift, which builds as a dynamic library. Under
+                // xcodebuild that produced an executable which linked but could not
+                // launch - MLX.framework was not on its rpath - and supplying the
+                // framework paths by hand then produced duplicate MLXNN classes.
                 "AudioToolSpeech", // Required for linking even with conditional import
                 "AudioToolCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),

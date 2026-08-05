@@ -102,18 +102,49 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     
     // MARK: - Model Lifecycle
     
-    /// Load USS model and cache all embeddings from USSMLXSwift bundle
+    /// HuggingFace repository holding the ResUNet30 weights
+    public static let repo = "starkdmi/USS_MLX"
+
+    /// Locate the ResUNet30 weights, downloading them if necessary.
+    ///
+    /// These used to be ~106 MB of SPM bundle resources. They are fetched at runtime
+    /// now, like every other model's weights, so a clone stays small. The bundle is
+    /// still checked first so an app that vendors them keeps working.
+    private func resolveWeightsPath() async throws -> String {
+        let filename = useFp16 ? "resunet30_fp16.safetensors" : "resunet30_fp32.safetensors"
+
+        if let bundled = USSBundle.weightsURL(fp16: useFp16) {
+            return bundled.path
+        }
+
+        if let cached = ModelDownloader.shared.localPath(for: Self.repo) {
+            let path = cached.appendingPathComponent(filename).path
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+
+        let directory = try await ModelDownloader.shared.downloadAndGetPath(
+            repo: Self.repo,
+            matching: [filename]
+        )
+        let path = directory.appendingPathComponent(filename).path
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw AudioToolError.modelNotFound(
+                "USS ResUNet30 weights (\(useFp16 ? "fp16" : "fp32")) not found in \(Self.repo)")
+        }
+        return path
+    }
+
+    /// Load USS model and cache all embeddings
     public func load() async throws {
         // Initialize model
         let model = ResUNet30()
         
-        // Get model weights path from USSMLXSwift bundle using public accessor
-        guard let weightsURL = USSBundle.weightsURL(fp16: useFp16) else {
-            throw AudioToolError.modelNotFound("USS ResUNet30 weights (\(useFp16 ? "fp16" : "fp32"))")
-        }
+        let weightsPath = try await resolveWeightsPath()
         
         // Load weights
-        try WeightLoader.loadWeights(model: model, from: weightsURL.path)
+        try WeightLoader.loadWeights(model: model, from: weightsPath)
         
         // Load and cache ALL embeddings upfront (~14KB total for 7 types)
         guard let embeddingsDir = USSBundle.embeddingsDirectory else {
@@ -423,11 +454,11 @@ extension USSMLXProvider: UniversalSoundSeparator {
     /// cache because they are the common case and were already loaded at `load()`;
     /// custom targets are built on the spot.
     private func conditioningTensor(for target: SoundEmbedding) -> MLXArray {
-        if let label = target.label,
-           let cached = EmbeddingLoader.EmbeddingType(rawValue: label).flatMap({ embeddingCache[$0] }) {
-            return cached
-        }
-        return MLXArray(target.weights).reshaped([1, SoundEmbedding.dimension])
+        // Built from the weights, always. An earlier version keyed the preset cache
+        // off `target.label`, which is free-form public metadata - so a custom vector
+        // labelled "speech" silently separated using the bundled speech conditioning
+        // and ignored every weight the caller supplied.
+        MLXArray(target.weights).reshaped([1, SoundEmbedding.dimension])
     }
 
     /// Separate a target sound from audio.

@@ -268,6 +268,10 @@ extension MossFormer2SR48KProvider: StreamableOutput {
         guard let model = model else {
             throw AudioToolError.modelNotLoaded("MossFormer2_SR_48K")
         }
+        // Same contract as the batch path. Without this, enabling progress reporting
+        // switched the pipeline to streaming and quietly changed the result: 48 kHz
+        // input went straight through 48 -> 48 instead of being super-resolved from 16.
+        try validateSampleRate(input)
         
         // Resample to 48kHz first
         let samples = try await resampleTo48k(input)

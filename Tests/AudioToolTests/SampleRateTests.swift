@@ -193,6 +193,16 @@ struct ChainedResamplingTests {
 
         // Upscaling raises the rate, so the pipeline returns the upscaler's rate.
         #expect(result.audio?.sampleRate == 48000)
+
+        // And returns the upscaler's actual samples. Asserting only the rate is not
+        // enough: the pipeline used to carry the previous stage's buffer forward and
+        // then resample it up, which produced a 48 kHz result that had never been
+        // through the upscaler at all. MockUpscaler triples its input, so the count
+        // is what distinguishes real output from a resampled impostor.
+        let expectedCount = upscaler.lastReceivedSamples.count * 3
+        #expect(result.audio?.samples.count == expectedCount,
+                "pipeline returned audio the upscaler never produced")
+        #expect(result.audio?.samples == upscaler.lastReceivedSamples.flatMap { [$0, $0, $0] })
     }
 
     @Test("Upscaler output rate is preserved, not forced back to the input rate")
