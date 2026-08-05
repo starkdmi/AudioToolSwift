@@ -156,5 +156,6 @@ public struct USSProviders {
     }
 }
 
-// NOTE: USSSoundType is defined in AudioToolCore.Configuration
-// Use AudioToolCore.USSSoundType in protocol methods for pipeline integration
+// NOTE: separation targets are AudioToolCore.SoundEmbedding values. The seven
+// presets (.speech, .music, ...) are starting points, not the available set - any
+// 527-d AudioSet class vector is a valid target.

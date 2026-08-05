@@ -25,7 +25,7 @@ public enum PipelineEvent: Sendable {
     case speakerSeparated(speakerIndex: Int, audio: AudioBuffer)
     
     /// USS sound type separated
-    case ussSeparated(type: USSSoundType, audio: AudioBuffer)
+    case ussSeparated(target: SoundEmbedding, audio: AudioBuffer)
     
     /// Overlap region detected during separation
     case overlapDetected(timeRange: TimeRange, speakerCount: Int)
@@ -87,7 +87,7 @@ public struct PipelineResult: Sendable {
     public let identifiedTracks: [SeparatedSpeakerTrack]?
     
     /// USS separated sound types (if separateUSS was used)
-    public let ussSeparated: [USSSoundType: AudioBuffer]?
+    public let ussSeparated: [SoundEmbedding: AudioBuffer]?
     
     /// Transcription result (if transcription was used)
     public let transcription: Transcription?
@@ -109,7 +109,7 @@ public struct PipelineResult: Sendable {
         audio: AudioBuffer? = nil,
         separatedTracks: [AudioBuffer]? = nil,
         identifiedTracks: [SeparatedSpeakerTrack]? = nil,
-        ussSeparated: [USSSoundType: AudioBuffer]? = nil,
+        ussSeparated: [SoundEmbedding: AudioBuffer]? = nil,
         transcription: Transcription? = nil,
         diarizedTranscription: DiarizedTranscription? = nil,
         classifications: [SoundClassification]? = nil,

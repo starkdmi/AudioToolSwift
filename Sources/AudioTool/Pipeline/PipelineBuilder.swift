@@ -19,7 +19,7 @@ public struct PipelineStage: Sendable {
         case enhance(EnhancementModel)
         case separate(speakers: Int, useOriginal: Bool)
         case separateOverlap(handling: OverlapHandling, useOriginal: Bool)
-        case separateUSS(types: [USSSoundType])
+        case separateUSS(targets: [SoundEmbedding])
         case upscale
         case transcribe(TranscriptionModel)
         case mergeTranscriptionWithDiarization
@@ -210,23 +210,24 @@ public struct PipelineBuilder: Sendable {
     ///     .separateUSS([.music, .animal, .nature])  // Extract music, animals, nature
     /// ```
     ///
-    /// - Parameter types: Sound types to extract (e.g., `.music`, `.animal`, `.speech`)
+    /// - Parameter targets: Sound targets to extract (e.g., `.music`, `.animal`, `.speech`,
+    ///   or a custom `SoundEmbedding` built from AudioSet class indices)
     /// - Returns: Updated pipeline builder
-    public func separateUSS(_ types: [USSSoundType]) -> PipelineBuilder {
+    public func separateUSS(_ targets: [SoundEmbedding]) -> PipelineBuilder {
         var builder = self
         builder.stages.append(PipelineStage(
-            type: .separateUSS(types: types),
+            type: .separateUSS(targets: targets),
             name: "uss"
         ))
         return builder
     }
     
-    /// Add Universal Sound Separation for a single type
+    /// Add Universal Sound Separation for a single target
     ///
-    /// - Parameter type: Sound type to extract
+    /// - Parameter target: Sound target to extract
     /// - Returns: Updated pipeline builder
-    public func separateUSS(_ type: USSSoundType) -> PipelineBuilder {
-        separateUSS([type])
+    public func separateUSS(_ target: SoundEmbedding) -> PipelineBuilder {
+        separateUSS([target])
     }
     
     /// Add upscaling

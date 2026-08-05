@@ -398,6 +398,7 @@ let package = Package(
             name: "AudioToolUSSTests",
             dependencies: [
                 "AudioToolUSS",
+                "USSMLXSwift",
                 "AudioToolCoreML",
                 "AudioToolMLX",
                 "AudioToolCore",

@@ -414,51 +414,64 @@ public extension USSMLXProvider {
 // MARK: - UniversalSoundSeparator Conformance
 
 extension USSMLXProvider: UniversalSoundSeparator {
-    
-    /// Map USSSoundType to EmbeddingLoader.EmbeddingType
-    private func embeddingType(for soundType: USSSoundType) -> EmbeddingLoader.EmbeddingType {
-        switch soundType {
-        case .speech: return .speech
-        case .music: return .music
-        case .animal: return .animal
-        case .nature: return .nature
-        case .noise: return .noise
-        case .things: return .things
-        case .human: return .human
+
+    /// Conditioning tensor for an arbitrary target.
+    ///
+    /// The model takes any 527-d vector, so this is a straight reshape rather than a
+    /// lookup - which is the whole point of `SoundEmbedding`. Presets go through the
+    /// cache because they are the common case and were already loaded at `load()`;
+    /// custom targets are built on the spot.
+    private func conditioningTensor(for target: SoundEmbedding) -> MLXArray {
+        if let label = target.label,
+           let cached = EmbeddingLoader.EmbeddingType(rawValue: label).flatMap({ embeddingCache[$0] }) {
+            return cached
         }
+        return MLXArray(target.weights).reshaped([1, SoundEmbedding.dimension])
     }
-    
-    /// Separate a specific sound type from audio using USSSoundType
-    /// This is the primary API for pipeline integration.
-    public func separateSound(_ audio: AudioBuffer, type: USSSoundType) async throws -> AudioBuffer {
-        let embedding = embeddingType(for: type)
-        return try await process(audio, type: embedding)
+
+    /// Separate a target sound from audio.
+    public func separateSound(_ audio: AudioBuffer, target: SoundEmbedding) async throws -> AudioBuffer {
+        guard let inference = inference else {
+            throw AudioToolError.modelNotLoaded("USS MLX")
+        }
+        return try separateWithConditioning(
+            audio,
+            conditioning: conditioningTensor(for: target),
+            inference: inference
+        )
     }
-    
-    /// Separate multiple sound types with progress reporting
-    /// Reports progress per-embedding (e.g., 3 types = 33%, 66%, 100%)
+
+    /// Separate several targets, reporting progress per target.
+    ///
+    /// Returns pairs rather than a dictionary so that duplicate or unlabelled targets
+    /// do not collide and the caller's ordering is preserved.
     public func separateMultipleSounds(
         _ audio: AudioBuffer,
-        types: [USSSoundType],
+        targets: [SoundEmbedding],
         onProgress: ProgressCallback?
-    ) async throws -> [USSSoundType: AudioBuffer] {
-        var results: [USSSoundType: AudioBuffer] = [:]
-        for (idx, type) in types.enumerated() {
-            let embedding = embeddingType(for: type)
-            results[type] = try await process(audio, type: embedding)
-            let percent = Double(idx + 1) / Double(types.count) * 100.0
-            await onProgress?(percent)
+    ) async throws -> [(target: SoundEmbedding, audio: AudioBuffer)] {
+        var results: [(target: SoundEmbedding, audio: AudioBuffer)] = []
+        results.reserveCapacity(targets.count)
+        for (index, target) in targets.enumerated() {
+            results.append((target, try await separateSound(audio, target: target)))
+            await onProgress?(Double(index + 1) / Double(targets.count) * 100.0)
         }
         return results
     }
-    
-    /// Separate sound type and return background residual using USSSoundType
+
+    /// Separate a target and return the residual background alongside it.
     public func separateSoundWithBackground(
         _ audio: AudioBuffer,
-        type: USSSoundType
+        target: SoundEmbedding
     ) async throws -> (separated: AudioBuffer, background: AudioBuffer) {
-        let embedding = embeddingType(for: type)
-        let result = try await separateWithBackground(audio, type: embedding)
+        guard let inference = inference else {
+            throw AudioToolError.modelNotLoaded("USS MLX")
+        }
+        let result = try separateWithBackgroundInternal(
+            audio,
+            conditioning: conditioningTensor(for: target),
+            inference: inference
+        )
         return (separated: result.separated, background: result.background)
     }
 }

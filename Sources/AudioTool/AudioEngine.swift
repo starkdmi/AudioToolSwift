@@ -1308,7 +1308,7 @@ public actor AudioEngine {
                     metrics: result.metrics
                 )
                 
-            case .separateUSS(let types):
+            case .separateUSS(let targets):
                 await eventHandler?(.progress(stage: stageName, percent: 0))
                 guard let uss = ussProvider else {
                     throw AudioToolError.modelNotLoaded("USS")
@@ -1327,16 +1327,16 @@ public actor AudioEngine {
                 }
                 
                 // Process each type and emit per-embedding progress
-                var ussSeparatedResults: [USSSoundType: AudioToolCore.AudioBuffer] = [:]
-                for (idx, type) in types.enumerated() {
-                    let separated = try await uss.separateSound(ussInput, type: type)
-                    ussSeparatedResults[type] = separated
+                var ussSeparatedResults: [SoundEmbedding: AudioToolCore.AudioBuffer] = [:]
+                for (idx, target) in targets.enumerated() {
+                    let separated = try await uss.separateSound(ussInput, target: target)
+                    ussSeparatedResults[target] = separated
                     
                     // Emit per-embedding event
-                    await eventHandler?(.ussSeparated(type: type, audio: separated))
+                    await eventHandler?(.ussSeparated(target: target, audio: separated))
                     
                     // Emit progress per embedding
-                    let percent = Double(idx + 1) / Double(types.count) * 100.0
+                    let percent = Double(idx + 1) / Double(targets.count) * 100.0
                     await progressCallback?(percent)
                 }
                 

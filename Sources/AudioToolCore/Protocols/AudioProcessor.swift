@@ -284,36 +284,38 @@ public protocol SoundClassifier: AudioProcessor {
 
 /// Universal Sound Separation (USS)
 ///
-/// Separates specific sound types from mixed audio using FiLM conditioning.
-/// Supports efficient embedding switching for multi-type separation.
+/// Separates a target sound from mixed audio using FiLM conditioning on a
+/// ``SoundEmbedding``. The target is an arbitrary 527-d AudioSet class vector, not a
+/// fixed menu: ``SoundEmbedding/speech`` and friends are presets over that space,
+/// and callers can build their own.
 public protocol UniversalSoundSeparator: AudioProcessor {
-    /// Separate a specific sound type from audio
+    /// Separate a target sound from audio
     /// - Parameters:
     ///   - audio: Input audio buffer (32kHz expected)
-    ///   - type: Target sound type to extract
-    /// - Returns: Separated audio containing only the target sound type
-    func separateSound(_ audio: AudioBuffer, type: USSSoundType) async throws -> AudioBuffer
-    
-    /// Separate multiple sound types from audio
+    ///   - target: Conditioning vector selecting what to extract
+    /// - Returns: Separated audio containing only the target sound
+    func separateSound(_ audio: AudioBuffer, target: SoundEmbedding) async throws -> AudioBuffer
+
+    /// Separate several targets from the same audio
     /// - Parameters:
     ///   - audio: Input audio buffer (32kHz expected)
-    ///   - types: Array of target sound types to extract
-    ///   - onProgress: Optional callback with progress (0.0 to 100.0) per embedding
-    /// - Returns: Dictionary mapping sound type to separated audio
+    ///   - targets: Conditioning vectors to extract, in order
+    ///   - onProgress: Optional callback with progress (0.0 to 100.0) per target
+    /// - Returns: Separated audio per target, in the same order as `targets`
     func separateMultipleSounds(
         _ audio: AudioBuffer,
-        types: [USSSoundType],
+        targets: [SoundEmbedding],
         onProgress: ProgressCallback?
-    ) async throws -> [USSSoundType: AudioBuffer]
-    
-    /// Separate sound type and also return background (residual)
+    ) async throws -> [(target: SoundEmbedding, audio: AudioBuffer)]
+
+    /// Separate a target and also return the background (residual)
     /// - Parameters:
     ///   - audio: Input audio buffer
-    ///   - type: Target sound type to extract
+    ///   - target: Conditioning vector selecting what to extract
     /// - Returns: Tuple of (separated target, background residual)
     func separateSoundWithBackground(
         _ audio: AudioBuffer,
-        type: USSSoundType
+        target: SoundEmbedding
     ) async throws -> (separated: AudioBuffer, background: AudioBuffer)
 }
 
@@ -321,14 +323,14 @@ public protocol UniversalSoundSeparator: AudioProcessor {
 public extension UniversalSoundSeparator {
     func separateMultipleSounds(
         _ audio: AudioBuffer,
-        types: [USSSoundType],
+        targets: [SoundEmbedding],
         onProgress: ProgressCallback?
-    ) async throws -> [USSSoundType: AudioBuffer] {
-        var results: [USSSoundType: AudioBuffer] = [:]
-        for (idx, type) in types.enumerated() {
-            results[type] = try await separateSound(audio, type: type)
-            let percent = Double(idx + 1) / Double(types.count) * 100.0
-            await onProgress?(percent)
+    ) async throws -> [(target: SoundEmbedding, audio: AudioBuffer)] {
+        var results: [(target: SoundEmbedding, audio: AudioBuffer)] = []
+        results.reserveCapacity(targets.count)
+        for (idx, target) in targets.enumerated() {
+            results.append((target, try await separateSound(audio, target: target)))
+            await onProgress?(Double(idx + 1) / Double(targets.count) * 100.0)
         }
         return results
     }

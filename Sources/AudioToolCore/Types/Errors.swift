@@ -34,6 +34,9 @@ public enum AudioToolError: Error, Sendable {
     
     /// Empty audio buffer
     case emptyAudioBuffer
+
+    /// A SoundEmbedding could not be constructed from the given values
+    case invalidEmbedding(String)
     
     /// Audio file not found
     case audioFileNotFound(URL)
@@ -77,6 +80,8 @@ extension AudioToolError: LocalizedError {
             return "Incompatible model version. Expected: \(expected), Found: \(found)"
         case .modelNotLoaded(let model):
             return "Model not loaded: \(model). Call preload() first."
+        case .invalidEmbedding(let reason):
+            return "Invalid sound embedding: \(reason)"
         case .invalidAudioFormat(let expected, let found):
             return "Invalid audio format. Expected: \(expected), Found: \(found)"
         case .sampleRateMismatch(let expected, let found):
