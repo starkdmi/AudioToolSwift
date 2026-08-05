@@ -80,15 +80,18 @@ xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' \
 | `AudioToolFluidAudioTests` | VAD/Diarization | Silero VAD, Pyannote, Sortformer |
 | `AudioToolTests` | Core types | AudioBuffer, chunking, protocols |
 
-### Running Generate CLI
+### Running the audiotool CLI
 
 ```bash
-cd .build/DerivedData/Build/Products/Debug
-./Generate -m <model> [-i input.wav] [-o output.wav]
+swift run audiotool -m <model> -i input.wav [-o output.wav]
 ```
 
-Available models: `frcrn`, `frcrn-bg`, `se48k`, `se48k-bg`, `demucs`, `ss_2spk`, `ss_3spk`, 
-`ss_whamr`, `sr48k`, `kokoro`, `chatterbox`, `voice_match`, `transcribe`
+Available models: `frcrn`, `frcrn-bg`, `se48k`, `se48k-bg`, `demucs`, `ss_2spk`, `ss_3spk`,
+`ss_whamr`, `sr48k`, `streaming_verify`, `transcribe`
+
+The TTS and diarization subcommands were removed: they took no arguments and drove
+hardcoded fixtures rather than input files. Use `AudioToolTTS` directly until a real
+subcommand exists.
 
 ## Code Style Guidelines
 
@@ -207,13 +210,12 @@ struct ModelNameTests {
 
 ### Output Paths
 
-Save test outputs to model directories for consistency:
-- `Models/frcrn_se_mlx_swift/` - FRCRN outputs
-- `Models/mossformer2_se_mlx_swift/` - MossFormer2 SE outputs  
-- `Models/mosforrmer2_ss_mlx_swift/` - Speaker separation outputs (note typo in dir name)
-- `Models/mossformer2_sr_mlx_swift/` - Super resolution outputs
-- `Models/kokoro-ios/` - Kokoro TTS outputs
-- `Models/chatterbox_swift/` - Chatterbox TTS outputs
+Write test and CLI output to a temporary directory or an explicit `-o` path. Do not
+write into `Sources/Models/` - those are vendored model sources, not scratch space,
+and everything there is source-only by design.
+
+Model *weights* are never in the tree at all; they download from HuggingFace at
+runtime via `ModelDownloader`. See `Tests/*/Fixtures/README.md` for input audio.
 
 ### MLX Best Practices
 
@@ -246,30 +248,39 @@ if let cached = ModelDownloader.shared.localPath(for: "starkdmi/ModelName") {
 ## Directory Structure
 
 ```
-AudioTool/
+AudioToolSwift/
 ├── Sources/
-│   ├── AudioTool/          # Main pipeline API
-│   ├── AudioToolCore/      # Core types (AudioBuffer, Errors, Protocols)
-│   ├── AudioToolMLX/       # MLX providers (SE, SS, SR)
-│   ├── AudioToolTTS/       # Kokoro, Chatterbox TTS
-│   ├── AudioToolFluidAudio/# VAD, Diarization integration
-│   └── Generate/            # CLI tool
+│   ├── AudioTool/           # Facade + pipeline API (AudioEngine actor)
+│   ├── AudioToolCore/       # Core types (AudioBuffer, Errors, Protocols)
+│   ├── AudioToolMLX/        # MLX providers (SE, SS, SR, Demucs)
+│   ├── AudioToolCoreML/     # CoreML providers (MossFormerGAN)
+│   ├── AudioToolUSS/        # Universal sound separation
+│   ├── AudioToolTTS/        # Kokoro, Chatterbox TTS
+│   ├── AudioToolFluidAudio/ # VAD, transcription, diarization
+│   ├── AudioToolSpeech/     # Apple SpeechAnalyzer (iOS 26+)
+│   ├── AudioToolTranslation/     # Apple Translation framework
+│   ├── AudioToolMLXTranslation/  # TranslateGemma
+│   ├── AudioToolCLI/        # `audiotool` executable
+│   └── Models/              # Vendored model implementations, source only
+│       ├── MossFormer2SE/ MossFormer2SS/ MossFormer2SR/
+│       ├── FRCRN/ Demucs/ USS/ Kokoro/ Chatterbox/
 ├── Tests/
+│   ├── AudioToolTests/                  # Unit tests with mocks, no MLX
 │   ├── AudioToolMLXIntegrationTests/
 │   ├── AudioToolUSSTests/
-│   └── AudioToolFluidAudioTests/
+│   ├── AudioToolFluidAudioTests/
+│   └── AudioToolMLXTranslationTests/
+├── Scripts/build_mlx_metallib.sh
 └── Package.swift
-
-../Models/                   # Model weights (sibling directory)
-├── frcrn_se_mlx_swift/
-├── mossformer2_se_mlx_swift/
-├── kokoro-ios/
-└── ...
 ```
+
+There is no sibling `../Models/` directory and no local path dependencies. Model
+implementations are vendored under `Sources/Models/` as source only; weights are
+fetched from HuggingFace at runtime.
 
 ## Common Issues
 
-1. **metallib not found**: Use xcodebuild, not swift build
+1. **metallib not found**: run `Scripts/build_mlx_metallib.sh`, or build via xcodebuild — see the Metal/MLX section above for why
 2. **Model not found**: Check HuggingFace cache at `~/.cache/huggingface/hub/`
 3. **Path errors after machine migration**: Use `#filePath` based project root, not hardcoded paths
 4. **Memory issues**: Use `GPU.clearCache()` between chunks, set memory limits
