@@ -504,3 +504,51 @@ public actor DemucsProvider: MusicSeparator {
     }
     
 }
+
+// MARK: - ManagedModel
+
+extension MossFormer2SSProvider: ManagedModel {
+    /// Includes the variant: the 2-speaker, 3-speaker and WHAMR builds are separate
+    /// weights and must not share a residency slot.
+    public nonisolated var modelId: String { "mossformer2_ss_\(modelType.rawValue)" }
+
+    /// ~250 MB FP32.
+    public nonisolated var estimatedMemoryBytes: Int { 250_000_000 }
+
+    public func checkIfLoaded() async -> Bool { model != nil }
+
+    public func unload() async {
+        model = nil
+        GPU.clearCache()
+    }
+}
+
+extension DemucsProvider: ManagedModel {
+    public nonisolated var modelId: String { "demucs" }
+
+    /// ~80 MB per stem across all four.
+    ///
+    /// Deliberately the all-stems figure even though stems load independently and a
+    /// caller asking only for vocals holds a quarter of this. `estimatedMemoryBytes`
+    /// is nonisolated so it cannot read how many are actually resident, and for an
+    /// eviction policy over-estimating is the safe direction to be wrong in.
+    public nonisolated var estimatedMemoryBytes: Int { 320_000_000 }
+
+    /// Load every stem.
+    ///
+    /// ManagedModel treats a provider as one loadable unit, so this is all four. Use
+    /// ``load(stem:)`` to bring up a single stem, which is what you want when you
+    /// only need vocals - `checkIfLoaded` reports true for any partial state.
+    public func load() async throws {
+        for stem in Stem.allCases {
+            try loadSync(stem: stem)
+        }
+    }
+
+    public func checkIfLoaded() async -> Bool { !models.isEmpty }
+
+    public func unload() async {
+        models.removeAll()
+        GPU.clearCache()
+    }
+}

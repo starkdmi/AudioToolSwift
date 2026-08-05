@@ -1,5 +1,5 @@
 //
-//  ModelLifecycleManager.swift
+//  ModelResidency.swift
 //  AudioToolCore
 //
 //  Centralized model lifecycle management with memory tracking and LRU eviction
@@ -17,7 +17,7 @@ import os
 ///
 /// Usage:
 /// ```swift
-/// let manager = ModelLifecycleManager(memoryLimitBytes: 4_000_000_000)  // 4GB limit
+/// let manager = ModelResidency(memoryLimitBytes: 4_000_000_000)  // 4GB limit
 ///
 /// // Register a model (loads if needed, evicts LRU if over limit)
 /// try await manager.register(enhancerProvider)
@@ -34,7 +34,7 @@ import os
 /// print("Loaded: \(await manager.loadedModelIds)")
 /// print("Memory: \(await manager.totalMemoryUsage / 1_000_000)MB")
 /// ```
-public actor ModelLifecycleManager {
+public actor ModelResidency {
 
     /// Eviction and residency events. A library has no business writing to stdout -
     /// a host app decides what surfaces where, and os.Logger lets it.
@@ -227,16 +227,16 @@ public actor ModelLifecycleManager {
 
 // MARK: - CustomStringConvertible
 
-extension ModelLifecycleManager: CustomStringConvertible {
+extension ModelResidency: CustomStringConvertible {
     public nonisolated var description: String {
-        "ModelLifecycleManager(limit: \(memoryLimitBytes / 1_000_000)MB)"
+        "ModelResidency(limit: \(memoryLimitBytes / 1_000_000)MB)"
     }
 }
 
-extension ModelLifecycleManager.Stats: CustomStringConvertible {
+extension ModelResidency.Stats: CustomStringConvertible {
     public var description: String {
         """
-        ModelLifecycleManager.Stats:
+        ModelResidency.Stats:
           Loaded models: \(loadedModelCount)
           Memory usage: \(totalMemoryBytes / 1_000_000)MB / \(memoryLimitBytes / 1_000_000)MB
           Available: \(availableBytes / 1_000_000)MB

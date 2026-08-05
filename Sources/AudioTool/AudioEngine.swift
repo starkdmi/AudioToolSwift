@@ -21,7 +21,7 @@ public actor AudioEngine {
     // MARK: - Model Lifecycle Management
     
     /// Model lifecycle manager for memory tracking and LRU eviction
-    public let modelManager: ModelLifecycleManager
+    public let modelManager: ModelResidency
     
     // MARK: - Model Providers (injectable for testing)
     
@@ -43,10 +43,10 @@ public actor AudioEngine {
     /// Production initializer
     public init(
         configuration: AudioToolConfiguration = .default,
-        modelManager: ModelLifecycleManager? = nil
+        modelManager: ModelResidency? = nil
     ) {
         self.configuration = configuration
-        self.modelManager = modelManager ?? ModelLifecycleManager(
+        self.modelManager = modelManager ?? ModelResidency(
             memoryLimitBytes: configuration.modelMemoryLimit
         )
     }
@@ -63,7 +63,7 @@ public actor AudioEngine {
         classifier: (any SoundClassifier)? = nil
     ) {
         self.configuration = configuration
-        self.modelManager = ModelLifecycleManager(
+        self.modelManager = ModelResidency(
             memoryLimitBytes: configuration.modelMemoryLimit
         )
         self.vadProvider = vad
@@ -82,30 +82,53 @@ public actor AudioEngine {
     }
     
     // MARK: - Provider Registration (for external libraries like AudioToolMLX, AudioToolCoreML)
+
+    /// Track a provider with the residency manager, if it can be.
+    ///
+    /// Registration is opportunistic: providers that conform to ``ManagedModel``
+    /// participate in memory accounting and LRU eviction, and those that do not are
+    /// simply used directly. Before this existed nothing was ever registered outside
+    /// of tests, so the eviction policy was dead code - it could never fire, however
+    /// many models were resident.
+    ///
+    /// Eviction remains best-effort. Memory figures are per-provider estimates rather
+    /// than measurements, and a model evicted while a caller still holds the provider
+    /// will simply reload on next use.
+    private func trackIfManaged(_ provider: Any) {
+        guard let managed = provider as? any ManagedModel else { return }
+        Task { [modelManager] in
+            try? await modelManager.register(managed)
+        }
+    }
     
     /// Register an enhancement provider
     public func register(enhancer: any SpeechEnhancer, for model: EnhancementModel) {
         self.enhancerProviders[model] = enhancer
+        trackIfManaged(enhancer)
     }
     
     /// Register a diarization provider
     public func register(diarization: any DiarizationProvider) {
         self.diarizationProvider = diarization
+        trackIfManaged(diarization)
     }
     
     /// Register a separator provider
     public func register(separator: any SpeechSeparator, for model: SeparationModel) {
         self.separatorProviders[model] = separator
+        trackIfManaged(separator)
     }
     
     /// Register an upscaler provider
     public func register(upscaler: any AudioUpscaler) {
         self.upscalerProvider = upscaler
+        trackIfManaged(upscaler)
     }
     
     /// Register a synthesizer provider
     public func register(synthesizer: any SpeechSynthesizer, for model: SynthesisModel) {
         self.synthesizerProviders[model.modelName] = synthesizer
+        trackIfManaged(synthesizer)
     }
     
     /// Register a translation provider
@@ -1736,7 +1759,7 @@ public actor AudioEngine {
     /// Get model lifecycle statistics
     ///
     /// Returns current memory usage, loaded model count, and eviction stats.
-    public var modelStats: ModelLifecycleManager.Stats {
+    public var modelStats: ModelResidency.Stats {
         get async { await modelManager.stats }
     }
     

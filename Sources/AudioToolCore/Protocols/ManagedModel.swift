@@ -12,7 +12,7 @@ import Foundation
 /// Protocol for models that support memory lifecycle management.
 ///
 /// Conform to this protocol to enable:
-/// - Memory tracking by `ModelRegistry`
+/// - Memory tracking by `ModelCatalog`
 /// - LRU-based automatic eviction under memory pressure
 /// - Explicit unload support
 ///
@@ -37,7 +37,7 @@ public protocol ManagedModel: Sendable {
     /// Unique identifier for this model instance.
     ///
     /// Should be stable across app launches (e.g., "mossformer2_se_48k").
-    /// Used as the key in `ModelRegistry`.
+    /// Used as the key in `ModelCatalog`.
     var modelId: String { get }
     
     /// Estimated memory footprint in bytes (VRAM + RAM).
@@ -51,7 +51,7 @@ public protocol ManagedModel: Sendable {
     
     /// Load model into memory.
     ///
-    /// Called by `ModelRegistry.register(_:)` if the model isn't already loaded.
+    /// Called by `ModelCatalog.register(_:)` if the model isn't already loaded.
     /// Implementations should:
     /// - Download weights if needed
     /// - Load into GPU/ANE memory
@@ -60,7 +60,7 @@ public protocol ManagedModel: Sendable {
     
     /// Unload model from memory (release resources).
     ///
-    /// Called by `ModelRegistry.unload(modelId:)` or during LRU eviction.
+    /// Called by `ModelCatalog.unload(modelId:)` or during LRU eviction.
     /// Implementations should:
     /// - Release model weights
     /// - Clear GPU cache if applicable

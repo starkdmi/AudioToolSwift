@@ -375,3 +375,19 @@ extension MossFormer2SR48KProvider: StreamableOutput {
         continuation.finish()
     }
 }
+
+// MARK: - ManagedModel
+
+extension MossFormer2SR48KProvider: ManagedModel {
+    public nonisolated var modelId: String { "mossformer2_sr_48k" }
+
+    /// ~300 MB FP32.
+    public nonisolated var estimatedMemoryBytes: Int { 300_000_000 }
+
+    public func checkIfLoaded() async -> Bool { model != nil }
+
+    public func unload() async {
+        model = nil
+        GPU.clearCache()
+    }
+}

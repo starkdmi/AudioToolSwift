@@ -1,8 +1,8 @@
 //
-//  ModelLifecycleManagerTests.swift
+//  ModelResidencyTests.swift
 //  AudioToolTests
 //
-//  Tests for ModelLifecycleManager memory tracking and LRU eviction
+//  Tests for ModelResidency memory tracking and LRU eviction
 //
 
 import Testing
@@ -44,12 +44,12 @@ actor MockManagedModel: ManagedModel {
 
 // MARK: - Tests
 
-@Suite("ModelLifecycleManager Tests")
-struct ModelLifecycleManagerTests {
+@Suite("ModelResidency Tests")
+struct ModelResidencyTests {
     
     @Test("Manager tracks loaded models")
     func testManagerTracksModels() async throws {
-        let manager = ModelLifecycleManager(memoryLimitBytes: 1_000_000_000)
+        let manager = ModelResidency(memoryLimitBytes: 1_000_000_000)
         let mock = MockManagedModel(modelId: "test_model", memoryBytes: 100_000_000)
         
         try await manager.register(mock)
@@ -63,7 +63,7 @@ struct ModelLifecycleManagerTests {
     
     @Test("Manager reports available memory")
     func testAvailableMemory() async throws {
-        let manager = ModelLifecycleManager(memoryLimitBytes: 500_000_000)
+        let manager = ModelResidency(memoryLimitBytes: 500_000_000)
         let mock = MockManagedModel(modelId: "test", memoryBytes: 200_000_000)
         
         let initialAvailable = await manager.availableMemory
@@ -77,7 +77,7 @@ struct ModelLifecycleManagerTests {
     
     @Test("LRU eviction when limit exceeded")
     func testLRUEviction() async throws {
-        let manager = ModelLifecycleManager(memoryLimitBytes: 150_000_000)
+        let manager = ModelResidency(memoryLimitBytes: 150_000_000)
         
         let model1 = MockManagedModel(modelId: "model1", memoryBytes: 100_000_000)
         let model2 = MockManagedModel(modelId: "model2", memoryBytes: 100_000_000)
@@ -99,7 +99,7 @@ struct ModelLifecycleManagerTests {
     
     @Test("Explicit unload clears memory")
     func testExplicitUnload() async throws {
-        let manager = ModelLifecycleManager(memoryLimitBytes: 1_000_000_000)
+        let manager = ModelResidency(memoryLimitBytes: 1_000_000_000)
         let mock = MockManagedModel(modelId: "test", memoryBytes: 100_000_000)
         
         try await manager.register(mock)
@@ -117,7 +117,7 @@ struct ModelLifecycleManagerTests {
     
     @Test("Unload all models")
     func testUnloadAll() async throws {
-        let manager = ModelLifecycleManager(memoryLimitBytes: 1_000_000_000)
+        let manager = ModelResidency(memoryLimitBytes: 1_000_000_000)
         
         let model1 = MockManagedModel(modelId: "model1", memoryBytes: 100_000_000)
         let model2 = MockManagedModel(modelId: "model2", memoryBytes: 100_000_000)
@@ -136,7 +136,7 @@ struct ModelLifecycleManagerTests {
     
     @Test("Re-registering updates LRU timestamp")
     func testReregisterUpdatesLRU() async throws {
-        let manager = ModelLifecycleManager(memoryLimitBytes: 250_000_000)
+        let manager = ModelResidency(memoryLimitBytes: 250_000_000)
         
         let model1 = MockManagedModel(modelId: "model1", memoryBytes: 100_000_000)
         let model2 = MockManagedModel(modelId: "model2", memoryBytes: 100_000_000)
@@ -163,7 +163,7 @@ struct ModelLifecycleManagerTests {
     
     @Test("Stats reports correct values")
     func testStatsReporting() async throws {
-        let manager = ModelLifecycleManager(memoryLimitBytes: 500_000_000)
+        let manager = ModelResidency(memoryLimitBytes: 500_000_000)
         
         let model1 = MockManagedModel(modelId: "model1", memoryBytes: 100_000_000)
         let model2 = MockManagedModel(modelId: "model2", memoryBytes: 150_000_000)

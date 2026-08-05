@@ -1,5 +1,5 @@
 //
-//  ModelRegistry.swift
+//  ModelCatalog.swift
 //  AudioToolCore
 //
 //  Static catalog of available models, variants, and packages
@@ -14,7 +14,7 @@ import Foundation
 ///
 /// Usage:
 /// ```swift
-/// let registry = ModelRegistry.shared
+/// let registry = ModelCatalog.shared
 ///
 /// // Get all models
 /// for model in registry.models {
@@ -26,9 +26,9 @@ import Foundation
 ///     print(variant.sizeString)
 /// }
 /// ```
-public final class ModelRegistry: @unchecked Sendable {
+public final class ModelCatalog: @unchecked Sendable {
     /// Shared instance
-    public static let shared = ModelRegistry()
+    public static let shared = ModelCatalog()
     
     /// All available model definitions
     public let models: [ModelDefinition]
@@ -350,7 +350,7 @@ public final class ModelRegistry: @unchecked Sendable {
 
 // MARK: - Summary Statistics
 
-extension ModelRegistry {
+extension ModelCatalog {
     /// Total size of all models in registry
     public var totalCatalogSize: Int64 {
         allVariants.reduce(0) { $0 + $1.sizeBytes }

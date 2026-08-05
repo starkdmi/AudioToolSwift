@@ -267,3 +267,58 @@ struct ResamplingPreferenceTests {
                 "balanced and high produced identical output - the preference would be meaningless")
     }
 }
+
+// MARK: - Residency registration
+
+@Suite("Model residency wiring")
+struct ResidencyWiringTests {
+
+    /// A provider that participates in residency accounting.
+    final class ManagedEnhancer: SpeechEnhancer, ManagedModel, @unchecked Sendable {
+        let sampleRate = 16000
+        let inputChannels = 1
+        let outputChannels = 1
+        let minChunkSize = 512
+        let recommendedChunkSize = 16000
+        nonisolated let modelId = "managed_mock"
+        nonisolated let estimatedMemoryBytes = 1_000_000
+        var loaded = true
+        func load() async throws { loaded = true }
+        func unload() async { loaded = false }
+        func checkIfLoaded() async -> Bool { loaded }
+        func process(_ input: AudioBuffer) async throws -> AudioBuffer { input }
+        func stream(_ i: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
+            AsyncThrowingStream { $0.finish() }
+        }
+        func reset() async {}
+    }
+
+    /// The defect this closes: nothing ever entered the residency manager outside of
+    /// tests, so its LRU eviction could not fire no matter how many models were held.
+    @Test("Registering a ManagedModel provider tracks it for residency")
+    func managedProviderIsTracked() async throws {
+        let engine = AudioEngine()
+        await engine.register(enhancer: ManagedEnhancer(), for: .mossformerSE16k)
+
+        // Registration is asynchronous; give it a moment to land.
+        try await Task.sleep(for: .milliseconds(100))
+        let stats = await engine.modelStats
+        #expect(stats.loadedModelCount == 1, "provider should be resident, got \(stats.loadedModelCount)")
+    }
+
+    @Test("A provider that is not ManagedModel still registers and simply is not tracked")
+    func unmanagedProviderStillWorks() async throws {
+        let engine = AudioEngine()
+        await engine.register(enhancer: MockEnhancer(), for: .mossformerSE16k)
+
+        try await Task.sleep(for: .milliseconds(100))
+        let stats = await engine.modelStats
+        #expect(stats.loadedModelCount == 0)
+
+        // And it is still usable.
+        let out = try await engine.enhance(
+            AudioBuffer(samples: [Float](repeating: 0.1, count: 16000), sampleRate: 16000, channels: 1),
+            model: .mossformerSE16k)
+        #expect(out.samples.count == 16000)
+    }
+}

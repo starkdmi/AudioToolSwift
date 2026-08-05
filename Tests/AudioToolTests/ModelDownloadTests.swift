@@ -175,11 +175,11 @@ struct ModelDownloadTypeTests {
 // MARK: - Registry Tests
 
 @Suite("Model Registry")
-struct ModelRegistryTests {
+struct ModelCatalogTests {
     
     @Test("Registry has models")
     func testRegistryHasModels() {
-        let registry = ModelRegistry.shared
+        let registry = ModelCatalog.shared
         
         #expect(!registry.models.isEmpty)
         #expect(!registry.allVariants.isEmpty)
@@ -187,14 +187,14 @@ struct ModelRegistryTests {
     
     @Test("Registry has packages")
     func testRegistryHasPackages() {
-        let registry = ModelRegistry.shared
+        let registry = ModelCatalog.shared
         
         #expect(!registry.packages.isEmpty)
     }
     
     @Test("Registry lookup by ID")
     func testRegistryLookup() {
-        let registry = ModelRegistry.shared
+        let registry = ModelCatalog.shared
         
         // Should find a model
         if let model = registry.models.first {
@@ -211,7 +211,7 @@ struct ModelRegistryTests {
     
     @Test("Registry filter by category")
     func testRegistryFilterByCategory() {
-        let registry = ModelRegistry.shared
+        let registry = ModelCatalog.shared
         
         let enhancementModels = registry.models(in: .speechEnhancement)
         #expect(enhancementModels.allSatisfy { $0.category == .speechEnhancement })
@@ -219,7 +219,7 @@ struct ModelRegistryTests {
     
     @Test("Registry statistics")
     func testRegistryStatistics() {
-        let registry = ModelRegistry.shared
+        let registry = ModelCatalog.shared
         
         #expect(registry.modelCount == registry.models.count)
         #expect(registry.variantCount == registry.allVariants.count)

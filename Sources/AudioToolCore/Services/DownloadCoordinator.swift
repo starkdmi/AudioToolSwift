@@ -260,7 +260,7 @@ public actor DownloadCoordinator {
     /// - Returns: AsyncThrowingStream of package download progress
     public func downloadPackage(
         _ package: ModelPackage,
-        registry: ModelRegistry
+        registry: ModelCatalog
     ) -> AsyncThrowingStream<PackageDownloadProgress, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -342,7 +342,7 @@ public actor DownloadCoordinator {
     /// - Throws: DownloadError.insufficientStorage if not enough space
     public func checkStorageAvailable(
         for package: ModelPackage,
-        registry: ModelRegistry
+        registry: ModelCatalog
     ) async throws {
         let availableBytes = try FileManager.default.availableStorageSpace()
         

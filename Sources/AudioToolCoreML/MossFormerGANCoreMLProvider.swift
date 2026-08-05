@@ -578,3 +578,17 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
 
 extension MossFormerGANCoreMLProvider: StreamableOutput {}
 
+// MARK: - ManagedModel
+
+extension MossFormerGANCoreMLProvider: ManagedModel {
+    public nonisolated var modelId: String { "mossformer_gan_se_16k" }
+
+    /// ~30 MB: CoreML FP16, and the ANE holds much of it outside our accounting.
+    public nonisolated var estimatedMemoryBytes: Int { 30_000_000 }
+
+    public func checkIfLoaded() async -> Bool { model != nil }
+
+    public func unload() async {
+        model = nil
+    }
+}

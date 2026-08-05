@@ -572,3 +572,19 @@ extension FRCRNSE16KProvider: StreamableOutput {
 
 // Note: MossFormer GAN SE is now available via AudioToolCoreML (CoreML-based provider)
 // Use CoreMLProviders.mossformerGANSE16K() instead
+
+// MARK: - ManagedModel
+
+extension FRCRNSE16KProvider: ManagedModel {
+    public nonisolated var modelId: String { "frcrn_se_16k" }
+
+    /// ~60 MB FP32. FRCRN is the smallest of the enhancement models.
+    public nonisolated var estimatedMemoryBytes: Int { 60_000_000 }
+
+    public func checkIfLoaded() async -> Bool { model != nil }
+
+    public func unload() async {
+        model = nil
+        GPU.clearCache()
+    }
+}

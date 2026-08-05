@@ -44,7 +44,7 @@ public final class ModelManager {
     public private(set) var installedVariantIds: Set<String> = []
     
     /// Model registry
-    public let registry: ModelRegistry
+    public let registry: ModelCatalog
     
     /// Last error encountered
     public private(set) var lastError: Error?
@@ -53,7 +53,7 @@ public final class ModelManager {
     public private(set) var isInitialized: Bool = false
     
     private init() {
-        self.registry = ModelRegistry.shared
+        self.registry = ModelCatalog.shared
         Task {
             await refreshInstalledModels()
             isInitialized = true
