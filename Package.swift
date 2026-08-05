@@ -70,8 +70,12 @@ let package = Package(
             name: "AudioToolMLXTranslation",
             targets: ["AudioToolMLXTranslation"]
         ),
+        // Named with a hyphen deliberately: an "audiotool" product collides
+        // case-insensitively with the AudioTool library target, and Xcode then
+        // folds the CLI's main.swift into module AudioTool and fails to link.
+        // swift build tolerates the clash; xcodebuild does not.
         .executable(
-            name: "audiotool",
+            name: "audio-tool",
             targets: ["AudioToolCLI"]
         ),
     ],
@@ -421,8 +425,8 @@ let package = Package(
 
         // MARK: - CLI
 
-        // Build: xcodebuild build -scheme audiotool -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
-        // Run: .build/DerivedData/Build/Products/Release/audiotool --model frcrn --input test.wav --output enhanced.wav
+        // Build: xcodebuild build -scheme audio-tool -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
+        // Run: .build/DerivedData/Build/Products/Release/audio-tool --model frcrn --input test.wav --output enhanced.wav
         // Note: AudioToolSpeech (Apple SpeechAnalyzer) requires macOS 26+ and is only conditionally imported
         .executableTarget(
             name: "AudioToolCLI",

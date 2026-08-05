@@ -4,8 +4,8 @@
 //
 //  CLI tool for testing AudioTool MLX providers with chunking
 //  
-//  Build: xcodebuild build -scheme audiotool -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
-//  Run: .build/DerivedData/Build/Products/Release/audiotool --model frcrn --input test.wav --output enhanced.wav
+//  Build: xcodebuild build -scheme audio-tool -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
+//  Run: .build/DerivedData/Build/Products/Release/audio-tool --model frcrn --input test.wav --output enhanced.wav
 //
 
 import Foundation
@@ -60,9 +60,9 @@ while i < args.count {
 
 func printUsage() {
     print("""
-    audiotool - AudioToolSwift command line interface
+    audio-tool - AudioToolSwift command line interface
     
-    Usage: audiotool --model <model> --input <path> [--output <path>] [--weights <path>]
+    Usage: audio-tool --model <model> --input <path> [--output <path>] [--weights <path>]
     
     Models:
       frcrn          FRCRN SE 16K (4s/25%/discard-edges)
@@ -77,8 +77,8 @@ func printUsage() {
       -h, --help     Show this help
     
     Example:
-      audiotool -m frcrn -i test.wav -o enhanced.wav
-      audiotool -m demucs -i song.wav -o vocals.wav
+      audio-tool -m frcrn -i test.wav -o enhanced.wav
+      audio-tool -m demucs -i song.wav -o vocals.wav
 
     Weights download automatically from HuggingFace on first use.
     --weights is only needed to point at a local override.
@@ -687,9 +687,9 @@ func runStreamingVerification(inputPath: String, outputPath: String, weightsPath
 
 func printUsageDetailed() {
     print("""
-    audiotool - AudioToolSwift command line interface
+    audio-tool - AudioToolSwift command line interface
     
-    Usage: audiotool --model <model> --input <path> [--output <path>] [--weights <path>]
+    Usage: audio-tool --model <model> --input <path> [--output <path>] [--weights <path>]
     
     Models:
       frcrn           FRCRN SE 16K (4s/25%/discard-edges)
@@ -707,9 +707,9 @@ func printUsageDetailed() {
       -h, --help     Show this help
     
     Example:
-      audiotool -m frcrn -i test.wav -o enhanced.wav
-      audiotool -m demucs -i song.wav -o vocals.wav
-      audiotool -m ss_2spk -i mixed.wav -o separated.wav
+      audio-tool -m frcrn -i test.wav -o enhanced.wav
+      audio-tool -m demucs -i song.wav -o vocals.wav
+      audio-tool -m ss_2spk -i mixed.wav -o separated.wav
 
     Weights download automatically from HuggingFace on first use.
     --weights is only needed to point at a local override.

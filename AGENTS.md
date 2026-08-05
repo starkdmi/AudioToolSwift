@@ -9,45 +9,64 @@ super-resolution, TTS, transcription, and diarization. Uses MLX for GPU accelera
 
 ## Build Commands
 
-### Metal/MLX: why `swift test` fails, and how to make it work
+### Metal/MLX: the build paths that work
 
-`swift build` works fine, including every MLX target. What fails is **running**:
+MLX needs a compiled Metal shader library. SwiftPM cannot build one: mlx-swift ships
+its kernels under `Source/Cmlx/mlx-generated/metal` but its `Package.swift` declares
+no resource, plugin or binary target that turns them into a `.metallib` — only
+Xcode's build system does that step. So `swift build` *compiles* fine and then any
+GPU operation fails at runtime with:
 
 ```
 MLX error: Failed to load the default metallib. library not found
 ```
 
-**Cause.** SwiftPM cannot compile `.metal` sources. mlx-swift ships 32 Metal
-kernels under `Source/Cmlx/mlx/mlx/backend/metal/kernels`, but its `Package.swift`
-declares no resource, plugin or binary target that turns them into a `.metallib` —
-only Xcode's build system does that. So the shader library is never produced and
-anything touching the GPU throws at runtime. This is upstream and unfixed:
-[ml-explore/mlx-swift#349](https://github.com/ml-explore/mlx-swift/issues/349) is
-open, unassigned, with no maintainer response.
+This is upstream and unresolved
+([ml-explore/mlx-swift#349](https://github.com/ml-explore/mlx-swift/issues/349) is
+open with no maintainer response). mlx-swift's own README answers it with
+`xcodebuild`, and mlx-swift-examples ships an `mlx-run` wrapper that resolves
+`BUILT_PRODUCTS_DIR` and runs the binary from there.
 
-**Two working paths.** Pick either:
+#### Primary: xcodebuild (upstream's answer)
+
+Xcode compiles the shaders as part of the build, so nothing extra is needed.
 
 ```bash
-# 1. Build the shader library once, then plain SwiftPM works
-xcodebuild -downloadComponent MetalToolchain    # one-off, ships separately from Xcode
+xcodebuild build -scheme audio-tool -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
+.build/DerivedData/Build/Products/Release/audio-tool -m se48k -i noisy.wav -o clean.wav
+```
+
+Note you must run the binary **from the products directory** — that is where the
+metallib lives (`Build/Products/<config>/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib`).
+
+#### Secondary: build the metallib once, then plain SwiftPM works
+
+Useful because `swift test` is far faster than `xcodebuild test` and its output is
+legible. Requires the Metal Toolchain, which ships separately from Xcode.
+
+```bash
+xcodebuild -downloadComponent MetalToolchain   # one-off
 swift build --build-tests
-./Scripts/build_mlx_metallib.sh debug           # compiles + installs mlx.metallib
+./Scripts/build_mlx_metallib.sh debug          # compiles + installs mlx.metallib
 swift test
+swift run audio-tool -m se48k -i noisy.wav -o clean.wav
 ```
 
-`Scripts/build_mlx_metallib.sh` compiles the kernels with `xcrun metal` and drops
-`mlx.metallib` next to each test binary. MLX searches for a colocated
-`mlx.metallib` before it tries any bundle, so that is all it takes. The script
-content-hashes the kernel sources and skips recompiling when nothing changed.
+`Scripts/build_mlx_metallib.sh` compiles the kernels with `xcrun metal` and places
+`mlx.metallib` next to the SwiftPM binaries and inside each `.xctest` bundle. MLX
+looks for a colocated `mlx.metallib` before it tries any bundle, so that is enough.
+It content-hashes the sources and is a no-op when nothing changed.
 
-```bash
-# 2. Or let Xcode do it, which compiles the shaders as part of the build
-xcodebuild build -scheme AudioToolSwift-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData
-xcodebuild build -scheme audiotool -destination 'platform=macOS' -derivedDataPath .build/DerivedData
-```
+This path is ours, not upstream's. It is verified working here, but it compiles the
+shaders independently of Xcode, so if you ever see behaviour that differs between
+the two paths, trust xcodebuild and say so.
 
-Path 1 is preferred for CI and for anything iterative — `swift test` is far faster
-than `xcodebuild test` and gives usable output. Path 2 needs no extra component.
+#### Naming constraint
+
+The CLI product is `audio-tool`, not `audiotool`. An `audiotool` product collides
+case-insensitively with the `AudioTool` library target; Xcode then folds the CLI's
+`main.swift` into module `AudioTool` and the link fails with a missing `_main`.
+`swift build` tolerates the clash silently, which is how it went unnoticed.
 
 ### Running Tests
 
@@ -80,10 +99,10 @@ xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' \
 | `AudioToolFluidAudioTests` | VAD/Diarization | Silero VAD, Pyannote, Sortformer |
 | `AudioToolTests` | Core types | AudioBuffer, chunking, protocols |
 
-### Running the audiotool CLI
+### Running the audio-tool CLI
 
 ```bash
-swift run audiotool -m <model> -i input.wav [-o output.wav]
+swift run audio-tool -m <model> -i input.wav [-o output.wav]
 ```
 
 Available models: `frcrn`, `frcrn-bg`, `se48k`, `se48k-bg`, `demucs`, `ss_2spk`, `ss_3spk`,
@@ -260,7 +279,7 @@ AudioToolSwift/
 │   ├── AudioToolSpeech/     # Apple SpeechAnalyzer (iOS 26+)
 │   ├── AudioToolTranslation/     # Apple Translation framework
 │   ├── AudioToolMLXTranslation/  # TranslateGemma
-│   ├── AudioToolCLI/        # `audiotool` executable
+│   ├── AudioToolCLI/        # `audio-tool` executable
 │   └── Models/              # Vendored model implementations, source only
 │       ├── MossFormer2SE/ MossFormer2SS/ MossFormer2SR/
 │       ├── FRCRN/ Demucs/ USS/ Kokoro/ Chatterbox/

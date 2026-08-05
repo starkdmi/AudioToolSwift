@@ -4,12 +4,12 @@
 #
 # Why this exists
 # ---------------
-# SwiftPM cannot compile .metal sources. mlx-swift ships 32 Metal kernels under
-# Source/Cmlx/mlx/mlx/backend/metal/kernels but its Package.swift declares no
-# resource, plugin or binary target that turns them into a .metallib - that step
-# only happens in Xcode's build system. So `swift build` succeeds (the C++ and
-# Swift compile fine) and then every Metal operation fails at runtime with
-# "Failed to load the default metallib", because the library was never produced.
+# SwiftPM cannot compile .metal sources. mlx-swift ships Metal kernels under
+# Source/Cmlx/mlx-generated/metal but its Package.swift declares no resource,
+# plugin or binary target that turns them into a .metallib - that step only
+# happens in Xcode's build system. So `swift build` succeeds (the C++ and Swift
+# compile fine) and then every Metal operation fails at runtime with "Failed to
+# load the default metallib", because the library was never produced.
 #
 # This is upstream and unresolved: ml-explore/mlx-swift#349 is open, unassigned
 # and has no maintainer response, and its reporter proposes exactly what is
@@ -53,7 +53,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/.build}"
 OUT_DIR="$BUILD_DIR/$CONFIG"
 MLX_DIR="$BUILD_DIR/checkouts/mlx-swift"
-KERNELS="$MLX_DIR/Source/Cmlx/mlx/mlx/backend/metal/kernels"
+# Use the pre-generated, self-contained kernel set - this is what mlx-swift's
+# SwiftPM build compiles. The other tree, mlx/mlx/backend/metal/kernels, holds 32
+# kernels that need version-gated includes (metal_3_0 vs metal_3_1) and a curated
+# per-kernel build list; compiling it by globbing fails on a missing bf16.h.
+KERNELS="$MLX_DIR/Source/Cmlx/mlx-generated/metal"
 
 [[ -d "$BUILD_DIR" ]] || { echo "error: $BUILD_DIR not found - run 'swift build' first" >&2; exit 1; }
 [[ -d "$OUT_DIR"   ]] || { echo "error: $OUT_DIR not found - run 'swift build' for config '$CONFIG'" >&2; exit 1; }
@@ -70,7 +74,7 @@ HASH_FILE="$OUT_DIR/.mlx.metallib.sha"
 
 # Skip the ~30s recompile when the kernel sources have not changed. Hash headers
 # too: a .h edit changes the output without touching any .metal file.
-CURRENT_HASH="$(find "$KERNELS" -type f \( -name '*.metal' -o -name '*.h' \) ! -name '*_nax.metal' \
+CURRENT_HASH="$(find "$KERNELS" -type f \( -name '*.metal' -o -name '*.h' \) \
   | LC_ALL=C sort | xargs cat | shasum -a 256 | awk '{print $1}')"
 
 NEEDS_BUILD=1
@@ -81,7 +85,7 @@ fi
 if [[ "$NEEDS_BUILD" == "1" ]]; then
   SRCS=()
   while IFS= read -r line; do SRCS+=("$line"); done \
-    < <(find "$KERNELS" -type f -name '*.metal' ! -name '*_nax.metal' | LC_ALL=C sort)
+    < <(find "$KERNELS" -type f -name '*.metal' | LC_ALL=C sort)
   [[ "${#SRCS[@]}" -gt 0 ]] || { echo "error: no .metal sources under $KERNELS" >&2; exit 1; }
 
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/mlx-metallib.XXXXXX")"
@@ -95,7 +99,7 @@ if [[ "$NEEDS_BUILD" == "1" ]]; then
     KEY="$(printf '%s' "${SRC#"$KERNELS/"}" | shasum -a 256 | awk '{print $1}' | cut -c1-16)"
     xcrun -sdk macosx metal -x metal -Wall -Wextra -fno-fast-math \
       -Wno-c++17-extensions -Wno-c++20-extensions \
-      -c "$SRC" -I"$KERNELS" -I"$MLX_DIR/Source/Cmlx/mlx" -o "$TMP/$KEY.air"
+      -c "$SRC" -I"$KERNELS" -o "$TMP/$KEY.air"
     AIR+=("$TMP/$KEY.air")
   done
 
