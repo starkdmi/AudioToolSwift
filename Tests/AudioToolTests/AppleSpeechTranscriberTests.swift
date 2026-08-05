@@ -11,7 +11,8 @@ import Testing
 @testable import AudioToolCore
 @testable import AudioToolSpeech
 
-@Suite("Apple Speech Transcriber Tests")
+@Suite("Apple Speech Transcriber Tests", .enabled(if: TestConfiguration.runIntegrationTests,
+        "integration test - set RUN_INTEGRATION_TESTS=1"))
 struct AppleSpeechTranscriberTests {
     
     // MARK: - TranscriptionModel

@@ -11,7 +11,8 @@ import AVFoundation
 @testable import AudioToolCore
 @testable import AudioToolTTS
 
-@Suite("Apple TTS Tests")
+@Suite("Apple TTS Tests", .enabled(if: TestConfiguration.runIntegrationTests,
+        "integration test - set RUN_INTEGRATION_TESTS=1"))
 struct AppleTTSTests {
     
     // MARK: - SynthesisModel

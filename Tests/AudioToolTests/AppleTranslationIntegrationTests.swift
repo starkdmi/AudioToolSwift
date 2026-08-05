@@ -14,7 +14,8 @@ import Foundation
 import Translation
 #endif
 
-@Suite("Apple Translation Integration Tests")
+@Suite("Apple Translation Integration Tests", .enabled(if: TestConfiguration.runIntegrationTests,
+        "integration test - set RUN_INTEGRATION_TESTS=1"))
 struct AppleTranslationIntegrationTests {
     
     // MARK: - Language Availability Tests (Works on macOS 15+)

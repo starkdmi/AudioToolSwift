@@ -10,7 +10,8 @@ import Foundation
 @testable import AudioToolTTS
 @testable import AudioToolCore
 
-@Suite("RUAccent Provider Tests")
+@Suite("RUAccent Provider Tests", .enabled(if: TestConfiguration.runIntegrationTests,
+        "integration test - set RUN_INTEGRATION_TESTS=1"))
 struct RUAccentProviderTests {
     
     // Compute project root from source file path

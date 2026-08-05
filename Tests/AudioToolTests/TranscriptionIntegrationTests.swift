@@ -11,7 +11,8 @@ import Testing
 import AudioUtils
 import MLX
 
-@Suite("Transcription Integration Tests")
+@Suite("Transcription Integration Tests", .enabled(if: TestConfiguration.runIntegrationTests,
+        "integration test - set RUN_INTEGRATION_TESTS=1"))
 struct TranscriptionIntegrationTests {
     
     // Compute project root from source file path

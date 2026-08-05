@@ -35,6 +35,23 @@ public enum TestConfiguration {
     public static var skipIntegrationTests: Bool {
         ProcessInfo.processInfo.environment["SKIP_INTEGRATION_TESTS"] == "1"
     }
+
+    /// Whether to run integration tests. Opt-in: set `RUN_INTEGRATION_TESTS=1`.
+    ///
+    /// The AudioToolTests target is meant to be the fast signal - mocks, no models,
+    /// no network. Several suites in it drive Apple SpeechAnalyzer, Apple TTS, Apple
+    /// Translation and RUAccent, which take 38-60s each and download models on first
+    /// use; two of them exceeded Swift Testing's 60-second limit and failed the whole
+    /// run. Opting in keeps `swift test` usable while leaving them one variable away.
+    ///
+    /// ```bash
+    /// swift test                          # fast: mocks only
+    /// RUN_INTEGRATION_TESTS=1 swift test  # everything
+    /// ```
+    public static var runIntegrationTests: Bool {
+        guard !skipIntegrationTests else { return false }
+        return ProcessInfo.processInfo.environment["RUN_INTEGRATION_TESTS"] == "1"
+    }
     
     /// Whether to skip MLX tests (set SKIP_MLX_TESTS=1)
     public static var skipMLXTests: Bool {

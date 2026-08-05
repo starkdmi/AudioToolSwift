@@ -9,7 +9,8 @@ import Testing
 @testable import AudioToolCore
 @testable import AudioToolSpeech
 
-@Suite("Quick Transcription Test")
+@Suite("Quick Transcription Test", .enabled(if: TestConfiguration.runIntegrationTests,
+        "integration test - set RUN_INTEGRATION_TESTS=1"))
 struct QuickTranscriptionTest {
     
     @available(iOS 26.0, macOS 26.0, *)

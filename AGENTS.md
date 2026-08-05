@@ -90,6 +90,23 @@ xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' \
   -only-testing:AudioToolMLXIntegrationTests/FRCRNChunkingIntegrationTests/testFRCRNWithChunking
 ```
 
+### Test layers
+
+`swift test` is meant to be the fast signal - mocks, no models, no network:
+
+```bash
+swift test                          # ~16s, 160 tests, no downloads
+RUN_INTEGRATION_TESTS=1 swift test  # adds Apple Speech/TTS/Translation, RUAccent
+```
+
+Integration suites in the AudioToolTests target are opt-in. They drive Apple
+SpeechAnalyzer, Apple TTS, Apple Translation and RUAccent, take 38-60s each and
+download models on first use; two of them used to exceed Swift Testing's 60-second
+limit and fail the whole run.
+
+Model-backed suites in the other targets need weights, and skip without them - see
+below.
+
 ### Running models from local weights
 
 Weights are fetched from HuggingFace at runtime, but every provider also takes an
