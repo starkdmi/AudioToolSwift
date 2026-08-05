@@ -6,6 +6,10 @@
 //
 
 import Foundation
+import os
+
+/// VAD trimming diagnostics for synthesised speech.
+private let chatterboxLogger = Logger(subsystem: "AudioToolSwift", category: "ChatterboxTTS")
 import AudioTool
 import AudioToolCore
 import AudioToolFluidAudio
@@ -773,13 +777,13 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         let segments = try await vad.detect(resampledAudio)
         
         #if DEBUG
-        print("[VAD] Detected \(segments.count) speech segments")
+        chatterboxLogger.debug("Detected \(segments.count) speech segments")
         #endif
         
         // If no speech detected, return original (avoid trimming everything)
         guard !segments.isEmpty else {
             #if DEBUG
-            print("[VAD] No speech detected, returning original audio")
+            chatterboxLogger.debug("No speech detected, returning original audio")
             #endif
             return audio
         }
@@ -790,7 +794,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         let audioDuration = audio.duration
         
         #if DEBUG
-        print("[VAD] Trimming: \(String(format: "%.3f", audioDuration))s -> \(String(format: "%.3f", lastSpeechEnd + 0.01))s")
+        chatterboxLogger.debug("Trimming: \(String(format: "%.3f", audioDuration))s -> \(String(format: "%.3f", lastSpeechEnd + 0.01))s")
         #endif
         
         // Convert times to sample indices in original audio
@@ -807,13 +811,13 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         let trimmedFromEnd = audio.samples.count - paddedEnd
         
         #if DEBUG
-        print("[VAD] Trimming: \(trimmedFromStart) samples from start, \(trimmedFromEnd) samples from end")
+        chatterboxLogger.debug("Trimming: \(trimmedFromStart) samples from start, \(trimmedFromEnd) samples from end")
         #endif
         
         // Only trim if there's something to trim
         if paddedStart == 0 && paddedEnd == audio.samples.count {
             #if DEBUG
-            print("[VAD] Nothing to trim, speech spans entire audio")
+            chatterboxLogger.debug("Nothing to trim, speech spans entire audio")
             #endif
             return audio
         }
@@ -823,7 +827,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         
         #if DEBUG
         let trimmedDuration = Double(trimmedSamples.count) / Double(audio.sampleRate)
-        print("[VAD] Trimmed: \(String(format: "%.3f", audioDuration - trimmedDuration))s removed")
+        chatterboxLogger.debug("Trimmed: \(String(format: "%.3f", audioDuration - trimmedDuration))s removed")
         #endif
         
         return AudioToolCore.AudioBuffer(samples: trimmedSamples, sampleRate: audio.sampleRate, channels: 1)

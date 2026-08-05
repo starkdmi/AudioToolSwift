@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import os
 
 // MARK: - Model Lifecycle Manager
 
@@ -34,6 +35,11 @@ import Foundation
 /// print("Memory: \(await manager.totalMemoryUsage / 1_000_000)MB")
 /// ```
 public actor ModelLifecycleManager {
+
+    /// Eviction and residency events. A library has no business writing to stdout -
+    /// a host app decides what surfaces where, and os.Logger lets it.
+    private static let logger = Logger(subsystem: "AudioToolSwift", category: "ModelResidency")
+
     
     // MARK: - Types
     
@@ -212,7 +218,8 @@ public actor ModelLifecycleManager {
             evictionCount += 1
             
             #if DEBUG
-            print("ModelLifecycleManager: Evicted '\(lruEntry.modelId)' to free \(lruEntry.memoryBytes / 1_000_000)MB")
+            Self.logger.info(
+                "Evicted '\(lruEntry.modelId, privacy: .public)' to free \(lruEntry.memoryBytes / 1_000_000, privacy: .public)MB")
             #endif
         }
     }

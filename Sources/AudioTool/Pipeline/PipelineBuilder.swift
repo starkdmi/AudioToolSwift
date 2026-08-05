@@ -11,8 +11,15 @@ import AudioToolCore
 // MARK: - Pipeline Stage
 
 /// Internal representation of a pipeline stage
-public struct PipelineStage: Sendable {
-    public enum StageType: Sendable {
+/// A single step in a pipeline.
+///
+/// Internal deliberately. It was public but unconstructable - both its initialiser
+/// and `PipelineBuilder.stages` were internal - so nothing outside could make or read
+/// one, while a public enum meant every new stage type would have been a
+/// source-breaking change for consumers who could not use it in the first place.
+/// Build pipelines through ``PipelineBuilder``.
+internal struct PipelineStage: Sendable {
+    internal enum StageType: Sendable {
         case detect(VADModel)
         case diarize
         case analyze
@@ -44,6 +51,14 @@ public struct PipelineStage: Sendable {
 public struct PipelineBuilder: Sendable {
     
     internal var stages: [PipelineStage] = []
+    /// The engine that will run this pipeline.
+    ///
+    /// Weak on purpose: a builder is a value type that callers hold, and a strong
+    /// reference would keep the engine - and every loaded model with it - alive for as
+    /// long as the builder existed. The cost is that dropping the engine while holding
+    /// a builder turns into a "Pipeline not attached" error at `process` time rather
+    /// than a compile-time or construction-time failure. Keep the engine alive for as
+    /// long as you intend to run the pipeline.
     internal weak var voice: AudioEngine?
     
     internal var onStageCompleteHandler: (@Sendable (String, Duration) async -> Void)?

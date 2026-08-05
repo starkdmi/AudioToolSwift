@@ -125,7 +125,6 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
         let stride = chunkingConfig.strideSamples
         let giveUp = chunkingConfig.overlapSamples / 2
         
-        print("DEBUG MossFormer2SE: totalLength=\(totalLength), chunkSamples=\(chunkSamples), stride=\(stride), giveUp=\(giveUp)")
         
         // Pre-allocate output
         var result = [Float](repeating: 0, count: totalLength)
@@ -168,7 +167,6 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
             GPU.clearCache()
         }
         
-        print("DEBUG MossFormer2SE: Processed \(chunkCount) chunks")
         
         return AudioBuffer(samples: result, sampleRate: sampleRate, channels: 1)
     }

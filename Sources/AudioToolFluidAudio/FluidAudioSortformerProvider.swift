@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import os
 @preconcurrency import FluidAudio
 import AudioToolCore
 
@@ -48,6 +49,11 @@ import AudioToolCore
 /// - Scenarios with >4 speakers
 /// - Non-English audio
 public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifier, ChunkedProgressProvider {
+
+    /// Configuration warnings. These matter - a mismatched config produces a runtime
+    /// CoreML shape failure - but they belong in the log, not on the host app's stdout.
+    private static let logger = Logger(subsystem: "AudioToolSwift", category: "Sortformer")
+
     
     // MARK: - ChunkedProgressProvider Conformance
     
@@ -132,21 +138,25 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         // Check if using NVIDIA low latency (similar to default)
         let nvidiaLowConfig = SortformerConfig.balancedV2_1
         if config.isCompatible(with: nvidiaLowConfig) {
-            print("[Sortformer] Using NVIDIA low latency config - may require matching CoreML model")
+            Self.logger.notice("Using the balanced v2.1 config; it may require a matching CoreML model")
             return
         }
         
         // Check if using NVIDIA high latency
         let nvidiaHighConfig = SortformerConfig.highContextV2_1
         if config.isCompatible(with: nvidiaHighConfig) {
-            print("[Sortformer] Warning: High latency config requires separately converted CoreML model")
-            print("[Sortformer] If you experience runtime errors, use sortformerLowLatency() instead")
+            Self.logger.warning(
+                "High-context config requires a separately converted CoreML model; use sortformerLowLatency() if loading fails")
             return
         }
         
         // Custom configuration
-        print("[Sortformer] Warning: Custom config may not match available CoreML model")
-        print("[Sortformer] Config: chunkMelFrames=\(config.chunkMelFrames), fifoLen=\(config.fifoLen), spkcacheLen=\(config.spkcacheLen)")
+        Self.logger.warning("""
+            Custom Sortformer config may not match any available CoreML model \
+            (chunkMelFrames=\(self.config.chunkMelFrames, privacy: .public), \
+            fifoLen=\(self.config.fifoLen, privacy: .public), \
+            spkcacheLen=\(self.config.spkcacheLen, privacy: .public))
+            """)
     }
     
     // MARK: - DiarizationProvider Conformance

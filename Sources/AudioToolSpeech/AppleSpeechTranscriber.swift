@@ -9,6 +9,11 @@
 //
 
 import Foundation
+import os
+
+/// Transcription lifecycle. Never log recognised text: it is the user's speech, and a
+/// library has no business putting it on the host app's console.
+private let speechLogger = Logger(subsystem: "AudioToolSwift", category: "AppleSpeech")
 import AVFoundation
 import AudioToolCore
 
@@ -83,7 +88,7 @@ public actor AppleSpeechTranscriber: Transcriber {
         
         // Check asset status for the transcriber module
         let assetStatus = await AssetInventory.status(forModules: [transcriber])
-        print("Asset status for \(locale.identifier): \(assetStatus)")
+        speechLogger.debug("Asset status for \(self.locale.identifier, privacy: .public): \(String(describing: assetStatus), privacy: .public)")
         
         // System will auto-download when analysis starts if not installed
         isModelAvailable = true
@@ -143,37 +148,37 @@ public actor AppleSpeechTranscriber: Transcriber {
         
         let collector = ResultCollector()
         
-        print("Starting analysis...")
+        speechLogger.debug("Starting analysis...")
         
         // Start result collection FIRST (as a detached task to ensure it's listening)
         // Then run the analyzer
         // The results subscription MUST be active before analysis starts
         
         async let resultsTask: Void = Task {
-            print("Results task started")
+            speechLogger.debug("Results task started")
             for try await result in transcriber.results {
-                print("Got result: \(result.isFinal ? "FINAL" : "volatile") - '\(String(result.text.characters))'")
+                speechLogger.debug("Result received (\(result.isFinal ? "final" : "volatile", privacy: .public)); text withheld")
                 await collector.appendResult(result)
             }
-            print("Results task completed")
+            speechLogger.debug("Results task completed")
         }.value
         
         // Give the results subscription a moment to set up
         try await Task.sleep(for: .milliseconds(100))
         
         // Now run the analysis
-        print("Analyzer task started")
+        speechLogger.debug("Analyzer task started")
         _ = try await analyzer.analyzeSequence(from: audioFile)
-        print("Analyzer task completed, finalizing...")
+        speechLogger.debug("Analyzer task completed, finalizing...")
         
         // Signal that all audio has been processed
         try await analyzer.finalizeAndFinishThroughEndOfInput()
-        print("Finalize completed")
+        speechLogger.debug("Finalize completed")
         
         // Wait for results to finish
         try await resultsTask
         
-        print("All tasks completed")
+        speechLogger.debug("All tasks completed")
         
         return Transcription(
             text: await collector.getFullText().trimmingCharacters(in: .whitespacesAndNewlines),
