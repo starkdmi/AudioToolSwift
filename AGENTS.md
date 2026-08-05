@@ -9,29 +9,50 @@ super-resolution, TTS, transcription, and diarization. Uses MLX for GPU accelera
 
 ## Build Commands
 
-### CRITICAL: Metal/MLX Limitation
+### Metal/MLX: why `swift test` fails, and how to make it work
 
-**DO NOT use `swift build` or `swift test` for MLX code.** Metal shaders fail to bundle correctly:
+`swift build` works fine, including every MLX target. What fails is **running**:
+
 ```
 MLX error: Failed to load the default metallib. library not found
 ```
 
-**Always use xcodebuild:**
+**Cause.** SwiftPM cannot compile `.metal` sources. mlx-swift ships 32 Metal
+kernels under `Source/Cmlx/mlx/mlx/backend/metal/kernels`, but its `Package.swift`
+declares no resource, plugin or binary target that turns them into a `.metallib` —
+only Xcode's build system does that. So the shader library is never produced and
+anything touching the GPU throws at runtime. This is upstream and unfixed:
+[ml-explore/mlx-swift#349](https://github.com/ml-explore/mlx-swift/issues/349) is
+open, unassigned, with no maintainer response.
+
+**Two working paths.** Pick either:
 
 ```bash
-cd AudioTool
-
-# Build
-xcodebuild build -scheme AudioToolSwift-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData
-
-# Build Generate CLI
-xcodebuild build -scheme Generate -destination 'platform=macOS' -derivedDataPath .build/DerivedData
+# 1. Build the shader library once, then plain SwiftPM works
+xcodebuild -downloadComponent MetalToolchain    # one-off, ships separately from Xcode
+swift build --build-tests
+./Scripts/build_mlx_metallib.sh debug           # compiles + installs mlx.metallib
+swift test
 ```
+
+`Scripts/build_mlx_metallib.sh` compiles the kernels with `xcrun metal` and drops
+`mlx.metallib` next to each test binary. MLX searches for a colocated
+`mlx.metallib` before it tries any bundle, so that is all it takes. The script
+content-hashes the kernel sources and skips recompiling when nothing changed.
+
+```bash
+# 2. Or let Xcode do it, which compiles the shaders as part of the build
+xcodebuild build -scheme AudioToolSwift-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData
+xcodebuild build -scheme audiotool -destination 'platform=macOS' -derivedDataPath .build/DerivedData
+```
+
+Path 1 is preferred for CI and for anything iterative — `swift test` is far faster
+than `xcodebuild test` and gives usable output. Path 2 needs no extra component.
 
 ### Running Tests
 
 ```bash
-# Run ALL tests (requires Metal)
+# Run ALL tests via Xcode (alternative to Scripts/build_mlx_metallib.sh + swift test)
 xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData
 
 # Run specific test suite
