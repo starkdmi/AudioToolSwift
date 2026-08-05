@@ -104,12 +104,16 @@ extension AudioEngine {
         self.register(separator: separator, for: model)
     }
     
-    /// Configure with Demucs source separator
-    public func configure(separator: DemucsProvider, for model: SeparationModel = .demucs, sources: [DemucsProvider.Source] = DemucsProvider.Source.allCases) async throws {
-        for source in sources {
-            try await separator.load(source: source)
+    /// Configure with the Demucs music separator.
+    ///
+    /// Not registered into the speech-separator registry: stems are named parts of a
+    /// mix, not interchangeable speaker slots, so Demucs conforms to `MusicSeparator`
+    /// and is used directly. Each stem has its own weight file, so only the requested
+    /// ones are loaded.
+    public func configure(musicSeparator: DemucsProvider, stems: [DemucsProvider.Stem] = DemucsProvider.Stem.allCases) async throws {
+        for stem in stems {
+            try await musicSeparator.load(stem: stem)
         }
-        self.register(separator: separator, for: model)
     }
     
     /// Configure with super resolution provider

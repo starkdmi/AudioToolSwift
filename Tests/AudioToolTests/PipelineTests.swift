@@ -76,7 +76,7 @@ struct PipelineTests {
         )
         
         let audio = AudioBuffer.sine(frequency: 440, duration: 1.0, sampleRate: 16000)
-        let tracks = try await voice.separate(audio, speakers: 2, model: .mossformer2spk)
+        let tracks = try await voice.separate(audio, model: .mossformer2spk)
         
         #expect(tracks.count == 2)
         #expect(mockSeparator.separateCallCount == 1)

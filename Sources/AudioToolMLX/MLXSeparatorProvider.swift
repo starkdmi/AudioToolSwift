@@ -28,8 +28,9 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     /// MossFormer2SS supports chunked progress during separation
     public nonisolated var supportsChunkedProgress: Bool { true }
     
-    // SpeechSeparator conformance
-    public nonisolated var supportedSpeakerCounts: [Int] { [modelType.numSpeakers] }
+    // SpeechSeparator conformance. Fixed by the loaded weights, which is why it is
+    // not a per-call argument.
+    public nonisolated var outputCount: Int { modelType.numSpeakers }
     
     /// Available speaker separation models
     public enum Model: String, CaseIterable, Sendable {
@@ -143,25 +144,19 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     
     /// Separate mixed audio into speaker streams
     /// Output is RMS-normalized to match input energy (AudioTool PyTorch behavior)
-    public func separate(_ audio: AudioBuffer, speakers: Int) async throws -> [AudioBuffer] {
-        try await separate(audio, speakers: speakers, onProgress: nil)
+    public func separate(_ audio: AudioBuffer) async throws -> [AudioBuffer] {
+        try await separate(audio, onProgress: nil)
     }
     
     /// Separate mixed audio with progress reporting
     /// - Parameters:
     ///   - audio: Input audio buffer
-    ///   - speakers: Number of speakers (must match model)
     ///   - onProgress: Progress callback (0.0 to 100.0) as chunks are processed
-    /// - Returns: Array of separated audio buffers, one per speaker
+    /// - Returns: ``outputCount`` separated audio buffers, one per speaker
     public func separate(
         _ audio: AudioBuffer,
-        speakers: Int,
         onProgress: ProgressCallback?
     ) async throws -> [AudioBuffer] {
-        guard speakers == modelType.numSpeakers else {
-            throw AudioToolError.pipelineConfigurationInvalid("Model supports \(modelType.numSpeakers) speakers, not \(speakers)")
-        }
-        
         await onProgress?(0.0)
         
         let durationSeconds = Float(audio.samples.count) / Float(sampleRate)
@@ -299,9 +294,9 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
 
 /// Demucs source separation - separates audio into drums, bass, vocals, other
 /// Chunking: 7.8s chunks, 25% overlap, triangular blending (from benchmarks)
-public actor DemucsProvider: SpeechSeparator {
+public actor DemucsProvider: MusicSeparator {
     
-    public enum Source: String, CaseIterable, Sendable {
+    public enum Stem: String, CaseIterable, Sendable {
         case drums = "drums"
         case bass = "bass"
         case vocals = "vocals"
@@ -312,9 +307,11 @@ public actor DemucsProvider: SpeechSeparator {
     public nonisolated let inputChannels: Int = 2
     public nonisolated let outputChannels: Int = 1
     
-    public nonisolated var supportedSpeakerCounts: [Int] { [4] }
+    /// Stems the loaded weights can produce. Each has its own weight file, so this
+    /// reflects what is on disk rather than a fixed capability.
+    public nonisolated var availableStems: [Stem] { Stem.allCases }
     
-    private var models: [Source: HTDemucs] = [:]
+    private var models: [Stem: HTDemucs] = [:]
     private let weightsDirectory: String
     
     /// Max audio without chunking (7.8s is the limit from benchmarks)
@@ -326,18 +323,18 @@ public actor DemucsProvider: SpeechSeparator {
     
     /// Load all source models
     public func loadAll() async throws {
-        for source in Source.allCases {
-            try loadSync(source: source)
+        for stem in Stem.allCases {
+            try loadSync(stem: stem)
         }
     }
     
     /// Load a specific source model
-    public func loadSync(source: Source) throws {
+    public func loadSync(stem: Stem) throws {
         let config = HTDemucsConfig()
         let model = HTDemucs(config: config)
         
         // Use HTDemucs.loadWeights for proper Python→Swift key conversion
-        let weightsPath = "\(weightsDirectory)/\(source.rawValue).safetensors"
+        let weightsPath = "\(weightsDirectory)/\(stem.rawValue).safetensors"
         let parameters = try HTDemucs.loadWeights(from: weightsPath)
         try model.update(parameters: parameters, verify: .all)
         
@@ -345,39 +342,39 @@ public actor DemucsProvider: SpeechSeparator {
         model.train(false)
         MLX.eval(model)
         
-        models[source] = model
+        models[stem] = model
     }
     
     /// Load a specific source model
-    public func load(source: Source) async throws {
-        try loadSync(source: source)
+    public func load(stem: Stem) async throws {
+        try loadSync(stem: stem)
     }
     
     /// Separate a specific source from the audio
-    public func separate(_ input: AudioBuffer, source: Source) async throws -> AudioBuffer {
+    public func separate(_ input: AudioBuffer, stem: Stem) async throws -> AudioBuffer {
         let durationSeconds = Float(input.samples.count) / Float(sampleRate)
         
         // Use chunking for longer audio
         if durationSeconds > maxDirectDuration {
-            return try await separateWithChunking(input, source: source)
+            return try await separateWithChunking(input, stem: stem)
         }
         
-        return try await separateChunk(input.samples, source: source, channels: input.channels)
+        return try await separateChunk(input.samples, stem: stem, channels: input.channels)
     }
     
     /// Separate with chunking using MLXOverlap
     /// Uses triangular weighted overlap-add for seamless blending
-    private func separateWithChunking(_ input: AudioBuffer, source: Source) async throws -> AudioBuffer {
+    private func separateWithChunking(_ input: AudioBuffer, stem: Stem) async throws -> AudioBuffer {
         let chunkingConfig = ChunkingConfig.demucs(sampleRate: sampleRate)
         let inputMLX = MLXArray(input.samples)
         
-        guard let model = models[source] else {
-            throw AudioToolError.modelNotLoaded("Demucs_\(source.rawValue)")
+        guard let model = models[stem] else {
+            throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
         }
         
         // Source indices in Demucs output: drums=0, bass=1, other=2, vocals=3
         let sourceIndex: Int
-        switch source {
+        switch stem {
         case .drums: sourceIndex = 0
         case .bass: sourceIndex = 1
         case .other: sourceIndex = 2
@@ -413,9 +410,9 @@ public actor DemucsProvider: SpeechSeparator {
     }
     
     /// Separate a single chunk
-    private func separateChunk(_ samples: [Float], source: Source, channels: Int) async throws -> AudioBuffer {
-        guard let model = models[source] else {
-            throw AudioToolError.modelNotLoaded("Demucs_\(source.rawValue)")
+    private func separateChunk(_ samples: [Float], stem: Stem, channels: Int) async throws -> AudioBuffer {
+        guard let model = models[stem] else {
+            throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
         }
         
         var inputMLX: MLXArray
@@ -446,10 +443,10 @@ public actor DemucsProvider: SpeechSeparator {
     }
     
     /// Separate all sources
-    public func separateAll(_ input: AudioBuffer) async throws -> [Source: AudioBuffer] {
-        var results: [Source: AudioBuffer] = [:]
-        for source in models.keys {
-            results[source] = try await separate(input, source: source)
+    public func separateAll(_ input: AudioBuffer) async throws -> [Stem: AudioBuffer] {
+        var results: [Stem: AudioBuffer] = [:]
+        for stem in models.keys {
+            results[stem] = try await separate(input, stem: stem)
         }
         return results
     }
@@ -468,9 +465,9 @@ public actor DemucsProvider: SpeechSeparator {
     /// - Returns: Vocals and accompaniment (instrumental) audio buffers
     public func separateVocalsWithAccompaniment(_ audio: AudioBuffer) async throws -> VocalsWithAccompaniment {
         // Ensure all models are loaded
-        for source in Source.allCases {
-            if models[source] == nil {
-                try loadSync(source: source)
+        for stem in Stem.allCases {
+            if models[stem] == nil {
+                try loadSync(stem: stem)
             }
         }
         
@@ -495,19 +492,6 @@ public actor DemucsProvider: SpeechSeparator {
             vocals: vocals,
             accompaniment: AudioBuffer(samples: accompanimentSamples, sampleRate: sampleRate, channels: 1)
         )
-    }
-    
-    // MARK: - SpeechSeparator Conformance
-    
-    /// Separate all 4 sources
-    public func separate(_ audio: AudioBuffer, speakers: Int) async throws -> [AudioBuffer] {
-        let allResults = try await separateAll(audio)
-        return [
-            allResults[.drums],
-            allResults[.bass],
-            allResults[.vocals],
-            allResults[.other]
-        ].compactMap { $0 }
     }
     
 }

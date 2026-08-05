@@ -131,13 +131,13 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
     }
     
     func testSeparationModelSelection() {
-        // Test model auto-selection based on speaker count
-        XCTAssertNil(SeparationModel.forOverlappingSpeakers(0), "0 speakers should return nil")
-        XCTAssertNil(SeparationModel.forOverlappingSpeakers(1), "1 speaker should return nil")
-        XCTAssertEqual(SeparationModel.forOverlappingSpeakers(2), .mossformerWhamr, "2 speakers should use WHAMR")
-        XCTAssertEqual(SeparationModel.forOverlappingSpeakers(3), .mossformer3spk, "3 speakers should use 3spk")
-        XCTAssertNil(SeparationModel.forOverlappingSpeakers(4), "4+ speakers should return nil")
-        XCTAssertNil(SeparationModel.forOverlappingSpeakers(5), "5+ speakers should return nil")
+        // Model auto-selection is facade policy, not a property of SeparationModel.
+        XCTAssertNil(AudioEngine.separationModel(forOverlappingSpeakers: 0), "0 speakers should return nil")
+        XCTAssertNil(AudioEngine.separationModel(forOverlappingSpeakers: 1), "1 speaker should return nil")
+        XCTAssertEqual(AudioEngine.separationModel(forOverlappingSpeakers: 2), .mossformerWhamr, "2 speakers should use WHAMR")
+        XCTAssertEqual(AudioEngine.separationModel(forOverlappingSpeakers: 3), .mossformer3spk, "3 speakers should use 3spk")
+        XCTAssertNil(AudioEngine.separationModel(forOverlappingSpeakers: 4), "4+ speakers should return nil")
+        XCTAssertNil(AudioEngine.separationModel(forOverlappingSpeakers: 5), "5+ speakers should return nil")
     }
     
     func testSpeakerTimelineOverlapDetection() {
@@ -298,7 +298,7 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
         let overlapAudio = audio.slice(firstOverlap.start..<firstOverlap.end)
         
         // Separate using the separator directly (speaker identification is deprecated)
-        let separatedTracks = try await separator.separate(overlapAudio, speakers: 2)
+        let separatedTracks = try await separator.separate(overlapAudio)
         
         XCTAssertGreaterThan(separatedTracks.count, 0, "Should produce at least one track")
         

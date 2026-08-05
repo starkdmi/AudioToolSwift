@@ -37,7 +37,7 @@ final class DemucsVADPipelineTests: XCTestCase {
         print("Loading Demucs from: \(weightsPath)")
         
         let demucs = MLXProviders.demucs(weightsDirectory: weightsPath)
-        try await demucs.load(source: .vocals)
+        try await demucs.load(stem: .vocals)
         print("  Demucs loaded for vocals\n")
         
         // Test files
@@ -78,7 +78,7 @@ final class DemucsVADPipelineTests: XCTestCase {
         let startDemucs = Date()
         
         let input44k = AudioBuffer(samples: samples44k, sampleRate: 44100, channels: 1)
-        let vocalsBuffer = try await demucs.separate(input44k, source: .vocals)
+        let vocalsBuffer = try await demucs.separate(input44k, stem: .vocals)
         
         let demucsTime = Date().timeIntervalSince(startDemucs)
         print("  Demucs completed in \(String(format: "%.2f", demucsTime))s (RTF: \(String(format: "%.1f", duration/demucsTime))x)")

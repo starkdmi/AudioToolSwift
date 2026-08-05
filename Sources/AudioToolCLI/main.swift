@@ -315,7 +315,7 @@ func runDemucs(inputPath: String, outputPath: String, weightsPath: String?) asyn
     
     // Load vocals model
     print("Loading vocals model from: \(resolvedWeights)")
-    try await provider.load(source: .vocals)
+    try await provider.load(stem: .vocals)
     print("Model ready")
     
     // Load audio (Demucs uses 44100Hz)
@@ -332,7 +332,7 @@ func runDemucs(inputPath: String, outputPath: String, weightsPath: String?) asyn
     // Process (chunking is auto-enabled for >7.8s audio)
     print("Processing with chunking...")
     let startTime = Date()
-    let output = try await provider.separate(input, source: .vocals)
+    let output = try await provider.separate(input, stem: .vocals)
     let processingTime = Date().timeIntervalSince(startTime)
     
     let rtf = input.duration / processingTime
@@ -403,7 +403,7 @@ func runMossFormer2SS(inputPath: String, outputPath: String, variant: String) as
     
     print("Processing with chunking...")
     let startTime = Date()
-    let outputs = try await provider.separate(input, speakers: modelType.numSpeakers)
+    let outputs = try await provider.separate(input)
     let processingTime = Date().timeIntervalSince(startTime)
     
     let rtf = input.duration / processingTime

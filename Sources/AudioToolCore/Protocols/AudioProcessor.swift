@@ -201,30 +201,67 @@ public protocol SpeechEnhancer: StreamableProcessor {
 }
 
 /// Speech Separation (multi-speaker)
+///
+/// The number of outputs is a property of the loaded provider, not a per-call
+/// argument. Separation weights are trained for a fixed speaker count, so a 2-speaker
+/// model cannot produce 3 tracks no matter what a caller asks for; the old
+/// `separate(_:speakers:)` could only validate the argument and throw, which stated
+/// the same fact in three places - the enum, the provider guard, and a
+/// `supportedSpeakerCounts` array that always had exactly one element.
 public protocol SpeechSeparator: AudioProcessor {
-    /// Supported speaker counts
-    var supportedSpeakerCounts: [Int] { get }
-    
-    /// Separate speakers from mixed audio
-    func separate(_ audio: AudioBuffer, speakers: Int) async throws -> [AudioBuffer]
-    
-    /// Separate speakers with progress reporting
+    /// Number of tracks this provider produces, fixed by the loaded weights.
+    var outputCount: Int { get }
+
+    /// Separate mixed audio into one buffer per speaker.
+    /// - Returns: Exactly ``outputCount`` buffers.
+    func separate(_ audio: AudioBuffer) async throws -> [AudioBuffer]
+
+    /// Separate with progress reporting.
     /// - Parameters:
     ///   - audio: Input audio buffer
-    ///   - speakers: Number of speakers to separate
     ///   - onProgress: Progress callback (0.0 to 100.0) as chunks are processed
-    /// - Returns: Array of separated audio buffers, one per speaker
-    func separate(_ audio: AudioBuffer, speakers: Int, onProgress: ProgressCallback?) async throws -> [AudioBuffer]
+    /// - Returns: Exactly ``outputCount`` buffers.
+    func separate(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> [AudioBuffer]
 }
 
 /// Default implementation for progress-aware separation
 public extension SpeechSeparator {
-    func separate(_ audio: AudioBuffer, speakers: Int, onProgress: ProgressCallback?) async throws -> [AudioBuffer] {
-        // Default: report 0% at start, separate, then report 100% at end
+    func separate(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> [AudioBuffer] {
         await onProgress?(0.0)
-        let result = try await separate(audio, speakers: speakers)
+        let result = try await separate(audio)
         await onProgress?(100.0)
         return result
+    }
+}
+
+/// Music Source Separation (stems)
+///
+/// Distinct from ``SpeechSeparator`` because stems are named parts of a mix, not
+/// interchangeable speaker slots. Modelling drums, bass, vocals and other as
+/// "4 speakers" loses which track is which, and the caller almost always wants a
+/// specific one.
+public protocol MusicSeparator: AudioProcessor {
+    /// Stems this provider can extract.
+    associatedtype Stem: Hashable, Sendable
+
+    /// Stems available from the loaded weights.
+    var availableStems: [Stem] { get }
+
+    /// Extract a single named stem.
+    func separate(_ audio: AudioBuffer, stem: Stem) async throws -> AudioBuffer
+
+    /// Extract several stems, keyed by name.
+    func separate(_ audio: AudioBuffer, stems: [Stem]) async throws -> [Stem: AudioBuffer]
+}
+
+/// Default implementation for multi-stem extraction
+public extension MusicSeparator {
+    func separate(_ audio: AudioBuffer, stems: [Stem]) async throws -> [Stem: AudioBuffer] {
+        var results: [Stem: AudioBuffer] = [:]
+        for stem in stems {
+            results[stem] = try await separate(audio, stem: stem)
+        }
+        return results
     }
 }
 
@@ -412,8 +449,6 @@ extension SeparationModel: ModelIdentifier {
         case .mossformer2spk: return "mossformer2_ss_2spk"
         case .mossformer3spk: return "mossformer2_ss_3spk"
         case .mossformerWhamr: return "mossformer2_ss_whamr"
-        case .demucs: return "demucs"
-        case .uss: return "uss"
         }
     }
 }

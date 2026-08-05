@@ -1219,7 +1219,7 @@ final class StreamingPipelineTests: XCTestCase {
         print("WHAMR separator loaded in \(String(format: "%.2f", loadTime))s")
         
         let separateStart = Date()
-        let tracks = try await separator.separate(overlapAudio, speakers: 2)
+        let tracks = try await separator.separate(overlapAudio)
         let separateTime = Date().timeIntervalSince(separateStart)
         let rtf = overlapAudio.duration / max(separateTime, 0.001)
         print("Separated in \(String(format: "%.2f", separateTime))s (RTF: \(String(format: "%.1f", rtf))x)")
@@ -1267,7 +1267,7 @@ final class StreamingPipelineTests: XCTestCase {
             await collector.record(percent)
         }
         
-        let tracks = try await separator.separate(testAudio, speakers: 2, onProgress: progressCallback)
+        let tracks = try await separator.separate(testAudio, onProgress: progressCallback)
         
         let progressEvents = await collector.snapshot()
         print("Progress events: \(progressEvents.count)")

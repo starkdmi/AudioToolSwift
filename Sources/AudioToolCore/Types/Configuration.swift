@@ -154,48 +154,10 @@ public enum EnhancementModel: Sendable, Hashable {
 
 /// Available separation models
 public enum SeparationModel: Sendable, Hashable {
-    case mossformer2spk   // MLX, 2 speakers, clean audio
-    case mossformer3spk   // MLX, 3 speakers
-    case mossformerWhamr  // MLX, 2 speakers, noisy (WHAMR trained)
-    case demucs           // MLX, music stems
-    case uss              // CoreML/MLX, universal
-    
-    /// Auto-select speaker separation model based on overlap count
-    ///
-    /// Selection rules:
-    /// - 2 speakers: WHAMR model (best for noisy environments)
-    /// - 3 speakers: 3spk model
-    /// - 4+ speakers: nil (no separation - too complex)
-    ///
-    /// - Parameter overlappingSpeakers: Number of overlapping speakers from diarization
-    /// - Returns: Appropriate separation model, or nil if separation not supported
-    public static func forOverlappingSpeakers(_ overlappingSpeakers: Int) -> SeparationModel? {
-        switch overlappingSpeakers {
-        case 0, 1:
-            return nil  // No separation needed
-        case 2:
-            return .mossformerWhamr  // Best for noisy environments
-        case 3:
-            return .mossformer3spk
-        default:
-            return nil  // 4+ speakers not supported
-        }
-    }
-    
-    /// Number of speakers this model can separate
-    public var speakerCount: Int {
-        switch self {
-        case .mossformer2spk, .mossformerWhamr:
-            return 2
-        case .mossformer3spk:
-            return 3
-        case .demucs:
-            return 4  // drums, bass, vocals, other
-        case .uss:
-            return 1  // single source extraction
-        }
-    }
-    
+    case mossformer2spk   // MLX, 2 speakers at 16kHz, clean audio
+    case mossformer3spk   // MLX, 3 speakers at 8kHz
+    case mossformerWhamr  // MLX, 2 speakers at 8kHz, noisy (WHAMR trained)
+
     /// Expected input sample rate for this model
     public var sampleRate: Int {
         switch self {
@@ -205,10 +167,6 @@ public enum SeparationModel: Sendable, Hashable {
             return 8000   // WHAMR uses 8kHz
         case .mossformer3spk:
             return 8000   // 3spk uses 8kHz
-        case .demucs:
-            return 44100
-        case .uss:
-            return 32000
         }
     }
 }

@@ -146,36 +146,37 @@ public final class MockEnhancer: SpeechEnhancer, @unchecked Sendable {
 
 // MARK: - Mock Separator
 
-/// Mock separator that splits audio into N identical copies
+/// Mock separator that splits audio into `outputCount` scaled copies
 public final class MockSeparator: SpeechSeparator, @unchecked Sendable {
     
     public let sampleRate: Int = 16000
     public let inputChannels: Int = 1
     public let outputChannels: Int = 1
-    public let supportedSpeakerCounts: [Int] = [2, 3]
+
+    /// Fixed at init, like real separation weights. The mock used to advertise
+    /// `supportedSpeakerCounts = [2, 3]`, a capability no real provider has.
+    public let outputCount: Int
     
     public var processDelay: Duration = .milliseconds(10)
     public var separateCallCount = 0
     
-    public init() {}
+    public init(outputCount: Int = 2) {
+        self.outputCount = outputCount
+    }
     
-    public func separate(_ audio: AudioBuffer, speakers: Int) async throws -> [AudioBuffer] {
+    public func separate(_ audio: AudioBuffer) async throws -> [AudioBuffer] {
         separateCallCount += 1
         try await Task.sleep(for: processDelay)
         
-        // Return scaled copies for each "speaker"
-        return (0..<speakers).map { index in
-            let scale = 1.0 - Float(index) * 0.1  // Each speaker slightly different
+        // Return scaled copies, one per output track
+        return (0..<outputCount).map { index in
+            let scale = 1.0 - Float(index) * 0.1  // Each track slightly different
             return AudioBuffer(
                 samples: audio.samples.map { $0 * scale },
                 sampleRate: audio.sampleRate,
                 channels: audio.channels
             )
         }
-    }
-    
-    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
-        input
     }
 }
 

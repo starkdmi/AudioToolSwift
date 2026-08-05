@@ -373,7 +373,7 @@ struct MossFormer2SSIntegrationTests {
         // Separate speakers
         print("Processing...")
         let startTime = Date()
-        let outputs = try await provider.separate(input, speakers: 2)
+        let outputs = try await provider.separate(input)
         let processingTime = Date().timeIntervalSince(startTime)
         
         let rtf = input.duration / processingTime
@@ -424,7 +424,7 @@ struct MossFormer2SSIntegrationTests {
         // Separate speakers
         print("Processing...")
         let startTime = Date()
-        let outputs = try await provider.separate(input, speakers: 3)
+        let outputs = try await provider.separate(input)
         let processingTime = Date().timeIntervalSince(startTime)
         
         let rtf = input.duration / processingTime

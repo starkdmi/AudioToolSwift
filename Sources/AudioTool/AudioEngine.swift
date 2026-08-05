@@ -348,26 +348,46 @@ public actor AudioEngine {
     }
     
     // MARK: - Separation
-    
+
+    /// Pick a separation model for a number of overlapping speakers.
+    ///
+    /// This is a policy choice, not a property of the models, which is why it lives on
+    /// the facade rather than on `SeparationModel`: two speakers could reasonably be
+    /// sent to either the clean 16 kHz model or the WHAMR one, and the right answer
+    /// depends on your audio. The default here favours WHAMR because overlapping
+    /// speech in real recordings is usually noisy.
+    ///
+    /// - Parameter overlappingSpeakers: Speaker count from diarization
+    /// - Returns: A model, or nil when separation does not apply (0-1 speakers) or is
+    ///   unsupported (4+).
+    public static func separationModel(forOverlappingSpeakers overlappingSpeakers: Int) -> SeparationModel? {
+        switch overlappingSpeakers {
+        case 2: return .mossformerWhamr
+        case 3: return .mossformer3spk
+        default: return nil
+        }
+    }
+
     /// Separate speakers
+    ///
+    /// The track count comes from `model` - separation weights are trained for a
+    /// fixed number of speakers - so there is no separate `speakers:` argument to
+    /// disagree with it.
     public func separate(
         _ audio: AudioToolCore.AudioBuffer,
-        speakers: Int,
         model: SeparationModel = .mossformer2spk
     ) async throws -> [AudioToolCore.AudioBuffer] {
-        try await separate(audio, speakers: speakers, model: model, onProgress: nil)
+        try await separate(audio, model: model, onProgress: nil)
     }
     
     /// Separate speakers with progress reporting
     /// - Parameters:
     ///   - audio: Input audio buffer
-    ///   - speakers: Number of speakers to separate
-    ///   - model: Separation model to use
+    ///   - model: Separation model to use; determines how many tracks come back
     ///   - onProgress: Progress callback (0.0 to 100.0) as chunks are processed
     /// - Returns: Array of separated audio buffers, one per speaker
     public func separate(
         _ audio: AudioToolCore.AudioBuffer,
-        speakers: Int,
         model: SeparationModel = .mossformer2spk,
         onProgress: ProgressCallback?
     ) async throws -> [AudioToolCore.AudioBuffer] {
@@ -379,7 +399,7 @@ public actor AudioEngine {
         let input = try audio.resampled(to: model.sampleRate)
         
         // Use progress-aware separation
-        let outputs = try await separator.separate(input, speakers: speakers, onProgress: onProgress)
+        let outputs = try await separator.separate(input, onProgress: onProgress)
         
         // Resample all outputs back to original rate if different
         if audio.sampleRate != model.sampleRate {
@@ -397,7 +417,7 @@ public actor AudioEngine {
     /// during overlap periods. The separated clean audio doesn't match the contaminated cache.
     ///
     /// Current status: Separation works, but speaker IDs may be incorrect.
-    /// Use `separate(_:speakers:model:)` directly and assign speakers manually.
+    /// Use `separate(_:model:)` directly and assign speakers manually.
     ///
     /// ## The Problem
     /// During diarization, the spkcache learns speaker characteristics from:
@@ -436,7 +456,7 @@ public actor AudioEngine {
         }
         
         // Select separation model based on speaker count
-        let model = SeparationModel.forOverlappingSpeakers(speakerCount)
+        let model = Self.separationModel(forOverlappingSpeakers: speakerCount)
         guard let separationModel = model else {
             throw AudioToolError.resourceUnavailable("No separation model available for \(speakerCount) speakers")
         }
@@ -447,7 +467,7 @@ public actor AudioEngine {
         
         // Separate audio
         await onProgress?(10.0)
-        let separatedTracks = try await separate(audio, speakers: speakerCount, model: separationModel) { percent in
+        let separatedTracks = try await separate(audio, model: separationModel) { percent in
             // Map separation progress to 10-70% of total
             await onProgress?(10.0 + percent * 0.6)
         }
@@ -1198,7 +1218,7 @@ public actor AudioEngine {
                 
                 // Auto-select model based on speaker count
                 let model: SeparationModel = speakers == 3 ? .mossformer3spk : .mossformerWhamr
-                let tracks = try await separate(inputAudio, speakers: speakers, model: model, onProgress: progressCallback)
+                let tracks = try await separate(inputAudio, model: model, onProgress: progressCallback)
                 
                 result = PipelineResult(
                     audio: result.audio,
@@ -1256,8 +1276,8 @@ public actor AudioEngine {
                     
                     if handling == .separate {
                         // Just separate, don't identify
-                        let model = SeparationModel.forOverlappingSpeakers(speakerCount)!
-                        let tracks = try await separate(overlapAudio, speakers: speakerCount, model: model)
+                        let model = Self.separationModel(forOverlappingSpeakers: speakerCount)!
+                        let tracks = try await separate(overlapAudio, model: model)
                         
                         for (trackIdx, track) in tracks.enumerated() {
                             let separatedTrack = SeparatedSpeakerTrack(
@@ -1275,8 +1295,8 @@ public actor AudioEngine {
                         // Note: Re-identification is currently unreliable because spkcache is
                         // contaminated with mixture audio during overlap periods.
                         // For now, we just separate without reliable speaker identification.
-                        let model = SeparationModel.forOverlappingSpeakers(speakerCount)!
-                        let tracks = try await separate(overlapAudio, speakers: speakerCount, model: model)
+                        let model = Self.separationModel(forOverlappingSpeakers: speakerCount)!
+                        let tracks = try await separate(overlapAudio, model: model)
                         
                         for (trackIdx, track) in tracks.enumerated() {
                             let separatedTrack = SeparatedSpeakerTrack(
