@@ -78,6 +78,9 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     private let segmentDuration: Float
     private let useFp16: Bool
     private let compile: Bool
+
+    /// Explicit weights path, bypassing bundle lookup and download.
+    private let weightsPath: String?
     
     // MARK: - Initialization
     
@@ -98,6 +101,30 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         self.segmentDuration = segmentDuration
         self.useFp16 = useFp16
         self.compile = compile
+        self.weightsPath = nil
+    }
+
+    /// Initialize with explicit weights path (no bundle lookup, no download)
+    ///
+    /// Matches the escape hatch every other provider offers. USS lost its bundled
+    /// weights when they moved to HuggingFace, and without this there was no way to
+    /// run it against a local file - which made a private weights repo block local
+    /// development rather than just distribution.
+    ///
+    /// - Parameter weightsPath: Path to a resunet30 .safetensors file
+    public init(
+        weightsPath: String,
+        embeddingType: EmbeddingLoader.EmbeddingType = .speech,
+        segmentDuration: Float = 2.0,
+        useFp16: Bool = true,
+        compile: Bool = true
+    ) {
+        self.initialEmbeddingType = embeddingType
+        self.currentEmbeddingType = embeddingType
+        self.segmentDuration = segmentDuration
+        self.useFp16 = useFp16
+        self.compile = compile
+        self.weightsPath = weightsPath
     }
     
     // MARK: - Model Lifecycle
@@ -112,6 +139,13 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// still checked first so an app that vendors them keeps working.
     private func resolveWeightsPath() async throws -> String {
         let filename = useFp16 ? "resunet30_fp16.safetensors" : "resunet30_fp32.safetensors"
+
+        if let explicit = weightsPath {
+            guard FileManager.default.fileExists(atPath: explicit) else {
+                throw AudioToolError.modelNotFound("USS ResUNet30 weights at \(explicit)")
+            }
+            return explicit
+        }
 
         if let bundled = USSBundle.weightsURL(fp16: useFp16) {
             return bundled.path

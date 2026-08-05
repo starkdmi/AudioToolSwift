@@ -38,6 +38,32 @@ public struct USSProviders {
             useFp16: useFp16
         )
     }
+
+    /// Create a separation provider backed by a local weights file.
+    ///
+    /// For development and testing against weights you already have on disk, without
+    /// touching HuggingFace. Mirrors the `weightsPath:` initialiser the other MLX
+    /// providers offer.
+    ///
+    /// - Parameters:
+    ///   - weightsPath: Path to a resunet30 .safetensors file
+    ///   - embeddingType: Initial sound type to separate
+    ///   - segmentDuration: Chunk duration in seconds (default: 2.0, no overlap)
+    ///   - useFp16: Whether `weightsPath` points at FP16 weights (default: true)
+    /// - Returns: USS provider ready for loading
+    public static func separation(
+        weightsPath: String,
+        type embeddingType: EmbeddingLoader.EmbeddingType = .speech,
+        segmentDuration: Float = 2.0,
+        useFp16: Bool = true
+    ) -> USSMLXProvider {
+        USSMLXProvider(
+            weightsPath: weightsPath,
+            embeddingType: embeddingType,
+            segmentDuration: segmentDuration,
+            useFp16: useFp16
+        )
+    }
     
     // MARK: - Convenience Factories
     

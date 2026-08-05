@@ -90,6 +90,26 @@ xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' \
   -only-testing:AudioToolMLXIntegrationTests/FRCRNChunkingIntegrationTests/testFRCRNWithChunking
 ```
 
+### Running models from local weights
+
+Weights are fetched from HuggingFace at runtime, but every provider also takes an
+explicit path, so development does not depend on any repo being published:
+
+```swift
+FRCRNSE16KProvider(weightsPath: "...frcrn_se_16k.safetensors")
+MossFormer2SE48KProvider(weightsPath: "...")
+MossFormer2SSProvider(model: .twoSpeaker, weightsPath: "...")
+MossFormer2SR48KProvider(weightsPath: "...", configPath: "...")
+DemucsProvider(weightsDirectory: "...")          // one .safetensors per stem
+USSProviders.separation(weightsPath: "...resunet30_fp16.safetensors")
+```
+
+USS model tests read that path from the environment and skip without it:
+
+```bash
+AUDIOTOOL_USS_WEIGHTS=/path/to/resunet30_fp16.safetensors swift test
+```
+
 ### Test Suites
 
 | Suite | Target | Description |
