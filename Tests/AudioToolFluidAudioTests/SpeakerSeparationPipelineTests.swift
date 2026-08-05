@@ -58,7 +58,7 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
     // MARK: - Test Fixtures
     
     private func harryPotterURL() throws -> URL {
-        if let url = Bundle.module.url(forResource: "harry_potter", withExtension: "wav", subdirectory: "Fixtures") {
+        if let url = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") {
             return url
         }
         

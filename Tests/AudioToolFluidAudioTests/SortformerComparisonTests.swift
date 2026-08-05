@@ -155,7 +155,7 @@ final class SortformerComparisonTests: XCTestCase {
     
     /// Compare diarization on watson_30s.wav (interview, 2-3 speakers, clean)
     func testCompare_Watson30s() async throws {
-        guard let testURL = Bundle.module.url(forResource: "watson_30s", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("watson_30s.wav not found")
         }
         
@@ -222,7 +222,7 @@ final class SortformerComparisonTests: XCTestCase {
     
     /// Compare diarization on harry_potter.wav (movie trailer, ~10 speakers, music)
     func testCompare_HarryPotter() async throws {
-        guard let testURL = Bundle.module.url(forResource: "harry_potter", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let testURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("harry_potter.wav not found")
         }
         
@@ -243,7 +243,7 @@ final class SortformerComparisonTests: XCTestCase {
     
     /// Sortformer-only test on Harry Potter (for speed)
     func testSortformerOnly_HarryPotter() async throws {
-        guard let testURL = Bundle.module.url(forResource: "harry_potter", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let testURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("harry_potter.wav not found")
         }
         
@@ -270,7 +270,7 @@ final class SortformerComparisonTests: XCTestCase {
         var results: [(name: String, pyannote: DiarizationResult?, sortformer: DiarizationResult)] = []
         
         // Watson 30s
-        if let url = Bundle.module.url(forResource: "watson_30s", withExtension: "wav", subdirectory: "Fixtures") {
+        if let url = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") {
             let result = try await runComparison(testName: "Watson 30s", audioURL: url)
             results.append(("Watson 30s", result.pyannote, result.sortformer))
         }
@@ -288,7 +288,7 @@ final class SortformerComparisonTests: XCTestCase {
         }
         
         // Harry Potter (skip Pyannote for speed in full suite)
-        if let url = Bundle.module.url(forResource: "harry_potter", withExtension: "wav", subdirectory: "Fixtures") {
+        if let url = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") {
             let result = try await runComparison(testName: "Harry Potter", audioURL: url, skipPyannote: true)
             results.append(("Harry Potter", result.pyannote, result.sortformer))
         }

@@ -34,6 +34,21 @@ labelled recordings are included.
 classes above. These are inputs that select what USS extracts, not model weights.
 Covered by the USS/ResUNet30 entry below once that audit is complete.
 
+### Test fixtures
+
+`Tests/**/Fixtures/*.wav` - see those directories' README for a per-file table.
+
+- Speech samples from [ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio),
+  **Apache-2.0**. That project is the upstream of MossFormer2 SE/SS/SR and FRCRN, so
+  these are the clips those models are demoed on.
+- `music.wav` is an excerpt of *Distant Wonders* from "CC0 Instruments, Volume I" on
+  archive.org, **CC0 1.0** - public domain dedication, no attribution required.
+- Derived fixtures (resampled, concatenated or mixed) inherit the licence of their
+  sources, all Apache-2.0.
+
+Reproducible via `Scripts/fetch-fixtures.sh`, which regenerates every committed
+fixture byte-for-byte.
+
 ## Model weights
 
 None are committed. Every model downloads its weights at runtime from HuggingFace, so

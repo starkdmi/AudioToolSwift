@@ -18,7 +18,7 @@ final class FluidAudioDiarizationTests: XCTestCase {
         print("\n=== Pyannote Diarization Test ===\n")
         
         // Load test audio
-        guard let testURL = Bundle.module.url(forResource: "watson_30s", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("watson_30s.wav not found")
         }
         

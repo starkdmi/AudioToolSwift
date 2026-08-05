@@ -107,7 +107,7 @@ final class TranscriptionTruncationTests: XCTestCase {
     /// This verifies the mel context logic doesn't break the first chunk
     func testShortAudioTranscription() async throws {
         // Use watson_30s.wav fixture if available, or skip
-        guard let testURL = Bundle.module.url(forResource: "watson_30s", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("watson_30s.wav fixture not found")
         }
         

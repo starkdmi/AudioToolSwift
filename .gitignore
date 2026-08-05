@@ -87,12 +87,13 @@ fastlane/test_output
 *.npz
 Weights/
 
-# Audio fixtures — test/demo audio belongs in Tests/Fixtures/ (tracked
-# explicitly via the negation below); stray recordings do not.
+# Audio fixtures. Test audio under Tests/**/Fixtures/ is tracked - it is small,
+# openly licensed, and the suite needs it. Stray recordings anywhere else are not.
 *.wav
 *.mp3
 *.flac
 *.m4a
+!Tests/**/Fixtures/**/*.wav
 !Tests/Fixtures/**/*.wav
 
 # Build products

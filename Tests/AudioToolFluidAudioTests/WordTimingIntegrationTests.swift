@@ -32,7 +32,7 @@ final class WordTimingIntegrationTests: XCTestCase {
         print("\n=== Harry Potter Word Timing Integration Test ===\n")
         
         // Load test audio from Fixtures
-        guard let audioURL = Bundle.module.url(forResource: "harry_potter", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let audioURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("harry_potter.wav not found in Fixtures")
         }
         
@@ -167,7 +167,7 @@ final class WordTimingIntegrationTests: XCTestCase {
     
     /// Test that word segments cover the full audio duration
     func testWordSegmentsCoverage() async throws {
-        guard let audioURL = Bundle.module.url(forResource: "harry_potter", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let audioURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("harry_potter.wav not found in Fixtures")
         }
         
@@ -207,7 +207,7 @@ final class WordTimingIntegrationTests: XCTestCase {
     
     /// Test confidence scores are reasonable
     func testWordConfidenceScores() async throws {
-        guard let audioURL = Bundle.module.url(forResource: "harry_potter", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let audioURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("harry_potter.wav not found in Fixtures")
         }
         

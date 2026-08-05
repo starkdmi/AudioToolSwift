@@ -25,7 +25,7 @@ final class VADAccuracyTests: XCTestCase {
         print("\n=== VAD Test: billions.wav ===")
         print("Expected: Speech in the last half of audio")
         
-        guard let testURL = Bundle.module.url(forResource: "billions", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let testURL = Bundle.module.url(forResource: "multi_speaker", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("billions.wav not found")
         }
         
@@ -48,7 +48,7 @@ final class VADAccuracyTests: XCTestCase {
         print("\n=== VAD Test: watson_30s.wav ===")
         print("Expected: Multiple speech segments from interview")
         
-        guard let testURL = Bundle.module.url(forResource: "watson_30s", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("watson_30s.wav not found")
         }
         

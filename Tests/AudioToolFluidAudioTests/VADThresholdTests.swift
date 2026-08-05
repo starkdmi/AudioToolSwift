@@ -18,7 +18,7 @@ final class VADThresholdTests: XCTestCase {
         print("\n=== VAD Test: music_35s.wav ===")
         print("Testing speech detection in music with singing\n")
         
-        guard let testURL = Bundle.module.url(forResource: "music_35s", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let testURL = Bundle.module.url(forResource: "music", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("music_35s.wav not found - run: ffmpeg -i music.mp3 -ss 25 -to 60 music_35s.wav")
         }
         
@@ -40,7 +40,7 @@ final class VADThresholdTests: XCTestCase {
         print("\n=== VAD Test: billions.wav ===")
         print("Testing speech detection in music/singing with different settings\n")
         
-        guard let testURL = Bundle.module.url(forResource: "billions", withExtension: "wav", subdirectory: "Fixtures") else {
+        guard let testURL = Bundle.module.url(forResource: "multi_speaker", withExtension: "wav", subdirectory: "Fixtures") else {
             throw XCTSkip("billions.wav not found")
         }
         
