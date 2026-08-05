@@ -259,7 +259,7 @@ public actor AudioEngine {
         }
         
         // Resample to model's expected sample rate if needed
-        let input = try audio.resampled(to: model.sampleRate)
+        let input = try audio.resampled(to: vad.sampleRate, quality: vad.preferredResamplingQuality)
         return try await vad.detect(input)
     }
     
@@ -316,7 +316,8 @@ public actor AudioEngine {
         }
         
         // Adapt to the provider's rate - it validates rather than resampling.
-        let input = try audio.resampled(to: enhancer.sampleRate)
+        let input = try audio.resampled(to: enhancer.sampleRate,
+                                        quality: enhancer.preferredResamplingQuality)
         let output = try await enhancer.process(input)
         
         guard preservingSampleRate, output.sampleRate != audio.sampleRate else {
@@ -337,7 +338,8 @@ public actor AudioEngine {
         }
         
         // Adapt to the provider's rate - it validates rather than resampling.
-        let resampledAudio = try audio.resampled(to: enhancer.sampleRate)
+        let resampledAudio = try audio.resampled(to: enhancer.sampleRate,
+                                                 quality: enhancer.preferredResamplingQuality)
         
         var result = resampledAudio
         let speechSegments = segments.filter(\.isSpeech)
@@ -409,7 +411,8 @@ public actor AudioEngine {
         }
         
         // Adapt to the provider's rate - it validates rather than resampling.
-        let input = try audio.resampled(to: separator.sampleRate)
+        let input = try audio.resampled(to: separator.sampleRate,
+                                        quality: separator.preferredResamplingQuality)
         
         // Use progress-aware separation
         let outputs = try await separator.separate(input, onProgress: onProgress)
@@ -622,7 +625,8 @@ public actor AudioEngine {
         // Adapt to the upscaler's input rate. There is deliberately no
         // preservingSampleRate here: changing the rate is the entire operation, so
         // the result always comes back at the upscaler's output rate.
-        let input = try audio.resampled(to: upscaler.sampleRate)
+        let input = try audio.resampled(to: upscaler.sampleRate,
+                                        quality: upscaler.preferredResamplingQuality)
         return try await upscaler.process(input)
     }
     
@@ -1364,7 +1368,8 @@ public actor AudioEngine {
                 }
                 
                 // Resample to USS sample rate (32kHz)
-                let ussInput = try context.currentAudio.resampled(to: 32000)
+                let ussInput = try context.currentAudio.resampled(to: uss.sampleRate,
+                                                                  quality: uss.preferredResamplingQuality)
                 
                 // Use progress-aware multi-type separation
                 let progressCallback: ProgressCallback? = if let handler = eventHandler {

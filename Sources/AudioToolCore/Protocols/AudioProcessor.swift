@@ -35,6 +35,22 @@ public protocol AudioProcessor: Sendable {
 
     /// Output channels produced
     var outputChannels: Int { get }
+
+    /// How audio should be converted when adapting it to ``sampleRate``.
+    ///
+    /// Each model was converted from a Python implementation, and the resampler used
+    /// there is part of what it was validated against - so this is a correctness
+    /// setting, not a speed/quality dial. A provider that reproduces a reference
+    /// pipeline should say so here rather than leaving the caller to guess.
+    ///
+    /// Defaults to ``ResamplingQuality/balanced``.
+    var preferredResamplingQuality: ResamplingQuality { get }
+}
+
+public extension AudioProcessor {
+    /// Matches the historical facade behaviour, so a provider that has not been
+    /// checked against its reference implementation keeps its current output.
+    var preferredResamplingQuality: ResamplingQuality { .balanced }
 }
 
 // MARK: - Audio Transform

@@ -217,3 +217,53 @@ struct ChainedResamplingTests {
         #expect(output.sampleRate == 48000)
     }
 }
+
+// MARK: - Per-model resampling preference
+
+@Suite("Resampling preference")
+struct ResamplingPreferenceTests {
+
+    /// A provider that reproduces a Python pipeline needs the facade to convert audio
+    /// the way that pipeline did. Without this the edge conversion was always cubic,
+    /// so a provider validated against a different resampler silently got another one.
+    struct PickyProcessor: AudioProcessor {
+        let sampleRate = 16000
+        let inputChannels = 1
+        let outputChannels = 1
+        var preferredResamplingQuality: ResamplingQuality { .high }
+    }
+
+    struct DefaultProcessor: AudioProcessor {
+        let sampleRate = 16000
+        let inputChannels = 1
+        let outputChannels = 1
+    }
+
+    @Test("Providers default to balanced")
+    func defaultsToBalanced() {
+        #expect(DefaultProcessor().preferredResamplingQuality == .balanced)
+    }
+
+    @Test("A provider can declare a different quality")
+    func canDeclarePreference() {
+        #expect(PickyProcessor().preferredResamplingQuality == .high)
+    }
+
+    /// The qualities must actually differ, otherwise honouring the preference would be
+    /// a no-op and this whole seam would be decorative.
+    @Test("Quality choice changes the converted samples")
+    func qualityIsObservable() throws {
+        let rate = 44100
+        let samples = (0..<rate).map { i in
+            sin(2 * Float.pi * 300 * Float(i) / Float(rate)) * 0.4
+                + sin(2 * Float.pi * 9000 * Float(i) / Float(rate)) * 0.3
+        }
+        let input = AudioBuffer(samples: samples, sampleRate: rate, channels: 1)
+
+        let balanced = try input.resampled(to: 16000, quality: .balanced)
+        let high = try input.resampled(to: 16000, quality: .high)
+
+        #expect(balanced.samples != high.samples,
+                "balanced and high produced identical output - the preference would be meaningless")
+    }
+}

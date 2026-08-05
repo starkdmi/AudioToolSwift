@@ -50,6 +50,12 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     // MARK: - AudioProcessor Conformance
     
     public nonisolated let sampleRate: Int = 32000
+    /// Matches the reference conversion, which loaded audio through AVAudioConverter's
+    /// Mastering algorithm at maximum quality (see `runUSS` in USS/Utils/Inference.swift).
+    /// The shipped path previously used the generic cubic default instead, so provider
+    /// output could differ from what the conversion was validated against.
+    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
+
     public nonisolated let inputChannels: Int = 1
     public nonisolated let outputChannels: Int = 1
     
