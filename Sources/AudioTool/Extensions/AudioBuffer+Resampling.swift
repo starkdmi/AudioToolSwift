@@ -17,6 +17,25 @@ public typealias CVAudioBuffer = AudioToolCore.AudioBuffer
 // MARK: - Resampling Quality
 
 /// Resampling quality options matching AudioUtils
+/// Resampling quality.
+///
+/// - Important: These are not simply "worse" and "better". Each model here was
+///   converted from a Python implementation, and several deliberately reproduce that
+///   pipeline's resampling rather than the highest-fidelity option available - a
+///   lower-quality resampler can produce *smaller* error against the reference when
+///   it is what the model saw during training. `Models/Chatterbox` replicates scipy's
+///   polyphase edge behaviour and librosa's silence trimming; `Models/USS` loads
+///   through AVAudioConverter's Mastering algorithm at maximum quality;
+///   `Models/MossFormer2SE` carries its own quality setting.
+///
+///   So do not "upgrade" the default here on signal-processing grounds. Anything that
+///   changes which resampler feeds a model changes that model's output, and needs
+///   measuring per model against the reference implementation - not reasoning from
+///   first principles about anti-aliasing.
+///
+///   Known gap: the facade converts audio at the edge using this type at `.balanced`,
+///   regardless of which provider the audio is destined for, so a provider's own
+///   preference does not currently reach it. Tracked separately.
 public enum ResamplingQuality: Sendable {
     /// Linear interpolation (fastest, lowest quality)
     case fast
@@ -99,8 +118,18 @@ private func resampleLinear(_ samples: [Float], fromRate: Float, toRate: Float) 
 
 // MARK: - Cubic Resampling (Catmull-Rom)
 
-/// Catmull-Rom cubic interpolation resampling
-/// Achieves ~84.3 dB SNR with 0.01% THD (matching AudioUtils quality)
+/// Catmull-Rom cubic interpolation resampling.
+///
+/// Pure interpolation with no anti-aliasing stage, so downsampling folds content
+/// above the new Nyquist back into the band. That is a property to be aware of, not
+/// necessarily a defect to fix - see the note on `ResamplingQuality`.
+///
+/// This is a second copy of the implementation in SwiftAudio's AudioUtils; the two
+/// should be reconciled rather than left to drift.
+///
+/// - Note: The figure "~84.3 dB SNR with 0.01% THD" was carried over from AudioUtils
+///   and has not been verified here; it cannot hold for downsampling without a
+///   low-pass stage.
 private func resampleCubic(_ samples: [Float], fromRate: Float, toRate: Float) -> [Float] {
     let ratio = toRate / fromRate
     let inputLength = samples.count
