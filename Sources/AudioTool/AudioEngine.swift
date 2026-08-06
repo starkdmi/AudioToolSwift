@@ -83,52 +83,62 @@ public actor AudioEngine {
     
     // MARK: - Provider Registration (for external libraries like AudioToolMLX, AudioToolCoreML)
 
-    /// Track a provider with the residency manager, if it can be.
+    /// Run `body` with `provider` resident and protected from eviction.
     ///
-    /// Registration is opportunistic: providers that conform to ``ManagedModel``
-    /// participate in memory accounting and LRU eviction, and those that do not are
-    /// simply used directly. Before this existed nothing was ever registered outside
-    /// of tests, so the eviction policy was dead code - it could never fire, however
-    /// many models were resident.
+    /// Providers that conform to ``ManagedModel`` participate in memory accounting
+    /// and LRU eviction; those that do not are used directly. Residency is engaged
+    /// here, at the point of use, rather than at registration - which is both where
+    /// the LRU timestamp is meaningful and the only place an evicted model can be
+    /// brought back before someone tries to run inference on it.
     ///
-    /// Eviction remains best-effort. Memory figures are per-provider estimates rather
-    /// than measurements, and a model evicted while a caller still holds the provider
-    /// will simply reload on next use.
-    private func trackIfManaged(_ provider: Any) {
-        guard let managed = provider as? any ManagedModel else { return }
-        Task { [modelManager] in
-            try? await modelManager.register(managed)
+    /// Registering a provider deliberately does *not* load it. An earlier version
+    /// registered from the synchronous `register(...)` methods via a detached task,
+    /// which meant a call that looked like bookkeeping could start a multi-hundred-
+    /// megabyte download and swallow its error.
+    ///
+    /// Eviction remains best-effort in one respect: memory figures are per-provider
+    /// estimates, not measurements.
+    private func withResidency<T>(
+        _ provider: Any,
+        _ body: () async throws -> T
+    ) async throws -> T {
+        guard let managed = provider as? any ManagedModel else {
+            return try await body()
+        }
+        try await modelManager.beginUse(managed)
+        do {
+            let value = try await body()
+            await modelManager.endUse(managed.modelId)
+            return value
+        } catch {
+            await modelManager.endUse(managed.modelId)
+            throw error
         }
     }
-    
+
     /// Register an enhancement provider
     public func register(enhancer: any SpeechEnhancer, for model: EnhancementModel) {
         self.enhancerProviders[model] = enhancer
-        trackIfManaged(enhancer)
     }
     
     /// Register a diarization provider
     public func register(diarization: any DiarizationProvider) {
         self.diarizationProvider = diarization
-        trackIfManaged(diarization)
     }
     
     /// Register a separator provider
     public func register(separator: any SpeechSeparator, for model: SeparationModel) {
         self.separatorProviders[model] = separator
-        trackIfManaged(separator)
     }
     
     /// Register an upscaler provider
     public func register(upscaler: any AudioUpscaler) {
         self.upscalerProvider = upscaler
-        trackIfManaged(upscaler)
     }
     
     /// Register a synthesizer provider
     public func register(synthesizer: any SpeechSynthesizer, for model: SynthesisModel) {
         self.synthesizerProviders[model.modelName] = synthesizer
-        trackIfManaged(synthesizer)
     }
     
     /// Register a translation provider
@@ -283,7 +293,7 @@ public actor AudioEngine {
         
         // Resample to model's expected sample rate if needed
         let input = try audio.resampled(to: vad.sampleRate, quality: vad.preferredResamplingQuality)
-        return try await vad.detect(input)
+        return try await withResidency(vad) { try await vad.detect(input) }
     }
     
     /// Speaker diarization
@@ -298,10 +308,12 @@ public actor AudioEngine {
         // Diarization typically expects 16kHz
         let input = try audio.resampled(to: 16000)
         
-        if let hint = vadHint {
-            return try await diarizer.diarize(input, vadHint: hint)
-        } else {
-            return try await diarizer.diarize(input)
+        return try await withResidency(diarizer) {
+            if let hint = vadHint {
+                return try await diarizer.diarize(input, vadHint: hint)
+            } else {
+                return try await diarizer.diarize(input)
+            }
         }
     }
     
@@ -341,7 +353,7 @@ public actor AudioEngine {
         // Adapt to the provider's rate - it validates rather than resampling.
         let input = try audio.resampled(to: enhancer.sampleRate,
                                         quality: enhancer.preferredResamplingQuality)
-        let output = try await enhancer.process(input)
+        let output = try await withResidency(enhancer) { try await enhancer.process(input) }
         
         guard preservingSampleRate, output.sampleRate != audio.sampleRate else {
             return output
@@ -367,13 +379,18 @@ public actor AudioEngine {
         var result = resampledAudio
         let speechSegments = segments.filter(\.isSpeech)
         
-        for segment in speechSegments {
-            // Scale time ranges to resampled audio
-            let scaledStart = segment.timeRange.start
-            let scaledEnd = segment.timeRange.end
-            let chunk = resampledAudio.slice(scaledStart..<scaledEnd)
-            let enhanced = try await enhancer.process(chunk)
-            result = result.replacing(scaledStart..<scaledEnd, with: enhanced)
+        // One residency bracket around the whole segment loop, not one per segment:
+        // the model is in continuous use, and re-checking per chunk would only add
+        // actor hops.
+        try await withResidency(enhancer) {
+            for segment in speechSegments {
+                // Scale time ranges to resampled audio
+                let scaledStart = segment.timeRange.start
+                let scaledEnd = segment.timeRange.end
+                let chunk = resampledAudio.slice(scaledStart..<scaledEnd)
+                let enhanced = try await enhancer.process(chunk)
+                result = result.replacing(scaledStart..<scaledEnd, with: enhanced)
+            }
         }
         
         guard preservingSampleRate, result.sampleRate != audio.sampleRate else {
@@ -438,7 +455,9 @@ public actor AudioEngine {
                                         quality: separator.preferredResamplingQuality)
         
         // Use progress-aware separation
-        let outputs = try await separator.separate(input, onProgress: onProgress)
+        let outputs = try await withResidency(separator) {
+            try await separator.separate(input, onProgress: onProgress)
+        }
         
         guard preservingSampleRate, separator.sampleRate != audio.sampleRate else {
             return outputs
@@ -650,7 +669,7 @@ public actor AudioEngine {
         // the result always comes back at the upscaler's output rate.
         let input = try audio.resampled(to: upscaler.sampleRate,
                                         quality: upscaler.preferredResamplingQuality)
-        return try await upscaler.process(input)
+        return try await withResidency(upscaler) { try await upscaler.process(input) }
     }
     
     // MARK: - Transcription
@@ -666,7 +685,7 @@ public actor AudioEngine {
         
         // Resample to model's expected sample rate if needed
         let input = try audio.resampled(to: model.sampleRate)
-        return try await transcriber.transcribe(input)
+        return try await withResidency(transcriber) { try await transcriber.transcribe(input) }
     }
     
     /// Transcribe audio with progress reporting
@@ -686,7 +705,9 @@ public actor AudioEngine {
         
         // Resample to model's expected sample rate if needed
         let input = try audio.resampled(to: model.sampleRate)
-        return try await transcriber.transcribe(input, onProgress: onProgress)
+        return try await withResidency(transcriber) {
+            try await transcriber.transcribe(input, onProgress: onProgress)
+        }
     }
     
     // MARK: - Transcription + Diarization Merge
@@ -783,7 +804,7 @@ public actor AudioEngine {
         guard let classifier = classifierProvider else {
             throw AudioToolError.modelNotLoaded("Classifier")
         }
-        return try await classifier.classify(audio)
+        return try await withResidency(classifier) { try await classifier.classify(audio) }
     }
     
     // MARK: - Speaker Embedding Extraction
@@ -815,7 +836,7 @@ public actor AudioEngine {
         guard let extractor = embeddingExtractorProvider else {
             throw AudioToolError.modelNotLoaded("SpeakerEmbeddingExtractor")
         }
-        return try await extractor.extractEmbedding(audio)
+        return try await withResidency(extractor) { try await extractor.extractEmbedding(audio) }
     }
     
     /// Extract speaker embeddings from multiple audio segments
@@ -830,7 +851,7 @@ public actor AudioEngine {
         guard let extractor = embeddingExtractorProvider else {
             throw AudioToolError.modelNotLoaded("SpeakerEmbeddingExtractor")
         }
-        return try await extractor.extractEmbeddings(audioSegments)
+        return try await withResidency(extractor) { try await extractor.extractEmbeddings(audioSegments) }
     }
     
     /// Identify separated tracks using embedding similarity
@@ -944,7 +965,7 @@ public actor AudioEngine {
         guard let synthesizer = synthesizerProviders[model.modelName] else {
             throw AudioToolError.modelNotLoaded(model.modelName)
         }
-        return try await synthesizer.synthesize(text, voice: voice)
+        return try await withResidency(synthesizer) { try await synthesizer.synthesize(text, voice: voice) }
     }
     
     /// Stream synthesized audio chunks
@@ -1101,7 +1122,9 @@ public actor AudioEngine {
                 if let vad = vadProvider {
                     // Resample to model's expected sample rate if needed
                     let input = try context.currentAudio.resampled(to: model.sampleRate)
-                    segments = try await vad.detect(input, onProgress: progressCallback)
+                    segments = try await withResidency(vad) {
+                        try await vad.detect(input, onProgress: progressCallback)
+                    }
                 } else {
                     throw AudioToolError.modelNotLoaded("VAD")
                 }
@@ -1138,7 +1161,9 @@ public actor AudioEngine {
                 if let diarizer = diarizationProvider {
                     // Diarization typically expects 16kHz
                     let input = try context.currentAudio.resampled(to: 16000)
-                    timeline = try await diarizer.diarize(input, onProgress: progressCallback)
+                    timeline = try await withResidency(diarizer) {
+                        try await diarizer.diarize(input, onProgress: progressCallback)
+                    }
                 } else {
                     throw AudioToolError.modelNotLoaded("Diarization")
                 }
@@ -1188,50 +1213,58 @@ public actor AudioEngine {
                 let speechSegments = context.analysis?.speechSegments ?? []
                 let enhanced: AudioToolCore.AudioBuffer
                 if let eventHandler, let streamable = enhancer as? StreamableOutput {
-                    let resampledAudio = try context.currentAudio.resampled(to: model.sampleRate)
-                    if !speechSegments.isEmpty {
-                        let totalSpeechSamples = speechSegments.reduce(0) { partial, segment in
-                            partial + Int(segment.timeRange.duration * Double(model.sampleRate))
-                        }
-                        var processedSamples = 0
-                        var resultBuffer = resampledAudio
-                        for segment in speechSegments {
-                            let chunk = resampledAudio.slice(segment.timeRange.start..<segment.timeRange.end)
-                            var segmentSamples: [Float] = []
-                            segmentSamples.reserveCapacity(chunk.samples.count)
-                            for try await processedChunk in streamable.processStream(chunk) {
-                                segmentSamples.append(contentsOf: processedChunk.samples)
+                    enhanced = try await withResidency(enhancer) {
+                        // The provider's rate and the provider's resampler - the batch path
+                        // already went through the facade for both. Using `model.sampleRate`
+                        // and the default resampler here made the streaming result differ
+                        // from the batch one for no reason a caller could see.
+                        let resampledAudio = try context.currentAudio.resampled(
+                            to: enhancer.sampleRate,
+                            quality: enhancer.preferredResamplingQuality)
+                        if !speechSegments.isEmpty {
+                            let totalSpeechSamples = speechSegments.reduce(0) { partial, segment in
+                                partial + Int(segment.timeRange.duration * Double(enhancer.sampleRate))
+                            }
+                            var processedSamples = 0
+                            var resultBuffer = resampledAudio
+                            for segment in speechSegments {
+                                let chunk = resampledAudio.slice(segment.timeRange.start..<segment.timeRange.end)
+                                var segmentSamples: [Float] = []
+                                segmentSamples.reserveCapacity(chunk.samples.count)
+                                for try await processedChunk in streamable.processStream(chunk) {
+                                    segmentSamples.append(contentsOf: processedChunk.samples)
+                                    processedSamples += processedChunk.samples.count
+                                    let percent = min(100.0, Double(processedSamples) / Double(max(totalSpeechSamples, 1)) * 100)
+                                    await eventHandler(.progress(stage: stageName, percent: percent))
+                                }
+                                let processedSegment = AudioBuffer(
+                                    samples: segmentSamples,
+                                    sampleRate: resampledAudio.sampleRate,
+                                    channels: resampledAudio.channels
+                                )
+                                resultBuffer = resultBuffer.replacing(segment.timeRange.start..<segment.timeRange.end, with: processedSegment)
+                            }
+                            // Stays at the model's rate; converted once on the way out.
+                            return resultBuffer
+                        } else {
+                            let totalSamples = resampledAudio.samples.count
+                            var processedSamples = 0
+                            var streamedSamples: [Float] = []
+                            streamedSamples.reserveCapacity(totalSamples)
+                            for try await processedChunk in streamable.processStream(resampledAudio) {
+                                streamedSamples.append(contentsOf: processedChunk.samples)
                                 processedSamples += processedChunk.samples.count
-                                let percent = min(100.0, Double(processedSamples) / Double(max(totalSpeechSamples, 1)) * 100)
+                                let percent = min(100.0, Double(processedSamples) / Double(max(totalSamples, 1)) * 100)
                                 await eventHandler(.progress(stage: stageName, percent: percent))
                             }
-                            let processedSegment = AudioBuffer(
-                                samples: segmentSamples,
+                            let streamed = AudioBuffer(
+                                samples: streamedSamples,
                                 sampleRate: resampledAudio.sampleRate,
                                 channels: resampledAudio.channels
                             )
-                            resultBuffer = resultBuffer.replacing(segment.timeRange.start..<segment.timeRange.end, with: processedSegment)
+                            // Stays at the model's rate; converted once on the way out.
+                            return streamed
                         }
-                        // Stays at the model's rate; converted once on the way out.
-                        enhanced = resultBuffer
-                    } else {
-                        let totalSamples = resampledAudio.samples.count
-                        var processedSamples = 0
-                        var streamedSamples: [Float] = []
-                        streamedSamples.reserveCapacity(totalSamples)
-                        for try await processedChunk in streamable.processStream(resampledAudio) {
-                            streamedSamples.append(contentsOf: processedChunk.samples)
-                            processedSamples += processedChunk.samples.count
-                            let percent = min(100.0, Double(processedSamples) / Double(max(totalSamples, 1)) * 100)
-                            await eventHandler(.progress(stage: stageName, percent: percent))
-                        }
-                        let streamed = AudioBuffer(
-                            samples: streamedSamples,
-                            sampleRate: resampledAudio.sampleRate,
-                            channels: resampledAudio.channels
-                        )
-                        // Stays at the model's rate; converted once on the way out.
-                        enhanced = streamed
                     }
                 } else {
                     if !speechSegments.isEmpty {
@@ -1439,26 +1472,36 @@ public actor AudioEngine {
                 
                 // Use streaming for progress reporting if supported
                 if let eventHandler, let streamable = upscaler as? StreamableOutput {
-                    let inputAudio = context.currentAudio
-                    let totalSamples = inputAudio.samples.count
-                    var processedSamples = 0
-                    var streamedSamples: [Float] = []
-                    streamedSamples.reserveCapacity(totalSamples * 3) // Upscaling typically 3x samples
-                    
-                    for try await processedChunk in streamable.processStream(inputAudio) {
-                        streamedSamples.append(contentsOf: processedChunk.samples)
-                        processedSamples += processedChunk.samples.count
-                        // Estimate progress based on input samples (3x output expected)
-                        let estimatedTotalOutput = totalSamples * 3
-                        let percent = min(100.0, Double(processedSamples) / Double(max(estimatedTotalOutput, 1)) * 100)
-                        await eventHandler(.progress(stage: stageName, percent: percent))
+                    upscaled = try await withResidency(upscaler) {
+                        // Adapt to the upscaler's input rate before handing it over.
+                        // The batch path below does this via `upscale(_:)`; the streaming
+                        // path did not, so once the provider started validating its rate,
+                        // an upscale pipeline on 44.1/48 kHz audio threw sampleRateMismatch
+                        // the moment a progress handler was attached - the same call
+                        // succeeded without one.
+                        let inputAudio = try context.currentAudio.resampled(
+                            to: upscaler.sampleRate,
+                            quality: upscaler.preferredResamplingQuality)
+                        let totalSamples = inputAudio.samples.count
+                        var processedSamples = 0
+                        var streamedSamples: [Float] = []
+                        let expansion = max(1, upscaler.outputSampleRate / max(upscaler.sampleRate, 1))
+                        streamedSamples.reserveCapacity(totalSamples * expansion)
+
+                        for try await processedChunk in streamable.processStream(inputAudio) {
+                            streamedSamples.append(contentsOf: processedChunk.samples)
+                            processedSamples += processedChunk.samples.count
+                            let estimatedTotalOutput = totalSamples * expansion
+                            let percent = min(100.0, Double(processedSamples) / Double(max(estimatedTotalOutput, 1)) * 100)
+                            await eventHandler(.progress(stage: stageName, percent: percent))
+                        }
+
+                        return AudioBuffer(
+                            samples: streamedSamples,
+                            sampleRate: upscaler.outputSampleRate,
+                            channels: inputAudio.channels
+                        )
                     }
-                    
-                    upscaled = AudioBuffer(
-                        samples: streamedSamples,
-                        sampleRate: upscaler.outputSampleRate,
-                        channels: inputAudio.channels
-                    )
                 } else {
                     // Fallback to batch processing
                     upscaled = try await upscale(context.currentAudio)

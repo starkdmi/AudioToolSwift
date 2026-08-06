@@ -312,3 +312,61 @@ public final class MockClassifier: SoundClassifier, @unchecked Sendable {
         input
     }
 }
+
+// MARK: - Mock Streaming Upscaler
+
+/// An upscaler that streams, so the pipeline takes its progress-reporting path.
+///
+/// ``MockUpscaler`` is batch-only, which is why the streaming branch went untested
+/// long enough for it to stop resampling its input.
+public final class MockStreamingUpscaler: AudioUpscaler, StreamableOutput, @unchecked Sendable {
+
+    public let sampleRate: Int = 16000
+    public let inputChannels: Int = 1
+    public let outputChannels: Int = 1
+    public let inputSampleRate: Int = 16000
+    public let outputSampleRate: Int = 48000
+
+    /// Rate of every buffer handed to `process` or `processStream`, in order.
+    public var receivedSampleRates: [Int] = []
+
+    public init() {}
+
+    private func upsample(_ input: AudioBuffer) -> AudioBuffer {
+        var upsampled: [Float] = []
+        upsampled.reserveCapacity(input.samples.count * 3)
+        for sample in input.samples {
+            upsampled.append(contentsOf: [sample, sample, sample])
+        }
+        return AudioBuffer(samples: upsampled, sampleRate: outputSampleRate, channels: input.channels)
+    }
+
+    public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
+        receivedSampleRates.append(input.sampleRate)
+        try validateSampleRate(input)
+        return upsample(input)
+    }
+
+    public nonisolated func processStream(_ input: AudioBuffer) -> AsyncThrowingStream<AudioBuffer, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                self.receivedSampleRates.append(input.sampleRate)
+                do {
+                    try self.validateSampleRate(input)
+                } catch {
+                    continuation.finish(throwing: error)
+                    return
+                }
+                // Two chunks, so a consumer that only handles one is caught.
+                let midpoint = input.samples.count / 2
+                let head = AudioBuffer(samples: Array(input.samples[..<midpoint]),
+                                       sampleRate: input.sampleRate, channels: input.channels)
+                let tail = AudioBuffer(samples: Array(input.samples[midpoint...]),
+                                       sampleRate: input.sampleRate, channels: input.channels)
+                continuation.yield(self.upsample(head))
+                continuation.yield(self.upsample(tail))
+                continuation.finish()
+            }
+        }
+    }
+}

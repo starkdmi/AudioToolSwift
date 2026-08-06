@@ -280,9 +280,11 @@ struct ResidencyWiringTests {
         let outputChannels = 1
         let minChunkSize = 512
         let recommendedChunkSize = 16000
-        nonisolated let modelId = "managed_mock"
+        nonisolated let modelId: String
         nonisolated let estimatedMemoryBytes = 1_000_000
         var loaded = true
+
+        init(modelId: String = "managed_mock") { self.modelId = modelId }
         func load() async throws { loaded = true }
         func unload() async { loaded = false }
         func checkIfLoaded() async -> Bool { loaded }
@@ -293,17 +295,57 @@ struct ResidencyWiringTests {
         func reset() async {}
     }
 
+    /// Registration is bookkeeping. It used to spawn a detached task that called
+    /// `register` on the manager - which loads, and for a real provider downloads -
+    /// from a call that looks synchronous and returns no error.
+    @Test("Registering a provider does not load it")
+    func registrationDoesNotLoad() async throws {
+        let engine = AudioEngine()
+        let enhancer = ManagedEnhancer()
+        enhancer.loaded = false
+        await engine.register(enhancer: enhancer, for: .mossformerSE16k)
+
+        try await Task.sleep(for: .milliseconds(100))
+        let stats = await engine.modelStats
+        #expect(stats.loadedModelCount == 0, "registration should not make anything resident")
+        #expect(enhancer.loaded == false, "registration should not trigger a load")
+    }
+
     /// The defect this closes: nothing ever entered the residency manager outside of
     /// tests, so its LRU eviction could not fire no matter how many models were held.
-    @Test("Registering a ManagedModel provider tracks it for residency")
-    func managedProviderIsTracked() async throws {
+    @Test("Using a ManagedModel provider makes it resident")
+    func managedProviderIsTrackedOnUse() async throws {
         let engine = AudioEngine()
         await engine.register(enhancer: ManagedEnhancer(), for: .mossformerSE16k)
 
-        // Registration is asynchronous; give it a moment to land.
-        try await Task.sleep(for: .milliseconds(100))
+        _ = try await engine.enhance(
+            AudioBuffer(samples: [Float](repeating: 0.1, count: 16000), sampleRate: 16000, channels: 1),
+            model: .mossformerSE16k)
+
         let stats = await engine.modelStats
-        #expect(stats.loadedModelCount == 1, "provider should be resident, got \(stats.loadedModelCount)")
+        #expect(stats.loadedModelCount == 1, "provider should be resident after use, got \(stats.loadedModelCount)")
+    }
+
+    /// End to end: evict, then use again. Before this, the second call reached an
+    /// unloaded provider and a real one would have thrown `modelNotLoaded`.
+    @Test("A model evicted under pressure is reloaded by the next call")
+    func evictedModelIsUsableAgain() async throws {
+        // Room for one model at a time.
+        let engine = AudioEngine(configuration: AudioToolConfiguration(modelMemoryLimit: 1_500_000))
+        let first = ManagedEnhancer()
+        let second = ManagedEnhancer(modelId: "managed_mock_2")
+        await engine.register(enhancer: first, for: .mossformerSE16k)
+        await engine.register(enhancer: second, for: .mossformerSE48k)
+
+        let audio = AudioBuffer(samples: [Float](repeating: 0.1, count: 16000), sampleRate: 16000, channels: 1)
+
+        _ = try await engine.enhance(audio, model: .mossformerSE16k)
+        _ = try await engine.enhance(audio, model: .mossformerSE48k)
+        #expect(first.loaded == false, "the first model should have been evicted to make room")
+
+        // The call that used to fail.
+        _ = try await engine.enhance(audio, model: .mossformerSE16k)
+        #expect(first.loaded, "using an evicted model must reload it")
     }
 
     @Test("A provider that is not ManagedModel still registers and simply is not tracked")
@@ -311,14 +353,89 @@ struct ResidencyWiringTests {
         let engine = AudioEngine()
         await engine.register(enhancer: MockEnhancer(), for: .mossformerSE16k)
 
-        try await Task.sleep(for: .milliseconds(100))
-        let stats = await engine.modelStats
-        #expect(stats.loadedModelCount == 0)
-
-        // And it is still usable.
         let out = try await engine.enhance(
             AudioBuffer(samples: [Float](repeating: 0.1, count: 16000), sampleRate: 16000, channels: 1),
             model: .mossformerSE16k)
         #expect(out.samples.count == 16000)
+
+        let stats = await engine.modelStats
+        #expect(stats.loadedModelCount == 0)
+    }
+}
+
+// MARK: - Streaming stages and sample rate
+
+/// Attaching a progress handler must not change what a stage does.
+///
+/// The pipeline picks a streaming implementation whenever a provider supports it
+/// *and* an event handler is attached, which makes progress reporting a silent
+/// switch between two code paths. They were not equivalent: the batch upscale went
+/// through `upscale(_:)`, which adapts the input to the provider's rate, while the
+/// streaming branch handed over `context.currentAudio` untouched. Once the provider
+/// started validating its rate, the same pipeline succeeded without a handler and
+/// threw `sampleRateMismatch` with one.
+@Suite("Streaming stages honour the provider's rate")
+struct StreamingStageSampleRateTests {
+
+    private func tone(sampleRate: Int, seconds: Double = 1.0) -> AudioBuffer {
+        let count = Int(Double(sampleRate) * seconds)
+        let samples = (0..<count).map { i in
+            sin(2 * Float.pi * 440 * Float(i) / Float(sampleRate)) * 0.5
+        }
+        return AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
+    }
+
+    @Test("Upscale with a progress handler converts input to the upscaler's rate")
+    func streamingUpscaleResamples() async throws {
+        let engine = AudioEngine()
+        let upscaler = MockStreamingUpscaler()
+        await engine.register(upscaler: upscaler)
+
+        let result = try await engine.pipeline()
+            .upscale()
+            .onEvent { _ in }
+            .process(audio: tone(sampleRate: 44100))
+
+        #expect(upscaler.receivedSampleRates == [16000],
+                "streaming upscaler should be handed 16 kHz, got \(upscaler.receivedSampleRates)")
+        #expect(result.audio?.sampleRate == 48000)
+    }
+
+    @Test("Upscale reaches the same rates with and without a progress handler")
+    func streamingAndBatchAgree() async throws {
+        let batchEngine = AudioEngine()
+        let batchUpscaler = MockStreamingUpscaler()
+        await batchEngine.register(upscaler: batchUpscaler)
+        let batchResult = try await batchEngine.pipeline()
+            .upscale()
+            .process(audio: tone(sampleRate: 48000))
+
+        let streamEngine = AudioEngine()
+        let streamUpscaler = MockStreamingUpscaler()
+        await streamEngine.register(upscaler: streamUpscaler)
+        let streamResult = try await streamEngine.pipeline()
+            .upscale()
+            .onEvent { _ in }
+            .process(audio: tone(sampleRate: 48000))
+
+        #expect(batchUpscaler.receivedSampleRates == streamUpscaler.receivedSampleRates,
+                "the progress handler changed which rate the provider saw: \(batchUpscaler.receivedSampleRates) vs \(streamUpscaler.receivedSampleRates)")
+        #expect(batchResult.audio?.sampleRate == streamResult.audio?.sampleRate)
+        #expect(batchResult.audio?.samples.count == streamResult.audio?.samples.count)
+    }
+
+    @Test("Enhancement with a progress handler uses the provider's resampler")
+    func streamingEnhanceUsesProviderPreference() async throws {
+        let engine = AudioEngine()
+        let enhancer = MockEnhancer()
+        await engine.register(enhancer: enhancer, for: .mossformerSE16k)
+
+        _ = try await engine.pipeline()
+            .enhance(.mossformerSE16k)
+            .onEvent { _ in }
+            .process(audio: tone(sampleRate: 44100))
+
+        #expect(enhancer.receivedSampleRates == [16000],
+                "streaming enhancer should be handed 16 kHz exactly once, got \(enhancer.receivedSampleRates)")
     }
 }
