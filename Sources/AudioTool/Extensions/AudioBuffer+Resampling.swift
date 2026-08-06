@@ -168,6 +168,17 @@ private func resampleAVAudioConverter(_ samples: [Float], fromRate: Float, toRat
     guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
         throw ResamplingError.conversionFailed
     }
+
+    // Mastering at maximum quality, explicitly. AVAudioConverter defaults to
+    // `AVSampleRateConverterAlgorithm_Normal` at quality 64 (medium), which is not
+    // what `.high` promises and not what any reference pipeline here uses: every
+    // standalone Swift generator under `Models/` asks for Mastering/.max, and USS
+    // declares `.high` precisely to reproduce that. Measured on a 48 -> 16 kHz
+    // downsample of a signal with content to 22 kHz, the default sits 25% RMS away
+    // from Mastering/max - so a provider asking for the reference resampler was
+    // quietly getting something else.
+    converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Mastering
+    converter.sampleRateConverterQuality = AVAudioQuality.max.rawValue
     
     // Create input buffer
     guard let inputBuffer = AVAudioPCMBuffer(

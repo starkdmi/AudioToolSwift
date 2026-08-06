@@ -76,6 +76,11 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     public let modelType: Model
     public nonisolated var sampleRate: Int { modelType.sampleRate }
     public nonisolated let inputChannels: Int = 1
+
+    /// Matches the standalone Swift generator, which asks AVAudioConverter for
+    /// Mastering at maximum quality
+    /// (`Models/mosforrmer2_ss_mlx_swift/Sources/Generate/main.swift:155`).
+    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
     public nonisolated let outputChannels: Int = 1
     
     public nonisolated var minChunkSize: Int { modelType.sampleRate / 5 }  // 0.2s
@@ -318,6 +323,10 @@ public actor DemucsProvider: MusicSeparator {
     }
     
     public nonisolated let sampleRate: Int = 44100
+
+    /// Matches the reference, which resamples with `torchaudio.transforms.Resample` -
+    /// windowed-sinc, and anti-aliased. `Models/python/demucs_mlx/run.py:39`.
+    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
     public nonisolated let inputChannels: Int = 2
     public nonisolated let outputChannels: Int = 1
     

@@ -50,6 +50,12 @@ public protocol AudioProcessor: Sendable {
 public extension AudioProcessor {
     /// Matches the historical facade behaviour, so a provider that has not been
     /// checked against its reference implementation keeps its current output.
+    ///
+    /// Deliberately still ``ResamplingQuality/balanced`` even though every reference
+    /// that has been audited wants ``ResamplingQuality/high``. Flipping the default
+    /// would change the output of providers nobody has checked - the CoreML
+    /// enhancer, the FluidAudio and Apple backends - which is the same class of
+    /// silent change this seam exists to prevent. Audit a provider, then declare.
     var preferredResamplingQuality: ResamplingQuality { .balanced }
 }
 

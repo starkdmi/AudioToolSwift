@@ -39,6 +39,10 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     
     public nonisolated let sampleRate: Int = 48000
     public nonisolated let inputChannels: Int = 1
+
+    /// Matches the reference, which resamples with `scipy.signal.resample` -
+    /// FFT-based, and anti-aliased. `Models/python/mossformer2_se_mlx/generate.py:271`.
+    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
     public nonisolated let outputChannels: Int = 1
     public nonisolated let minChunkSize: Int = 9600   // 0.2s at 48kHz
     public nonisolated let recommendedChunkSize: Int = 192000  // 4s at 48kHz (optimal from benchmarks)
@@ -352,6 +356,12 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     
     public nonisolated let sampleRate: Int = 16000
     public nonisolated let inputChannels: Int = 1
+
+    /// The reference takes 16 kHz input directly and never resamples, so there is no
+    /// resampler to match. `.high` is the choice for everything else: the conversion
+    /// happens at the facade's edge, before the model sees anything, and an
+    /// anti-aliased one is what the other references all use.
+    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
     public nonisolated let outputChannels: Int = 1
     public nonisolated let minChunkSize: Int = 3200   // 0.2s at 16kHz
     public nonisolated let recommendedChunkSize: Int = 64000  // 4s at 16kHz

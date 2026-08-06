@@ -439,3 +439,120 @@ struct StreamingStageSampleRateTests {
                 "streaming enhancer should be handed 16 kHz exactly once, got \(enhancer.receivedSampleRates)")
     }
 }
+
+// MARK: - What the resampler preference is worth
+
+/// The seam existed but was empty: only USS declared a preference, so every other
+/// model got cubic interpolation at the facade's edge. Cubic has no anti-aliasing
+/// stage, and no reference pipeline in `Models/` resamples that way - scipy's
+/// `signal.resample`, `librosa.resample`, `torchaudio.transforms.Resample` and
+/// AVAudioConverter's Mastering algorithm are all band-limited.
+///
+/// Measured on a 48 -> 16 kHz downsample of a signal with content to 22 kHz: cubic
+/// sits 131% RMS away from Mastering/max - the folded-back content is larger than
+/// the signal. On a signal already under the new Nyquist the same comparison is
+/// 0.56%. Aliasing is the whole difference, which is why this matters only when the
+/// caller's audio is wider than the model's band.
+@Suite("Anti-aliasing on downsample")
+struct AntiAliasingTests {
+
+    /// Energy at `frequency` in `samples`, by direct correlation - enough to tell
+    /// whether a tone survived, without pulling in an FFT.
+    private func energy(at frequency: Float, in samples: [Float], sampleRate: Int) -> Float {
+        var real: Float = 0
+        var imaginary: Float = 0
+        for (i, sample) in samples.enumerated() {
+            let phase = 2 * Float.pi * frequency * Float(i) / Float(sampleRate)
+            real += sample * cos(phase)
+            imaginary += sample * sin(phase)
+        }
+        return sqrt(real * real + imaginary * imaginary) / Float(samples.count)
+    }
+
+    /// A 15 kHz tone cannot exist at 16 kHz - it is above the 8 kHz Nyquist. An
+    /// anti-aliased resampler removes it. Cubic interpolation folds it back to
+    /// 16000 - 15000 = 1 kHz, inventing a tone that was never in the source.
+    @Test("High quality rejects content above the target Nyquist; cubic folds it back")
+    func aliasedToneIsSuppressed() throws {
+        let rate = 48000
+        let toneHz: Float = 15000
+        let samples = (0..<rate).map { i in
+            sin(2 * Float.pi * toneHz * Float(i) / Float(rate)) * 0.5
+        }
+        let input = AudioBuffer(samples: samples, sampleRate: rate, channels: 1)
+
+        let high = try input.resampled(to: 16000, quality: .high)
+        let cubic = try input.resampled(to: 16000, quality: .balanced)
+
+        // 15 kHz folds to |16000 - 15000| = 1 kHz at the new rate.
+        let aliasHz: Float = 1000
+        let highAlias = energy(at: aliasHz, in: high.samples, sampleRate: 16000)
+        let cubicAlias = energy(at: aliasHz, in: cubic.samples, sampleRate: 16000)
+
+        #expect(cubicAlias > 0.05,
+                "cubic should fold the 15 kHz tone down to 1 kHz, got \(cubicAlias)")
+        #expect(highAlias < cubicAlias / 10,
+                "high quality should suppress the alias: \(highAlias) vs cubic \(cubicAlias)")
+    }
+
+    /// A resampler that shifts audio in time would silently misalign it with anything
+    /// derived from the original timeline - VAD segment boundaries, diarization
+    /// turns, word timings - and the facade converts at the edge of every stage, so
+    /// the shift would accumulate. Measured at zero lag, correlation 0.99999.
+    @Test("High quality introduces no group delay relative to cubic")
+    func noGroupDelay() throws {
+        let rate = 48000
+        let samples = (0..<rate).map { i -> Float in
+            let t = Float(i) / Float(rate)
+            var sum: Float = 0
+            for frequency in stride(from: Float(200), to: Float(7000), by: 700) {
+                sum += sin(2 * Float.pi * frequency * t)
+            }
+            return sum / 10
+        }
+        let input = AudioBuffer(samples: samples, sampleRate: rate, channels: 1)
+
+        let high = try input.resampled(to: 16000, quality: .high)
+        let cubic = try input.resampled(to: 16000, quality: .balanced)
+
+        func correlation(lag: Int) -> Float {
+            let maxLag = 64
+            let count = min(high.samples.count, cubic.samples.count) - 2 * maxLag - 2
+            var dot: Float = 0, normA: Float = 0, normB: Float = 0
+            for i in (maxLag + 1)..<(maxLag + 1 + count) {
+                let a = high.samples[i], b = cubic.samples[i + lag]
+                dot += a * b; normA += a * a; normB += b * b
+            }
+            return dot / (sqrt(normA) * sqrt(normB) + 1e-12)
+        }
+
+        let atZero = correlation(lag: 0)
+        let best = (-64...64).max { correlation(lag: $0) < correlation(lag: $1) } ?? 0
+
+        #expect(best == 0, "high-quality resampling shifted the audio by \(best) samples")
+        #expect(atZero > 0.999, "in-band correlation at zero lag was \(atZero)")
+    }
+
+    /// Below the new Nyquist there is nothing to remove, so the two agree closely.
+    /// Without this the test above could pass simply because `.high` attenuates
+    /// everything.
+    @Test("High quality preserves content below the target Nyquist")
+    func inBandToneSurvives() throws {
+        let rate = 48000
+        let toneHz: Float = 1000
+        let samples = (0..<rate).map { i in
+            sin(2 * Float.pi * toneHz * Float(i) / Float(rate)) * 0.5
+        }
+        let input = AudioBuffer(samples: samples, sampleRate: rate, channels: 1)
+
+        let high = try input.resampled(to: 16000, quality: .high)
+        let cubic = try input.resampled(to: 16000, quality: .balanced)
+
+        let highEnergy = energy(at: toneHz, in: high.samples, sampleRate: 16000)
+        let cubicEnergy = energy(at: toneHz, in: cubic.samples, sampleRate: 16000)
+
+        #expect(highEnergy > 0.2, "in-band tone should survive high-quality resampling, got \(highEnergy)")
+        #expect(abs(highEnergy - cubicEnergy) < 0.05,
+                "in band the two should agree: \(highEnergy) vs \(cubicEnergy)")
+    }
+}

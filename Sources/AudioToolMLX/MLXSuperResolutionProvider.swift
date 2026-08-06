@@ -38,6 +38,13 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     // model its own output rate is self-defeating; it wants the real 16 kHz signal.
     public nonisolated var sampleRate: Int { inputSampleRate }
     public nonisolated let inputChannels: Int = 1
+
+    /// Matches both references: the Python path resamples with `librosa.resample`
+    /// (`Models/python/mossformer2_sr_mlx/generate.py:27`) and the standalone Swift
+    /// generator asks AVAudioConverter for Mastering at maximum quality
+    /// (`Models/mossformer2_sr_mlx_swift/Sources/Generate/main.swift:29`), which is
+    /// exactly what `.high` now does.
+    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
     public nonisolated let outputChannels: Int = 1
     
     private var model: MossFormer2_SR_48K?
