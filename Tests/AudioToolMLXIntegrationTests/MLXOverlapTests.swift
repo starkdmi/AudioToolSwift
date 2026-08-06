@@ -6,10 +6,11 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import MLX
 @testable import AudioToolMLX
 
-final class MLXOverlapTests: XCTestCase {
+final class MLXOverlapTests: MLXTestCase {
     
     // MARK: - Window Tests
     

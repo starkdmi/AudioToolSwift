@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import MLX
 import AudioToolCore
 @testable import AudioToolMLX
@@ -15,7 +16,7 @@ import AudioToolCore
 /// Deliberately not an `IntegrationTestCase`: this is array arithmetic, it needs no
 /// weights, and it is the part of the stereo path that was silently wrong for as
 /// long as the code existed.
-final class DemucsChannelLayoutTests: XCTestCase {
+final class DemucsChannelLayoutTests: MLXTestCase {
 
     /// The regression. `AudioBuffer.samples` is interleaved for multichannel audio,
     /// but the stereo branch read it as planar via `reshaped([2, -1])`: channel 0

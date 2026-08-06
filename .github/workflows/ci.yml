@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test (macOS)
+    # Needs an image carrying Xcode 26 or newer. MisakiSwift 1.0.5 declares
+    # swift-tools-version 6.2, so a Swift 6.0/6.1 toolchain fails during dependency
+    # resolution with a manifest error, before any of this package is compiled - if
+    # that is what a failure here looks like, the runner image is the reason and the
+    # fix is the image, not the code.
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner image's default Xcode is not always the newest it has, and this
+      # package needs a Swift 6.2 toolchain: MisakiSwift 1.0.5 declares
+      # swift-tools-version 6.2, so an older toolchain cannot even parse the
+      # dependency graph. Pick the highest installed rather than pinning a version
+      # that will rot when the image is updated.
+      - name: Select the newest installed Xcode
+        run: |
+          set -euo pipefail
+          newest="$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)"
+          echo "Using $newest"
+          sudo xcode-select -s "$newest/Contents/Developer"
+
+      - name: Toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-
+
+      - name: Resolve
+        run: swift package resolve
+
+      - name: Build
+        run: swift build --build-tests
+
+      # MLX ships Metal kernels that SwiftPM cannot compile, so `swift test` has no
+      # shader library and every MLX operation aborts the process with "Failed to
+      # load the default metallib" - a hard abort, not a test failure, so it cannot
+      # be caught and reported per test. See Scripts/build_mlx_metallib.sh and
+      # ml-explore/mlx-swift#349.
+      #
+      # Non-fatal on purpose. If the runner has no Metal Toolchain, the MLX-backed
+      # suites skip via SKIP_MLX_TESTS and everything else still gates the PR. A
+      # partial signal beats a red X nobody can act on.
+      - name: Build the MLX metallib
+        id: metallib
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
+            echo "Metal Toolchain missing - downloading"
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          ./Scripts/build_mlx_metallib.sh debug
+
+      - name: Decide whether MLX tests can run
+        id: mlx
+        run: |
+          if [ "${{ steps.metallib.outcome }}" = "success" ]; then
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No MLX metallib - MLX-backed tests will skip"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      # No RUN_INTEGRATION_TESTS. The point of this job is the offline, no-weights,
+      # no-sibling-checkout configuration - which a clean runner is by construction,
+      # so this is also the standing check that a fresh clone does not need the
+      # research checkout that this package was extracted from.
+      - name: Test
+        env:
+          CI: "1"
+          SKIP_MLX_TESTS: ${{ steps.mlx.outputs.skip }}
+        run: swift test
+
+      # A test that writes outside its scratch directory is the specific regression
+      # that motivated the gating work: suites used to write their outputs into the
+      # sibling model directories. On a runner there is no sibling checkout, so the
+      # observable version of that bug is a dirty tree.
+      - name: Working tree must be clean
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::The test run modified tracked or untracked files:"
+            git status --porcelain
+            exit 1
+          fi

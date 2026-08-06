@@ -96,6 +96,11 @@ Weights/
 !Tests/**/Fixtures/**/*.wav
 !Tests/Fixtures/**/*.wav
 
+# Coverage and profiling artifacts. `swift test --enable-code-coverage` and any
+# instrumented run drop these next to the package; one was committed at 4.2 MB.
+*.profraw
+*.profdata
+
 # Build products
 DerivedData/
 .swiftpm/xcode/

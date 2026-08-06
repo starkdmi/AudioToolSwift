@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import MLX
 @testable import AudioToolMLX
 
@@ -18,7 +19,7 @@ import MLX
 /// because nothing compared the two.
 ///
 /// Not an `IntegrationTestCase` - this is array arithmetic on synthetic input.
-final class IncrementalOverlapAddTests: XCTestCase {
+final class IncrementalOverlapAddTests: MLXTestCase {
 
     /// Deterministic pseudo-random samples, so a failure is reproducible.
     private func samples(count: Int, seed: UInt64) -> [Float] {
