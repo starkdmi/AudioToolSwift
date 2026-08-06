@@ -92,16 +92,39 @@ let package = Package(
         // Resampling, STFT, and audio I/O.
         .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.0.0"),
 
-        // G2P for Kokoro TTS. Upstream rather than vendored: the local copy's Swift
-        // source was byte-identical to the 1.0.6 tag, so there is nothing of ours to
-        // keep, and its 18 MB of pronunciation dictionaries and BART weights stay
-        // upstream's problem instead of becoming ours to host.
+        // G2P for Kokoro TTS. A fork of mlalma/MisakiSwift whose only change is the
+        // manifest - the Swift source at this revision is byte-identical to upstream
+        // 1.0.5, and its 18 MB of pronunciation dictionaries and BART weights stay
+        // out of this repository.
         //
-        // Pinned to 1.0.5, not 1.0.6: 1.0.6 requires mlx-swift exactly 0.30.2, which
-        // conflicts with the 0.29.x every model target here was built against. The
-        // local copy worked around this by hand-editing its manifest; 1.0.5 declares
-        // a range instead and resolves cleanly. Revisit when the models move to 0.30.
-        .package(url: "https://github.com/mlalma/MisakiSwift", exact: "1.0.5"),
+        // Two problems with upstream's manifest, both fixed on the fork:
+        //
+        //   type: .dynamic. MisakiSwift links MLX, MLXNN, MLXUtilsLibrary and
+        //   ZIPFoundation, so a dylib carries its own copies of their Objective-C
+        //   classes. Anything that also links MLX - which is every reason to use a
+        //   Kokoro G2P library - then loads two sets of the same classes. The runtime
+        //   warns that this "may cause spurious casting failures and mysterious
+        //   crashes", and here it did: a segfault partway through the XCTest process,
+        //   and a CLI that linked but could not launch because MLX.framework was not
+        //   on its rpath. That is why AudioToolCLI still excludes AudioToolTTS below.
+        //   Verified: with the fork, 8+ duplicate-class warnings and the signal 11
+        //   both go to zero and AudioToolMLXIntegrationTests completes.
+        //
+        //   swift-tools-version 6.2, which would raise this package's real minimum
+        //   toolchain to Xcode 26 while the manifest here claims 6.0. Nothing in
+        //   MisakiSwift needs 6.2; the fork declares 6.0 and compiles unchanged.
+        //
+        // Pinned by revision rather than version because the fork carries no tag of
+        // its own, and pinned off 1.0.5 rather than 1.0.6 because 1.0.6 requires
+        // mlx-swift exactly 0.30.2, which conflicts with the 0.29.x every model
+        // target here was built against.
+        //
+        // Send the same one-line change upstream and this becomes a version range
+        // again: github.com/mlalma/MisakiSwift, remove `type: .dynamic`.
+        .package(
+            url: "https://github.com/starkdmi/MisakiSwift",
+            revision: "1ecaf9a6057ed8bdd69e5a37cdcc0b5cb30eb901"
+        ),
         .package(url: "https://github.com/mlalma/MLXUtilsLibrary.git", from: "0.0.6"),
 
         // VAD, transcription, diarization. Upstream, not a fork.
@@ -447,12 +470,19 @@ let package = Package(
             name: "AudioToolCLI",
             dependencies: [
                 "AudioToolMLX",
-                // Deliberately NOT AudioToolTTS or AudioToolFluidAudio. Neither is
-                // used since the scratch subcommands were removed, and AudioToolTTS
-                // drags in MisakiSwift, which builds as a dynamic library. Under
+                // Deliberately NOT AudioToolTTS or AudioToolFluidAudio: neither is
+                // used since the scratch subcommands were removed, so linking them
+                // costs build time and binary size for nothing.
+                //
+                // It used to be that AudioToolTTS *could* not be linked - it drags in
+                // MisakiSwift, which upstream builds as a dynamic library, and under
                 // xcodebuild that produced an executable which linked but could not
-                // launch - MLX.framework was not on its rpath - and supplying the
-                // framework paths by hand then produced duplicate MLXNN classes.
+                // launch because MLX.framework was not on its rpath. That is fixed at
+                // the source: the forked manifest omits `type:`, so MLX and friends
+                // are no longer embedded as dynamic frameworks at all. Verified by
+                // adding AudioToolTTS back and building with xcodebuild - it links,
+                // launches, and the Frameworks directory is empty. Add it here freely
+                // if the CLI ever needs TTS.
                 "AudioToolSpeech", // Required for linking even with conditional import
                 "AudioToolCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),

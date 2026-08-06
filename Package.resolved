@@ -1,5 +1,5 @@
 {
-  "originHash" : "934ac1ac666db72c994e5ab81d70531d80e262476c1af62507e1d5e2708b1d49",
+  "originHash" : "7696f1375d204ed70d8849ac3597910d26419b6857483605beebca51e8b876b2",
   "pins" : [
     {
       "identity" : "fluidaudio",
@@ -12,10 +12,9 @@
     {
       "identity" : "misakiswift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mlalma/MisakiSwift",
+      "location" : "https://github.com/starkdmi/MisakiSwift",
       "state" : {
-        "revision" : "bb5e3e3671ef550dc545a98f4a4c15f58ee649ec",
-        "version" : "1.0.5"
+        "revision" : "1ecaf9a6057ed8bdd69e5a37cdcc0b5cb30eb901"
       }
     },
     {
