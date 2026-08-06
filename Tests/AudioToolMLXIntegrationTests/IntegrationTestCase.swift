@@ -17,9 +17,22 @@ import AudioToolTestSupport
 /// specific file from the sibling checkout should still guard it with
 /// `TestGate.reference(_:)`, since having opted in does not mean having the file.
 class IntegrationTestCase: XCTestCase {
+
+    /// Whether this suite needs MLX and a Metal device.
+    ///
+    /// Almost everything here does, so it defaults to true and the exceptions say
+    /// so. `SKIP_MLX_TESTS=1` is how a machine without a usable Metal device - or
+    /// without the prebuilt metallib that `swift test` needs - opts out; before this
+    /// the flag was declared and then ignored by every XCTest suite, so
+    /// `RUN_INTEGRATION_TESTS=1 SKIP_MLX_TESTS=1` still ran them.
+    class var requiresMLX: Bool { true }
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         try XCTSkipUnless(TestGate.runIntegrationTests, TestGate.integrationDisabled)
+        if Self.requiresMLX {
+            try XCTSkipUnless(!TestGate.skipMLXTests, TestGate.mlxDisabled)
+        }
     }
 
     /// A file or directory in the sibling research checkout, or a skip.

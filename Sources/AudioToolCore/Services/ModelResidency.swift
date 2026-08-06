@@ -113,14 +113,31 @@ public actor ModelResidency {
     public func beginUse(_ model: any ManagedModel) async throws {
         let modelId = model.modelId
 
-        // Trust the model, not the table. An entry can be stale - callers may hold
-        // the provider directly and unload it themselves.
-        if loadedModels[modelId] != nil, await model.checkIfLoaded() {
-            touch(modelId)
-            activeUseCounts[modelId, default: 0] += 1
-            return
+        if let existing = loadedModels[modelId] {
+            if Self.isSameInstance(existing.model, model) {
+                // Trust the model, not the table. An entry can be stale - callers
+                // hold the provider directly and may unload it themselves.
+                if await model.checkIfLoaded() {
+                    touch(modelId)
+                    activeUseCounts[modelId, default: 0] += 1
+                    return
+                }
+                // Same instance, unloaded behind our back: reload it below.
+            } else if activeUseCounts[modelId] == nil {
+                // A different instance is registering under this id. The one in the
+                // table is about to become unreachable through the manager, so it
+                // has to be released here or its weights stay resident, untracked
+                // and impossible to evict - memory the accounting cannot see.
+                await existing.model.unload()
+            } else {
+                // Displaced while someone is mid-call on it. Unloading would tear
+                // weights out of a live inference, so the old instance is left to
+                // its caller; it simply stops being the manager's business.
+                Self.logger.error(
+                    "'\(modelId, privacy: .public)' was replaced by a different instance while in use - the previous one is no longer tracked")
+            }
+            loadedModels.removeValue(forKey: modelId)
         }
-        loadedModels.removeValue(forKey: modelId)
 
         // Preflight check: reject models that exceed memory limit entirely
         let requiredMemory = model.estimatedMemoryBytes
@@ -135,7 +152,7 @@ public actor ModelResidency {
         // pick this one as its eviction victim while its weights are being read.
         activeUseCounts[modelId, default: 0] += 1
         do {
-            try await evictIfNeeded(forNewMemory: requiredMemory)
+            await evictIfNeeded(forNewMemory: requiredMemory)
             if !(await model.checkIfLoaded()) {
                 try await model.load()
             }
@@ -153,11 +170,20 @@ public actor ModelResidency {
         )
     }
 
-    /// Release the claim taken by ``beginUse(_:)``.
+    /// Release the claim taken by ``beginUse(_:)``, and settle the budget.
+    ///
+    /// Releasing is also the moment the budget can be honoured again. ``beginUse(_:)``
+    /// will go over the limit rather than evict a model that is mid-inference, so
+    /// two overlapping 100 MB calls under a 150 MB limit leave 200 MB resident. If
+    /// nothing reconciled afterwards that overage would persist for the lifetime of
+    /// the process - the limit would be respected only when models happened not to
+    /// overlap, which is precisely when it does not matter.
     ///
     /// - Parameter modelId: The model identifier passed to ``beginUse(_:)``
-    public func endUse(_ modelId: String) {
+    public func endUse(_ modelId: String) async {
         releaseUse(modelId)
+        guard activeUseCounts[modelId] == nil else { return }  // still claimed elsewhere
+        await evict(downTo: memoryLimitBytes)
     }
 
     private func releaseUse(_ modelId: String) {
@@ -173,6 +199,19 @@ public actor ModelResidency {
         guard var entry = loadedModels[modelId] else { return }
         entry.lastAccessedAt = Date()
         loadedModels[modelId] = entry
+    }
+
+    /// Identity, not equality. `ManagedModel` carries no `Equatable` requirement,
+    /// and two providers sharing a `modelId` are two different things holding two
+    /// different sets of weights.
+    private static func isSameInstance(_ lhs: any ManagedModel, _ rhs: any ManagedModel) -> Bool {
+        // Value-type models have no instance identity to compare, and `as AnyObject`
+        // would box each one into a fresh object. Treating them as distinct is the
+        // conservative answer: it costs a reload, where the opposite leaks weights.
+        guard type(of: lhs) is AnyClass, type(of: lhs) == type(of: rhs) else {
+            return false
+        }
+        return (lhs as AnyObject) === (rhs as AnyObject)
     }
 
     /// Unload a specific model by ID.
@@ -251,15 +290,20 @@ public actor ModelResidency {
     
     // MARK: - LRU Eviction
     
-    /// Evict least-recently-used models until there's room for new memory.
+    /// Evict least-recently-used models to make room for a model about to load.
+    private func evictIfNeeded(forNewMemory requiredBytes: Int) async {
+        await evict(downTo: memoryLimitBytes - requiredBytes)
+    }
+
+    /// Evict least-recently-used models until usage is at or below `targetUsage`.
     ///
     /// Models with an outstanding ``beginUse(_:)`` are not candidates. If the only
     /// things left to evict are in use, this stops rather than freeing them: going
     /// over the limit is recoverable, tearing weights out of a running inference is
-    /// not. The limit is a budget, not an invariant.
-    private func evictIfNeeded(forNewMemory requiredBytes: Int) async throws {
-        let targetUsage = memoryLimitBytes - requiredBytes
-
+    /// not. The limit is a budget, not an invariant - but ``endUse(_:)`` calls back
+    /// here once a claim clears, so an overage lasts only as long as the calls that
+    /// forced it.
+    private func evict(downTo targetUsage: Int) async {
         while totalMemoryUsage > targetUsage {
             let candidates = loadedModels.values.filter { activeUseCounts[$0.modelId] == nil }
             guard let lruEntry = candidates.min(by: { $0.lastAccessedAt < $1.lastAccessedAt }) else {

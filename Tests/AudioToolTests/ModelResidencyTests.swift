@@ -283,6 +283,75 @@ struct ModelResidencyTests {
         await manager.endUse(model.modelId)
     }
 
+    /// Going over budget to protect a running call is fine. Staying over budget
+    /// once the calls finish is not - the limit would then hold only when models
+    /// happened not to overlap, which is exactly when it does not matter.
+    @Test("The budget is reconciled once claims are released")
+    func testBudgetReconcilesAfterRelease() async throws {
+        let manager = ModelResidency(memoryLimitBytes: 150_000_000)
+
+        let first = MockManagedModel(modelId: "first", memoryBytes: 100_000_000)
+        let second = MockManagedModel(modelId: "second", memoryBytes: 100_000_000)
+
+        // Overlapping calls: neither can be evicted, so both become resident.
+        try await manager.beginUse(first)
+        try await Task.sleep(for: .milliseconds(10))
+        try await manager.beginUse(second)
+        #expect(await manager.totalMemoryUsage == 200_000_000, "deliberately over budget while both are in use")
+
+        // Releasing the first is the moment the budget can be honoured again.
+        await manager.endUse(first.modelId)
+        await manager.endUse(second.modelId)
+
+        let usage = await manager.totalMemoryUsage
+        #expect(usage <= 150_000_000, "still \(usage / 1_000_000)MB resident under a 150MB limit")
+        #expect(await first.getUnloadCallCount() == 1, "the LRU model should have been evicted on release")
+        #expect(await second.getIsLoaded(), "the most recently used model should survive")
+    }
+
+    /// Two providers can share a `modelId` - the engine's register methods key on
+    /// the model enum, and nothing stops a caller swapping the instance behind one.
+    /// Dropping the old entry without unloading it leaves its weights resident,
+    /// untracked, and beyond the manager's reach.
+    @Test("A replaced instance is unloaded, not orphaned")
+    func testReplacedInstanceIsUnloaded() async throws {
+        let manager = ModelResidency(memoryLimitBytes: 1_000_000_000)
+
+        let original = MockManagedModel(modelId: "shared_id", memoryBytes: 100_000_000)
+        let replacement = MockManagedModel(modelId: "shared_id", memoryBytes: 100_000_000)
+
+        try await use(manager, original)
+        #expect(await original.getIsLoaded())
+
+        try await manager.beginUse(replacement)
+        await manager.endUse(replacement.modelId)
+
+        #expect(await original.getUnloadCallCount() == 1,
+                "the displaced instance must be unloaded or its weights leak")
+        #expect(await original.getIsLoaded() == false)
+        #expect(await replacement.getIsLoaded())
+        #expect(await manager.totalMemoryUsage == 100_000_000, "one model resident, not two")
+    }
+
+    /// The exception: replacing an instance that is mid-call. Unloading it there
+    /// would break the running inference, so it is released to its caller instead.
+    @Test("A replaced instance that is in use is left alone")
+    func testReplacedInstanceInUseIsNotUnloaded() async throws {
+        let manager = ModelResidency(memoryLimitBytes: 1_000_000_000)
+
+        let original = MockManagedModel(modelId: "shared_id", memoryBytes: 100_000_000)
+        let replacement = MockManagedModel(modelId: "shared_id", memoryBytes: 100_000_000)
+
+        try await manager.beginUse(original)   // still running
+        try await manager.beginUse(replacement)
+
+        #expect(await original.getIsLoaded(), "a model mid-call must not be unloaded even when displaced")
+        #expect(await original.getUnloadCallCount() == 0)
+
+        await manager.endUse(replacement.modelId)
+        await manager.endUse(original.modelId)
+    }
+
     @Test("Nested use of the same model is reference counted")
     func testNestedUseIsCounted() async throws {
         let manager = ModelResidency(memoryLimitBytes: 150_000_000)

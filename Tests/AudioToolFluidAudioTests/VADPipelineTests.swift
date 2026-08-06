@@ -11,6 +11,10 @@ import AudioToolFluidAudio
 import AudioToolCore
 
 final class VADPipelineTests: IntegrationTestCase {
+
+    /// CoreML VAD only - no MLX, so `SKIP_MLX_TESTS=1` should not silence it.
+    override class var requiresMLX: Bool { false }
+
     
     // MARK: - Deterministic Audio Generation
     
