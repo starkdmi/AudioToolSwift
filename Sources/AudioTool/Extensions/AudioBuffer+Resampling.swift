@@ -51,7 +51,7 @@ extension CVAudioBuffer {
                 resampled = try resampleAVAudioConverter(
                     samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate),
                     algorithm: AVSampleRateConverterAlgorithm_Normal,
-                    quality: AVAudioQuality.medium)
+                    quality: AVAudioQuality.high)
             }
         }
         

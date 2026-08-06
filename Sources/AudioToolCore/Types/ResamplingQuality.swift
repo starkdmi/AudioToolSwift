@@ -81,14 +81,20 @@ public enum ResamplingQuality: Sendable {
     /// analogue available on the platform, and not automatically the right one.
     case high
     /// What `AudioLoader` does when nothing asks for anything else: cubic when
-    /// upsampling, AVAudioConverter `Normal` at `.medium` when downsampling.
+    /// upsampling, AVAudioConverter `Normal` when downsampling.
     ///
-    /// Deliberately *not* the best-sounding option on the downsample side. SwiftAudio
-    /// picked `Normal`/`.medium` "for ML model compatibility (matches
-    /// FluidAudio/pyannote training data resampling)" - the models were trained on
-    /// audio that had been through an ordinary resampler, so reproducing an ordinary
-    /// resampler is what matches them. Upsampling has nothing to alias, so cubic is
-    /// used there for speed.
+    /// Deliberately *not* the best-sounding option on the downsample side: `Normal`
+    /// rather than `Mastering`, because the models were trained on audio that had
+    /// been through an ordinary resampler, so reproducing an ordinary resampler is
+    /// what matches them. Upsampling has nothing to alias, so cubic is used there.
+    ///
+    /// - Important: This must track the pinned SwiftAudio, not an idea of what it
+    ///   should be. `AudioLoader` at 1.0.0 uses `Normal` at `.high`; an unreleased
+    ///   change in the local checkout moves it to `.medium` "for ML model
+    ///   compatibility (matches FluidAudio/pyannote training data resampling)". If
+    ///   the dependency moves to 1.0.1, this moves with it -
+    ///   `AudioLoaderParityTests` compares the two implementations directly and
+    ///   fails if they part company.
     ///
     /// This is what any generator that constructs `AudioLoader` without naming a
     /// method gets, which makes it the validated behaviour for every model ported
