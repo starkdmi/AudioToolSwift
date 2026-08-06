@@ -324,9 +324,12 @@ public actor DemucsProvider: MusicSeparator {
     
     public nonisolated let sampleRate: Int = 44100
 
-    /// Matches the reference, which resamples with `torchaudio.transforms.Resample` -
-    /// windowed-sinc, and anti-aliased. `Models/python/demucs_mlx/run.py:39`.
-    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
+    // No declaration on purpose. The reference resamples with
+    // `torchaudio.transforms.Resample` (`Models/python/demucs_mlx/run.py:39`) - a
+    // windowed-sinc kernel with its own width and rolloff - and the Swift standalone
+    // does not resample at all. AVAudioConverter Mastering is not that filter, and
+    // picking it because both suppress aliasing is the substitution this type's
+    // documentation warns against. Declare once measured against Python.
     public nonisolated let inputChannels: Int = 2
     public nonisolated let outputChannels: Int = 1
     

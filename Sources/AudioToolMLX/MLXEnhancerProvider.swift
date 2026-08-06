@@ -40,9 +40,14 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     public nonisolated let sampleRate: Int = 48000
     public nonisolated let inputChannels: Int = 1
 
-    /// Matches the reference, which resamples with `scipy.signal.resample` -
-    /// FFT-based, and anti-aliased. `Models/python/mossformer2_se_mlx/generate.py:271`.
-    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
+    // No declaration on purpose. The reference resamples with `scipy.signal.resample`
+    // (`Models/python/mossformer2_se_mlx/generate.py:271`) - FFT-based - and the Swift
+    // standalone does not resample at all, so there is no Swift behaviour to inherit.
+    // AVAudioConverter Mastering is anti-aliased too, but "also anti-aliased" is not
+    // "the same filter": it differs from scipy's method in transition band, stopband
+    // and phase. Substituting it here would be reasoning from first principles about
+    // aliasing, which is exactly what `ResamplingQuality` warns against. Declare once
+    // measured against Python, not before.
     public nonisolated let outputChannels: Int = 1
     public nonisolated let minChunkSize: Int = 9600   // 0.2s at 48kHz
     public nonisolated let recommendedChunkSize: Int = 192000  // 4s at 48kHz (optimal from benchmarks)
@@ -357,11 +362,10 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     public nonisolated let sampleRate: Int = 16000
     public nonisolated let inputChannels: Int = 1
 
-    /// The reference takes 16 kHz input directly and never resamples, so there is no
-    /// resampler to match. `.high` is the choice for everything else: the conversion
-    /// happens at the facade's edge, before the model sees anything, and an
-    /// anti-aliased one is what the other references all use.
-    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
+    // No declaration on purpose. The reference takes 16 kHz input directly and never
+    // resamples, so nothing here was validated against any resampler - which makes
+    // this the weakest possible case for choosing one. What FRCRN should get for
+    // non-16 kHz input is an open question to answer with measurements.
     public nonisolated let outputChannels: Int = 1
     public nonisolated let minChunkSize: Int = 3200   // 0.2s at 16kHz
     public nonisolated let recommendedChunkSize: Int = 64000  // 4s at 16kHz

@@ -16,25 +16,44 @@ import Foundation
 ///   signal-processing grounds; changing which resampler feeds a model changes that
 ///   model's output, and needs measuring against the reference.
 ///
-///   That said, the references have now been read, and they agree. Every pipeline
-///   under `Models/` resamples with a band-limited method - `scipy.signal.resample`
-///   for MossFormer2 SE, `librosa.resample` for SR, `torchaudio.transforms.Resample`
-///   for Demucs, `librosa.load` for USS, and AVAudioConverter's Mastering algorithm
-///   at maximum quality in every standalone Swift generator. None of them is cubic
-///   interpolation.
+///   The references have been read, and they do not agree with each other:
 ///
-///   Measured on a 48 -> 16 kHz downsample of a signal carrying content to 22 kHz:
+///   | Model            | Reference resampler                                    |
+///   | ---------------- | ------------------------------------------------------ |
+///   | MossFormer2 SE   | `scipy.signal.resample` (FFT)                           |
+///   | MossFormer2 SR   | `librosa.resample`; Swift generator: Mastering/`.max`   |
+///   | MossFormer2 SS   | Swift generator: Mastering/`.max`                       |
+///   | Demucs           | `torchaudio.transforms.Resample` (windowed sinc)        |
+///   | USS              | `librosa.load`; Swift generator: Mastering/`.max`       |
+///   | Chatterbox       | none - loads without resampling                         |
 ///
-///   | Compared with Mastering/`.max` | Relative RMS difference |
-///   | ------------------------------ | ----------------------- |
-///   | ``balanced`` (Catmull-Rom)     | 131%                    |
-///   | AVAudioConverter defaults      | 25%                     |
-///   | ``balanced``, band-limited input | 0.56%                 |
+///   All of the resampling ones are band-limited, and none of them is cubic. It does
+///   not follow that they are interchangeable. An FFT method, a windowed sinc and
+///   AVAudioConverter's Mastering algorithm differ in transition band, stopband depth
+///   and phase, and a separator's output is sensitive enough to input perturbation
+///   that those differences survive to the result. "Also anti-aliased" is not "the
+///   same filter", and picking the platform's best-sounding option because it is the
+///   best-sounding option is the substitution this note exists to prevent.
 ///
-///   The 131% figure is the aliased content exceeding the signal itself. The last row
-///   is the same comparison on audio already under the target Nyquist, where there is
-///   nothing to fold: aliasing is the entire difference, so this only matters when the
-///   caller's audio is wider than the model's band.
+///   So ``high`` is declared only where a *Swift* reference asked for exactly it -
+///   MossFormer2 SR, MossFormer2 SS and USS, whose standalone generators request
+///   Mastering at maximum quality. The models whose only reference is Python are left
+///   on the default until someone measures; matching scipy or torchaudio properly may
+///   mean implementing those kernels rather than approximating them with a fourth.
+///
+///   For scale, on a 48 -> 16 kHz downsample of a signal carrying content to 22 kHz:
+///
+///   | Compared with Mastering/`.max`   | Relative RMS difference |
+///   | -------------------------------- | ----------------------- |
+///   | ``balanced`` (Catmull-Rom)       | 131%                    |
+///   | AVAudioConverter defaults        | 25%                     |
+///   | ``balanced``, band-limited input | 0.56%                   |
+///
+///   The 131% is aliased content exceeding the signal itself. The last row is the same
+///   comparison on audio already under the target Nyquist, where there is nothing to
+///   fold: aliasing is the whole difference, so the choice only bites when the
+///   caller's audio is wider than the model's band. Within the band the resamplers
+///   agree closely and introduce no relative group delay.
 ///
 ///   Providers declare what they want via ``AudioProcessor/preferredResamplingQuality``
 ///   and the facade's edge conversion honours it, so the choice travels with the model
