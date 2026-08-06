@@ -100,32 +100,32 @@ public final class ModelCatalog: @unchecked Sendable {
                         name: "MossFormer2 SE (FP32)",
                         quantization: .fp32,
                         sizeBytes: 180_000_000,
-                        repo: "starkdmi/MossFormer2_SE_48K_MLX",
-                        files: ["model_fp32.safetensors", "config.json"]
+                        repo: ModelRepository.mossFormer2SE48K,
+                        files: ModelFiles.standard(.fp32)
                     ),
                     ModelVariant(
                         id: "mossformer2_se_fp16",
                         name: "MossFormer2 SE (FP16)",
                         quantization: .fp16,
                         sizeBytes: 90_000_000,
-                        repo: "starkdmi/MossFormer2_SE_48K_MLX",
-                        files: ["model_fp16.safetensors", "config.json"]
+                        repo: ModelRepository.mossFormer2SE48K,
+                        files: ModelFiles.standard(.fp16)
                     ),
                     ModelVariant(
                         id: "mossformer2_se_int8",
                         name: "MossFormer2 SE (Int8)",
                         quantization: .int8,
                         sizeBytes: 45_000_000,
-                        repo: "starkdmi/MossFormer2_SE_48K_MLX",
-                        files: ["model_int8.safetensors", "config.json"]
+                        repo: ModelRepository.mossFormer2SE48K,
+                        files: ModelFiles.standard(.int8)
                     ),
                     ModelVariant(
                         id: "mossformer2_se_int4",
                         name: "MossFormer2 SE (Int4)",
                         quantization: .int4,
                         sizeBytes: 23_000_000,
-                        repo: "starkdmi/MossFormer2_SE_48K_MLX",
-                        files: ["model_int4.safetensors", "config.json"]
+                        repo: ModelRepository.mossFormer2SE48K,
+                        files: ModelFiles.standard(.int4)
                     ),
                 ]
             ),
@@ -141,8 +141,8 @@ public final class ModelCatalog: @unchecked Sendable {
                         name: "FRCRN SE (FP32)",
                         quantization: .fp32,
                         sizeBytes: 150_000_000,
-                        repo: "starkdmi/FRCRN_SE_MLX",
-                        files: ["model.safetensors", "config.json"]
+                        repo: ModelRepository.frcrnSE16K,
+                        files: ModelFiles.standard(.fp32)
                     ),
                 ]
             ),
@@ -153,14 +153,33 @@ public final class ModelCatalog: @unchecked Sendable {
                 name: "MossFormer2 Speech Separation",
                 category: .speechSeparation,
                 description: "Separate overlapping speakers into individual audio tracks",
+                // Three separately trained models, not three quantizations of one:
+                // different speaker counts, different sample rates, different repos.
+                // A single "MossFormer2_SS_MLX" entry described none of them.
                 variants: [
                     ModelVariant(
-                        id: "mossformer2_ss_fp32",
-                        name: "MossFormer2 SS (FP32)",
+                        id: "mossformer2_ss_2spk_16k_fp32",
+                        name: "MossFormer2 SS 2-speaker 16 kHz (FP32)",
                         quantization: .fp32,
                         sizeBytes: 200_000_000,
-                        repo: "starkdmi/MossFormer2_SS_MLX",
-                        files: ["model.safetensors", "config.json"]
+                        repo: ModelRepository.mossFormer2SS2Spk16K,
+                        files: ModelFiles.standard(.fp32)
+                    ),
+                    ModelVariant(
+                        id: "mossformer2_ss_3spk_8k_fp32",
+                        name: "MossFormer2 SS 3-speaker 8 kHz (FP32)",
+                        quantization: .fp32,
+                        sizeBytes: 200_000_000,
+                        repo: ModelRepository.mossFormer2SS3Spk8K,
+                        files: ModelFiles.standard(.fp32)
+                    ),
+                    ModelVariant(
+                        id: "mossformer2_ss_2spk_whamr_8k_fp32",
+                        name: "MossFormer2 SS 2-speaker WHAMR 8 kHz (FP32)",
+                        quantization: .fp32,
+                        sizeBytes: 200_000_000,
+                        repo: ModelRepository.mossFormer2SS2SpkWHAMR8K,
+                        files: ModelFiles.standard(.fp32)
                     ),
                 ]
             ),
@@ -177,8 +196,8 @@ public final class ModelCatalog: @unchecked Sendable {
                         name: "MossFormer2 SR (FP32)",
                         quantization: .fp32,
                         sizeBytes: 180_000_000,
-                        repo: "starkdmi/MossFormer2_SR_MLX",
-                        files: ["model.safetensors", "config.json"]
+                        repo: ModelRepository.mossFormer2SR48K,
+                        files: ModelFiles.standard(.fp32)
                     ),
                 ]
             ),
@@ -195,8 +214,16 @@ public final class ModelCatalog: @unchecked Sendable {
                         name: "USS (FP32)",
                         quantization: .fp32,
                         sizeBytes: 120_000_000,
-                        repo: "starkdmi/USS_MLX",
-                        files: ["model.safetensors", "config.json"]
+                        repo: ModelRepository.uss,
+                        files: ModelFiles.uss(.fp32)
+                    ),
+                    ModelVariant(
+                        id: "uss_fp16",
+                        name: "USS (FP16)",
+                        quantization: .fp16,
+                        sizeBytes: 60_000_000,
+                        repo: ModelRepository.uss,
+                        files: ModelFiles.uss(.fp16)
                     ),
                 ]
             ),
@@ -207,13 +234,17 @@ public final class ModelCatalog: @unchecked Sendable {
                 category: .uss,
                 description: "Separate vocals, drums, bass, and other from music",
                 variants: [
+                    // Four weight files, one per stem - HTDemucs ships a separate
+                    // checkpoint for drums, bass, other and vocals, and each emits
+                    // all four sources. A single "model.safetensors" was never what
+                    // this repo contains.
                     ModelVariant(
                         id: "demucs_fp32",
                         name: "Demucs (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 320_000_000,
-                        repo: "starkdmi/Demucs_MLX",
-                        files: ["model.safetensors", "config.json"]
+                        sizeBytes: 4 * 84_030_924,
+                        repo: ModelRepository.demucs,
+                        files: ModelFiles.demucsAll
                     ),
                 ]
             ),

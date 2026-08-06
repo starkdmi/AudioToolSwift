@@ -20,7 +20,7 @@ import MossFormer2SR
 public actor MossFormer2SR48KProvider: AudioUpscaler {
     
     /// HuggingFace repository for model weights
-    public static let repo = "starkdmi/MossFormer2_SR_48K_MLX"
+    public static let repo = ModelRepository.mossFormer2SR48K
     
     /// Supported precisions (fp32 only)
     public static let supportedPrecisions: [ModelPrecision] = [.fp32]

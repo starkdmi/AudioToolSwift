@@ -136,7 +136,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     // MARK: - Model Lifecycle
     
     /// HuggingFace repository holding the ResUNet30 weights
-    public static let repo = "starkdmi/USS_MLX"
+    public static let repo = ModelRepository.uss
 
     /// Locate the ResUNet30 weights, downloading them if necessary.
     ///

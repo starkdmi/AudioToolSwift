@@ -32,7 +32,7 @@ public struct MLXEnhancedWithBackground: Sendable {
 public actor MossFormer2SE48KProvider: SpeechEnhancer {
     
     /// HuggingFace repository for model weights
-    public static let repo = "starkdmi/MossFormer2_SE_48K_MLX"
+    public static let repo = ModelRepository.mossFormer2SE48K
     
     /// Supported precisions for this model
     public static let supportedPrecisions: [ModelPrecision] = [.fp32, .fp16]
@@ -370,21 +370,43 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     public nonisolated let minChunkSize: Int = 3200   // 0.2s at 16kHz
     public nonisolated let recommendedChunkSize: Int = 64000  // 4s at 16kHz
     
+    /// HuggingFace repository for model weights
+    public static let repo = ModelRepository.frcrnSE16K
+
+    /// Supported precisions
+    public static let supportedPrecisions: [ModelPrecision] = [.fp32]
+
     private var model: FRCRN_SE_16K?
-    private let weightsPath: String
-    
+    private let weightsPath: String?
+    private let precision: ModelPrecision
+
     /// Chunking config: 4s chunks, 25% overlap, discard-edges
     private let chunkingConfig: ChunkingConfig
-    
-    public init(weightsPath: String) {
-        self.weightsPath = weightsPath
+
+    /// Initialize with precision, downloading from HuggingFace on first load.
+    ///
+    /// The catalog has advertised this repo since it was written, but there was no
+    /// code that could fetch it: the only initializer required a path the caller had
+    /// already obtained somehow. Every other MLX provider here downloads; this one
+    /// silently did not.
+    public init(precision: ModelPrecision = .fp32) {
+        self.weightsPath = nil
+        self.precision = precision
         self.chunkingConfig = ChunkingConfig.frcrnSE16K(sampleRate: 16000)
     }
-    
-    /// Load model weights
+
+    /// Initialize with an explicit weights path (no download)
+    public init(weightsPath: String) {
+        self.weightsPath = weightsPath
+        self.precision = .fp32
+        self.chunkingConfig = ChunkingConfig.frcrnSE16K(sampleRate: 16000)
+    }
+
+    /// Load model weights (downloads if not cached)
     public func load() async throws {
+        let resolvedPath = try await resolveWeightsPath()
         model = FRCRN_SE_16K()
-        try model?.loadWeights(from: weightsPath)
+        try model?.loadWeights(from: resolvedPath)
         model?.prepareForInference()
         
         // Prewarm (JIT compilation)
@@ -392,6 +414,24 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
         let output = model?(dummy)
         eval(output ?? dummy)
         GPU.clearCache()
+    }
+
+    /// Explicit path if given, otherwise the cache, otherwise HuggingFace.
+    private func resolveWeightsPath() async throws -> String {
+        if let path = weightsPath { return path }
+
+        let filename = precision.weightsFilename
+        if let cached = ModelDownloader.shared.localPath(for: Self.repo) {
+            let candidate = cached.appendingPathComponent(filename).path
+            if FileManager.default.fileExists(atPath: candidate) {
+                return candidate
+            }
+        }
+        let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
+            repo: Self.repo,
+            matching: ModelFiles.standard(precision)
+        )
+        return modelDir.appendingPathComponent(filename).path
     }
     
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {

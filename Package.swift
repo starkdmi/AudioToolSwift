@@ -377,9 +377,10 @@ let package = Package(
                 "AudioToolCore",
                 "AudioToolMLX",
                 "AudioToolTTS",
+                "AudioToolUSS",
                 "AudioToolFluidAudio",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
-                            "AudioToolTestSupport",
+                "AudioToolTestSupport",
             ],
             path: "Tests/AudioToolMLXIntegrationTests",
             swiftSettings: commonSwiftSettings

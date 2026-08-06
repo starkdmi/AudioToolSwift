@@ -63,9 +63,9 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         
         public var huggingFaceRepo: String {
             switch self {
-            case .twoSpeaker: return "starkdmi/MossFormer2_SS_2SPK_16K_MLX"
-            case .threeSpeaker: return "starkdmi/MossFormer2_SS_3SPK_8K_MLX"
-            case .twoSpeakerWHAMR: return "starkdmi/MossFormer2_SS_2SPK_WHAMR_8K_MLX"
+            case .twoSpeaker: return ModelRepository.mossFormer2SS2Spk16K
+            case .threeSpeaker: return ModelRepository.mossFormer2SS3Spk8K
+            case .twoSpeakerWHAMR: return ModelRepository.mossFormer2SS2SpkWHAMR8K
             }
         }
         
@@ -339,30 +339,69 @@ public actor DemucsProvider: MusicSeparator {
     /// reflects what is on disk rather than a fixed capability.
     public nonisolated var availableStems: [Stem] { Stem.allCases }
     
+    /// HuggingFace repository for model weights
+    public static let repo = ModelRepository.demucs
+
     private var models: [Stem: HTDemucs] = [:]
-    private let weightsDirectory: String
-    
+    private let weightsDirectory: String?
+
     /// Max audio without chunking (7.8s is the limit from benchmarks)
     private let maxDirectDuration: Float = 7.8
-    
+
+    /// Initialize to download from HuggingFace on first load.
+    ///
+    /// Like FRCRN, this repo was in the catalog with no code able to fetch it - the
+    /// only initializer took a directory the caller had to fill themselves.
+    public init() {
+        self.weightsDirectory = nil
+    }
+
+    /// Initialize with a directory of `<stem>.safetensors` files (no download)
     public init(weightsDirectory: String) {
         self.weightsDirectory = weightsDirectory
     }
-    
-    /// Load all source models
+
+    /// Load all four source models
     public func loadAll() async throws {
+        let directory = try await resolveWeightsDirectory(for: Stem.allCases)
         for stem in Stem.allCases {
-            try loadSync(stem: stem)
+            try loadSync(stem: stem, weightsDirectory: directory)
         }
     }
-    
-    /// Load a specific source model
-    public func loadSync(stem: Stem) throws {
+
+    /// Directory holding the stem weights, downloading only what is asked for.
+    ///
+    /// One 84 MB file per stem, so a caller who only wants vocals fetches a quarter
+    /// of what `loadAll` does. `downloadAndGetPath` returns the repo directory either
+    /// way; `matching` is what decides how much of it arrives.
+    private func resolveWeightsDirectory(for stems: [Stem]) async throws -> String {
+        if let directory = weightsDirectory { return directory }
+
+        let wanted = stems.map { ModelFiles.demucsStem($0.rawValue) }
+        if let cached = ModelDownloader.shared.localPath(for: Self.repo),
+           wanted.allSatisfy({ FileManager.default.fileExists(atPath: cached.appendingPathComponent($0).path) }) {
+            return cached.path
+        }
+        let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
+            repo: Self.repo,
+            matching: wanted
+        )
+        return modelDir.path
+    }
+
+    /// Load a specific source model, fetching its weights if needed
+    public func load(stem: Stem) async throws {
+        let directory = try await resolveWeightsDirectory(for: [stem])
+        try loadSync(stem: stem, weightsDirectory: directory)
+    }
+
+    /// Load a specific source model from a directory already on disk
+    public func loadSync(stem: Stem, weightsDirectory: String) throws {
         let config = HTDemucsConfig()
         let model = HTDemucs(config: config)
         
         // Use HTDemucs.loadWeights for proper Python→Swift key conversion
-        let weightsPath = "\(weightsDirectory)/\(stem.rawValue).safetensors"
+        let weightsPath = "\(weightsDirectory)/\(ModelFiles.demucsStem(stem.rawValue))"
         let parameters = try HTDemucs.loadWeights(from: weightsPath)
         try model.update(parameters: parameters, verify: .all)
         
@@ -371,11 +410,6 @@ public actor DemucsProvider: MusicSeparator {
         MLX.eval(model)
         
         models[stem] = model
-    }
-    
-    /// Load a specific source model
-    public func load(stem: Stem) async throws {
-        try loadSync(stem: stem)
     }
     
     /// Separate a specific source from the audio
@@ -536,10 +570,13 @@ public actor DemucsProvider: MusicSeparator {
     /// - Parameter audio: Input audio buffer at 44.1kHz
     /// - Returns: Vocals and accompaniment (instrumental) audio buffers
     public func separateVocalsWithAccompaniment(_ audio: AudioBuffer) async throws -> VocalsWithAccompaniment {
-        // Ensure all models are loaded
-        for stem in Stem.allCases {
-            if models[stem] == nil {
-                try loadSync(stem: stem)
+        // Ensure all models are loaded. Resolve the directory once so a cold cache
+        // fetches the four stems in a single call rather than four.
+        let missing = Stem.allCases.filter { models[$0] == nil }
+        if !missing.isEmpty {
+            let directory = try await resolveWeightsDirectory(for: missing)
+            for stem in missing {
+                try loadSync(stem: stem, weightsDirectory: directory)
             }
         }
         
@@ -603,8 +640,9 @@ extension DemucsProvider: ManagedModel {
     /// ``load(stem:)`` to bring up a single stem, which is what you want when you
     /// only need vocals - `checkIfLoaded` reports true for any partial state.
     public func load() async throws {
+        let directory = try await resolveWeightsDirectory(for: Stem.allCases)
         for stem in Stem.allCases {
-            try loadSync(stem: stem)
+            try loadSync(stem: stem, weightsDirectory: directory)
         }
     }
 
