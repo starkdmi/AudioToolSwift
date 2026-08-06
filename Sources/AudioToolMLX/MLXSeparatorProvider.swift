@@ -367,88 +367,137 @@ public actor DemucsProvider: MusicSeparator {
     /// Separate a specific source from the audio
     public func separate(_ input: AudioBuffer, stem: Stem) async throws -> AudioBuffer {
         try validateSampleRate(input)
-        let durationSeconds = Float(input.samples.count) / Float(input.sampleRate)
-        
+
+        guard models[stem] != nil else {
+            throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
+        }
+
+        // Deinterleave once, here, so both paths see the same stereo pair.
+        let stereo = Self.stereoPair(from: input)
+        eval(stereo)
+        let frameCount = stereo.shape[1]
+        let durationSeconds = Float(frameCount) / Float(input.sampleRate)
+
         // Use chunking for longer audio
         if durationSeconds > maxDirectDuration {
-            return try await separateWithChunking(input, stem: stem)
+            return try await separateWithChunking(stereo, frameCount: frameCount, stem: stem)
         }
-        
-        return try await separateChunk(input.samples, stem: stem, channels: input.channels)
+
+        return try await separateDirect(stereo, stem: stem)
     }
-    
-    /// Separate with chunking using MLXOverlap
-    /// Uses triangular weighted overlap-add for seamless blending
-    private func separateWithChunking(_ input: AudioBuffer, stem: Stem) async throws -> AudioBuffer {
-        let chunkingConfig = ChunkingConfig.demucs(sampleRate: sampleRate)
-        let inputMLX = MLXArray(input.samples)
-        
-        guard let model = models[stem] else {
-            throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
-        }
-        
-        let sourceIndex = stem.sourceIndex
-        
-        let result = try await MLXOverlap.processWithChunking(
-            audio: inputMLX,
-            chunkSamples: chunkingConfig.chunkSamples,
-            overlapRatio: chunkingConfig.overlapRatio,
-            strategy: .triangular
-        ) { chunk in
-            // Process chunk through Demucs model
-            // Demucs expects [batch, channels, samples] input
-            let mono = chunk  // [samples]
-            let stereo = MLX.stacked([mono, mono], axis: 0)  // [2, samples]
-            let batched = stereo.expandedDimensions(axis: 0)  // [1, 2, samples]
-            
-            // Model output is (B, S=4, C=2, T) where S = sources
-            let output = model(batched)  // [1, 4, 2, samples]
-            eval(output)
-            
-            // Extract correct source and average stereo to mono
-            let sourceOutput = output[0, sourceIndex]  // [2, samples]
-            let monoOutput = mean(sourceOutput, axis: 0)  // [samples]
-            eval(monoOutput)
-            
-            return monoOutput
-        }
-        eval(result)
-        
-        return AudioBuffer(samples: result.asArray(Float.self), sampleRate: sampleRate, channels: 1)
-    }
-    
-    /// Separate a single chunk
-    private func separateChunk(_ samples: [Float], stem: Stem, channels: Int) async throws -> AudioBuffer {
-        guard let model = models[stem] else {
-            throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
-        }
-        
-        var inputMLX: MLXArray
+
+    /// Turn a buffer into the `(2, frames)` planar pair HTDemucs expects.
+    ///
+    /// ``AudioBuffer`` stores multichannel audio interleaved. The stereo branch here
+    /// used to be `MLXArray(samples).reshaped([2, -1])`, which reads an interleaved
+    /// buffer as if it were planar: channel 0 became the first half of the recording
+    /// and channel 1 the second half, so the model was handed two time-shifted copies
+    /// of different halves of the song rather than a left/right pair. Nothing in the
+    /// package fed it stereo - the CLI loads mono and the chunked path duplicated a
+    /// mono stream - so it produced no visible symptom while making Demucs's stereo
+    /// cues, the thing it separates with, meaningless for any caller who did.
+    ///
+    /// Mono is duplicated to both channels; more than two channels are downmixed,
+    /// since the model has exactly two input channels.
+    internal static func stereoPair(from input: AudioBuffer) -> MLXArray {
+        let channels = max(1, input.channels)
         if channels == 1 {
-            let mono = MLXArray(samples)
-            inputMLX = MLX.stacked([mono, mono], axis: 0)
-        } else {
-            inputMLX = MLXArray(samples).reshaped([2, -1])
+            let mono = MLXArray(input.samples)
+            return MLX.stacked([mono, mono], axis: 0)
         }
-        
-        inputMLX = inputMLX.expandedDimensions(axis: 0)
-        
-        // Model output is (batch, source, channel, time) - four sources, always.
-        //
-        // This used to squeeze the batch axis and take mean(axis: 0), which averaged
-        // the four *stems* into each other rather than selecting one, and left the
-        // result still stereo: a 4s mono request came back with 2x the samples,
-        // labelled mono, containing a blend of drums, bass, vocals and other. The
-        // chunked path indexed correctly, so which one ran depended only on whether
-        // the input was longer than maxDirectDuration.
-        let output = model(inputMLX)
+
+        // (frames, channels) -> (channels, frames)
+        let planar = MLXArray(input.samples).reshaped([-1, channels]).transposed(1, 0)
+        if channels == 2 {
+            return planar
+        }
+        let mono = mean(planar, axis: 0)
+        return MLX.stacked([mono, mono], axis: 0)
+    }
+
+    /// Run one `(2, frames)` block through the model and take the requested stem.
+    ///
+    /// Model output is (batch, source, channel, time) - four sources, always.
+    ///
+    /// The direct path used to squeeze the batch axis and take mean(axis: 0), which
+    /// averaged the four *stems* into each other rather than selecting one, and left
+    /// the result still stereo: a 4s mono request came back with 2x the samples,
+    /// labelled mono, containing a blend of drums, bass, vocals and other. The
+    /// chunked path indexed correctly, so which one ran depended only on whether the
+    /// input was longer than maxDirectDuration.
+    private func stemOutput(_ stereo: MLXArray, stem: Stem, model: HTDemucs) -> MLXArray {
+        let batched = stereo.expandedDimensions(axis: 0)   // (1, 2, time)
+        let output = model(batched)                        // (1, 4, 2, time)
         eval(output)
-        
-        let sourceOutput = output[0, stem.sourceIndex]   // (channel, time)
-        let mono = mean(sourceOutput, axis: 0)           // (time)
+        return output[0, stem.sourceIndex]                 // (2, time)
+    }
+
+    /// Separate audio short enough to go through the model in one pass.
+    private func separateDirect(_ stereo: MLXArray, stem: Stem) async throws -> AudioBuffer {
+        guard let model = models[stem] else {
+            throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
+        }
+
+        let sourceOutput = stemOutput(stereo, stem: stem, model: model)
+        // Downmixed to mono, matching ``outputChannels``. The separation itself used
+        // both channels; only the result is folded down.
+        let mono = mean(sourceOutput, axis: 0)
         eval(mono)
-        
+
         return AudioBuffer(samples: mono.asArray(Float.self), sampleRate: sampleRate, channels: 1)
+    }
+
+    /// Separate with triangular weighted overlap-add across chunks.
+    ///
+    /// Hand-rolled rather than delegating to ``MLXOverlap/processWithChunking``,
+    /// which is strictly one-dimensional: routing stereo through it meant flattening
+    /// to mono first, so long audio silently lost the stereo information that short
+    /// audio kept. Same windowing and normalization as
+    /// ``MLXOverlap/reassembleOverlapAdd``, applied per channel.
+    private func separateWithChunking(_ stereo: MLXArray, frameCount: Int, stem: Stem) async throws -> AudioBuffer {
+        guard let model = models[stem] else {
+            throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
+        }
+
+        let chunkingConfig = ChunkingConfig.demucs(sampleRate: sampleRate)
+        let chunkSamples = chunkingConfig.chunkSamples
+        let overlapSamples = Int(Float(chunkSamples) * chunkingConfig.overlapRatio)
+        let stride = max(1, chunkSamples - overlapSamples)
+        let window = MLXOverlap.triangularWindow(length: chunkSamples).asArray(Float.self)
+
+        // Accumulate the downmixed result; the model still sees both channels.
+        var accumulator = [Float](repeating: 0, count: frameCount)
+        var weights = [Float](repeating: 0, count: frameCount)
+
+        var startIdx = 0
+        while startIdx < frameCount {
+            let endIdx = min(startIdx + chunkSamples, frameCount)
+            var chunk = stereo[0..., startIdx..<endIdx]
+            if endIdx - startIdx < chunkSamples {
+                let padding = MLXArray.zeros([2, chunkSamples - (endIdx - startIdx)])
+                chunk = concatenated([chunk, padding], axis: 1)
+            }
+            eval(chunk)
+
+            let sourceOutput = stemOutput(chunk, stem: stem, model: model)
+            let monoOutput = mean(sourceOutput, axis: 0)
+            eval(monoOutput)
+            let chunkResult = monoOutput.asArray(Float.self)
+
+            for i in 0..<(endIdx - startIdx) where i < chunkResult.count {
+                accumulator[startIdx + i] += window[i] * chunkResult[i]
+                weights[startIdx + i] += window[i]
+            }
+
+            GPU.clearCache()
+            startIdx += stride
+        }
+
+        for i in 0..<frameCount where weights[i] > 0 {
+            accumulator[i] /= weights[i]
+        }
+
+        return AudioBuffer(samples: accumulator, sampleRate: sampleRate, channels: 1)
     }
     
     /// Separate all sources

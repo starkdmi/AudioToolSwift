@@ -383,3 +383,110 @@ public struct MLXOverlap {
         return (reassembledEnhanced, reassembledBackground)
     }
 }
+
+// MARK: - Incremental Overlap-Add
+
+/// Weighted overlap-add performed as chunks arrive, rather than over all of them.
+///
+/// The same arithmetic as ``MLXOverlap/reassembleOverlapAdd(processedChunks:chunkSamples:stride:window:originalLength:)``,
+/// which is the point: a streaming path built on this produces exactly the samples
+/// the batch path would, and `IncrementalOverlapAddTests` asserts that rather than
+/// leaving it to inspection.
+///
+/// Providers had been hand-rolling their own streaming blend, and getting it wrong
+/// in ways that only showed up as audio. The super-resolution provider emitted its
+/// first chunk multiplied by the rising half of a Hann window and never divided by
+/// the accumulated weight, so every stream opened with a `stride`-long fade-in from
+/// silence - a second and a half at 48 kHz - that batch processing did not have.
+///
+/// A sample position receives contributions from every chunk that starts at or
+/// before it and within `chunkSamples` of it. Once the chunk starting at `startIdx`
+/// has been added, nothing below `startIdx + stride` can change, so that region is
+/// final and ``add(_:startIdx:)`` returns it. The accumulator holds only the live
+/// window, so memory is bounded by the chunk size rather than the length of the
+/// audio.
+///
+/// ```swift
+/// var assembler = IncrementalOverlapAdd(chunkSamples: n, stride: s,
+///                                       window: w, totalLength: total)
+/// for (chunk, startIdx) in chunks {
+///     let ready = assembler.add(try process(chunk), startIdx: startIdx)
+///     if !ready.isEmpty { yield(ready) }
+/// }
+/// yield(assembler.finish())
+/// ```
+public struct IncrementalOverlapAdd: Sendable {
+
+    private let chunkSamples: Int
+    private let stride: Int
+    private let window: [Float]
+    private let totalLength: Int
+
+    /// Weighted sums for the live window, aligned so index 0 is `emittedCount`.
+    private var accumulator: [Float]
+    /// Accumulated window weight for the same positions, the divisor on the way out.
+    private var weights: [Float]
+    private var emittedCount = 0
+
+    /// Samples emitted so far. Equals `totalLength` once ``finish()`` has run.
+    public var emittedSamples: Int { emittedCount }
+
+    /// - Parameters:
+    ///   - chunkSamples: Length of each processed chunk.
+    ///   - stride: Hop between consecutive chunk starts.
+    ///   - window: Per-sample weight, `chunkSamples` long.
+    ///   - totalLength: Length of the finished output, used to trim padding.
+    public init(chunkSamples: Int, stride: Int, window: [Float], totalLength: Int) {
+        self.chunkSamples = chunkSamples
+        self.stride = max(1, stride)
+        self.window = window
+        self.totalLength = totalLength
+        self.accumulator = [Float](repeating: 0, count: chunkSamples)
+        self.weights = [Float](repeating: 0, count: chunkSamples)
+    }
+
+    /// Fold one processed chunk in, and return whatever is now final.
+    ///
+    /// - Parameters:
+    ///   - chunk: Processed samples for the chunk beginning at `startIdx`.
+    ///   - startIdx: Index of the chunk's first sample in the output.
+    /// - Returns: Newly completed samples, normalized. Empty when nothing completed.
+    public mutating func add(_ chunk: [Float], startIdx: Int) -> [Float] {
+        let contributionCount = min(min(chunk.count, chunkSamples),
+                                    max(0, totalLength - startIdx))
+        let offset = startIdx - emittedCount
+        for i in 0..<contributionCount {
+            let position = offset + i
+            guard position >= 0, position < accumulator.count else { continue }
+            let weight = i < window.count ? window[i] : 1.0
+            accumulator[position] += weight * chunk[i]
+            weights[position] += weight
+        }
+
+        // Everything below the next chunk's start is complete.
+        return drain(upTo: min(startIdx + stride, totalLength))
+    }
+
+    /// Emit the tail - the part of the last chunk beyond the final stride boundary.
+    public mutating func finish() -> [Float] {
+        drain(upTo: totalLength)
+    }
+
+    private mutating func drain(upTo endIndex: Int) -> [Float] {
+        let readyCount = endIndex - emittedCount
+        guard readyCount > 0 else { return [] }
+
+        var ready = [Float](repeating: 0, count: readyCount)
+        for i in 0..<min(readyCount, accumulator.count) where weights[i] > 0 {
+            ready[i] = accumulator[i] / weights[i]
+        }
+
+        emittedCount = endIndex
+        let shift = min(readyCount, accumulator.count)
+        accumulator.removeFirst(shift)
+        weights.removeFirst(shift)
+        accumulator.append(contentsOf: [Float](repeating: 0, count: shift))
+        weights.append(contentsOf: [Float](repeating: 0, count: shift))
+        return ready
+    }
+}

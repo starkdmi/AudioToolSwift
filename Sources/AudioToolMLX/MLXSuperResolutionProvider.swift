@@ -299,79 +299,41 @@ extension MossFormer2SR48KProvider: StreamableOutput {
             stride: stride
         )
         
-        // Buffered overlap-add streaming:
-        // We maintain a buffer for the overlap region and emit when we have complete blended data
-        var overlapBuffer: [Float]? = nil  // Previous chunk's trailing overlap portion
-        var overlapWeights: [Float]? = nil
-        var emittedSamples = 0
-        let overlapLength = chunkSamples - stride
-        
-        for (chunkIdx, (chunk, _)) in chunks.enumerated() {
+        // Streaming must produce the samples batch would. `IncrementalOverlapAdd`
+        // is the same weighted overlap-add as `MLXOverlap.reassembleOverlapAdd`,
+        // fed chunk by chunk.
+        //
+        // What was here before multiplied the first chunk by the rising half of the
+        // Hann window and never divided by the accumulated weight, so every stream
+        // opened with a `stride`-long fade-in from silence - a second and a half at
+        // 48 kHz - and the middle chunks were weighted but unnormalized too.
+        // Attaching a progress handler was enough to get that instead of the real
+        // output.
+        var assembler = IncrementalOverlapAdd(
+            chunkSamples: chunkSamples,
+            stride: stride,
+            window: window,
+            totalLength: totalLength
+        )
+
+        for (chunk, startIdx) in chunks {
             eval(chunk)
             let chunkSamplesArray = chunk.asArray(Float.self)
             let processed = try await processChunk(chunkSamplesArray, model: model)
-            let outputSamples = processed.samples
-            
-            if chunkIdx == 0 {
-                // First chunk: emit non-overlapping portion [0, stride)
-                let firstPortion = Array(outputSamples.prefix(stride))
-                let weighted = zip(firstPortion, window.prefix(stride)).map { $0 * $1 }
-                
-                // Save overlap portion for next chunk
-                overlapBuffer = Array(outputSamples.suffix(overlapLength))
-                    .enumerated()
-                    .map { (i, s) in s * window[stride + i] }
-                overlapWeights = Array(window.suffix(overlapLength))
-                
-                continuation.yield(AudioBuffer(samples: weighted, sampleRate: outputSampleRate, channels: 1))
-                emittedSamples += stride
-            } else {
-                // Subsequent chunks: blend with previous overlap, then emit
-                if let prevOverlap = overlapBuffer, let prevWeights = overlapWeights {
-                    // Blend overlap region
-                    let currentOverlapPortion = Array(outputSamples.prefix(overlapLength))
-                    let currentWeights = Array(window.prefix(overlapLength))
-                    
-                    var blended = [Float](repeating: 0, count: overlapLength)
-                    for i in 0..<overlapLength {
-                        let totalWeight = prevWeights[i] + currentWeights[i]
-                        if totalWeight > 0 {
-                            blended[i] = (prevOverlap[i] + currentOverlapPortion[i] * currentWeights[i]) / totalWeight
-                        }
-                    }
-                    
-                    // The blended overlap + new non-overlap portion forms our output
-                    let isLast = chunkIdx == chunks.count - 1
-                    if isLast {
-                        // Last chunk: emit everything remaining
-                        let remainingNew = Array(outputSamples.dropFirst(overlapLength))
-                        let combined = blended + remainingNew
-                        // Trim to avoid exceeding original length
-                        let maxToEmit = totalLength - emittedSamples
-                        let trimmed = Array(combined.prefix(maxToEmit))
-                        if !trimmed.isEmpty {
-                            continuation.yield(AudioBuffer(samples: trimmed, sampleRate: outputSampleRate, channels: 1))
-                        }
-                    } else {
-                        // Middle chunk: emit blended overlap + stride portion
-                        let nonOverlapPortion = Array(outputSamples[overlapLength..<stride])
-                            .enumerated()
-                            .map { (i, s) in s * window[overlapLength + i] }
-                        continuation.yield(AudioBuffer(samples: blended + nonOverlapPortion, sampleRate: outputSampleRate, channels: 1))
-                        emittedSamples += overlapLength + (stride - overlapLength)
-                        
-                        // Update overlap buffer for next iteration
-                        overlapBuffer = Array(outputSamples.suffix(overlapLength))
-                            .enumerated()
-                            .map { (i, s) in s * window[stride + i] }
-                        overlapWeights = Array(window.suffix(overlapLength))
-                    }
-                }
+
+            let ready = assembler.add(processed.samples, startIdx: startIdx)
+            if !ready.isEmpty {
+                continuation.yield(AudioBuffer(samples: ready, sampleRate: outputSampleRate, channels: 1))
             }
-            
+
             GPU.clearCache()
         }
-        
+
+        let tail = assembler.finish()
+        if !tail.isEmpty {
+            continuation.yield(AudioBuffer(samples: tail, sampleRate: outputSampleRate, channels: 1))
+        }
+
         continuation.finish()
     }
 }
