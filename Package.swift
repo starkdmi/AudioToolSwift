@@ -352,10 +352,19 @@ let package = Package(
 
         // MARK: - Tests
 
+        // Gating shared by every test target: which suites may touch models, the
+        // network, or the sibling research checkout, and where artifacts go.
+        // Plain Foundation, no XCTest, so it can be an ordinary library target.
+        .target(
+            name: "AudioToolTestSupport",
+            path: "Tests/TestSupport",
+            swiftSettings: commonSwiftSettings
+        ),
+
         // Unit tests with mocks (swift test compatible)
         .testTarget(
             name: "AudioToolTests",
-            dependencies: ["AudioTool", "AudioToolTTS", "AudioToolSpeech"],
+            dependencies: ["AudioTool", "AudioToolTTS", "AudioToolSpeech", "AudioToolTestSupport"],
             path: "Tests/AudioToolTests",
             swiftSettings: commonSwiftSettings
         ),
@@ -370,6 +379,7 @@ let package = Package(
                 "AudioToolTTS",
                 "AudioToolFluidAudio",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
+                            "AudioToolTestSupport",
             ],
             path: "Tests/AudioToolMLXIntegrationTests",
             swiftSettings: commonSwiftSettings
@@ -384,6 +394,7 @@ let package = Package(
                 "AudioToolCore",
                 "AudioToolUSS",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
+                            "AudioToolTestSupport",
             ],
             path: "Tests/AudioToolFluidAudioTests",
             // Declared so SwiftPM emits a resource bundle and Bundle.module exists.
@@ -403,6 +414,7 @@ let package = Package(
                 "AudioToolMLX",
                 "AudioToolCore",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
+                            "AudioToolTestSupport",
             ],
             path: "Tests/AudioToolUSSTests",
             // Declared so SwiftPM emits a resource bundle and Bundle.module exists.
@@ -419,6 +431,7 @@ let package = Package(
                 "AudioToolMLXTranslation",
                 "AudioTool",
                 "AudioToolCore",
+                            "AudioToolTestSupport",
             ],
             path: "Tests/AudioToolMLXTranslationTests",
             swiftSettings: commonSwiftSettings

@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioTool
 import AudioToolCore
 @preconcurrency import AudioToolTTS
@@ -13,14 +14,9 @@ import AudioToolCore
 @preconcurrency import MLX
 @preconcurrency import AudioUtils
 
-final class VoiceMatchingIntegrationTests: XCTestCase {
+final class VoiceMatchingIntegrationTests: IntegrationTestCase {
     
     // Compute project root from source file path
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
     
     // NOTE: This test requires Metal/MLX and must be run via xcodebuild
     // Run: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -derivedDataPath .build/DerivedData -only-testing:AudioToolMLXIntegrationTests/VoiceMatchingIntegrationTests
@@ -35,24 +31,14 @@ final class VoiceMatchingIntegrationTests: XCTestCase {
         print("\n=== Voice Matching Integration Test ===\n")
         
         // Reference audio files (at project root /Docs/, not /AudioTool/Docs/)
-        let referenceFiles = [
-            "\(Self.projectRoot)/Docs/burunow_short.wav",
-            "\(Self.projectRoot)/Docs/reference.wav",
-            "\(Self.projectRoot)/Docs/watson_short.wav"
-        ]
+        let referenceFiles = try [
+            "Docs/burunow_short.wav",
+            "Docs/reference.wav",
+            "Docs/watson_short.wav"
+        ].map { try reference($0).path }
         
-        // Check files exist
-        for file in referenceFiles {
-            guard FileManager.default.fileExists(atPath: file) else {
-                print("⚠️ Reference file not found: \(file)")
-                throw XCTSkip("Reference file not found: \(file)")
-            }
-        }
-        print("✓ All reference files found\n")
-        
-        // Output directory
-        let outputDir = FileManager.default.currentDirectoryPath + "/voice_match_output"
-        try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
+        // Output directory - a scratch path, not the process's working directory
+        let outputDir = try outputDirectory().path
         
         // Load Kokoro TTS model – if the model cannot be downloaded we skip the test
         print("Loading Kokoro TTS model (optional)...")

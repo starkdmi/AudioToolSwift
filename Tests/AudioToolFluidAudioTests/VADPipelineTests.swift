@@ -6,10 +6,11 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolCore
 
-final class VADPipelineTests: XCTestCase {
+final class VADPipelineTests: IntegrationTestCase {
     
     // MARK: - Deterministic Audio Generation
     

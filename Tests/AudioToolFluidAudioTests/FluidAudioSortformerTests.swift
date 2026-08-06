@@ -6,12 +6,13 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class FluidAudioSortformerTests: XCTestCase {
+final class FluidAudioSortformerTests: IntegrationTestCase {
     
     // MARK: - Factory Method Tests
     

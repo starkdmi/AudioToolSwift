@@ -6,12 +6,13 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class FluidAudioTranscriberTests: XCTestCase {
+final class FluidAudioTranscriberTests: IntegrationTestCase {
     
     /// Test transcription on watson_30s.wav
     func testTranscribeWatson() async throws {

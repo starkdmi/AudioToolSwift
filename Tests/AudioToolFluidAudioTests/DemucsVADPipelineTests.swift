@@ -6,20 +6,16 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolMLX
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class DemucsVADPipelineTests: XCTestCase {
+final class DemucsVADPipelineTests: IntegrationTestCase {
     
     // Compute project root from source file path
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
     
     /// Test Demucs → VAD pipeline on all three test files
     func testDemucsVADPipeline() async throws {
@@ -27,7 +23,7 @@ final class DemucsVADPipelineTests: XCTestCase {
         print("Testing if vocal separation improves VAD detection\n")
         
         // Get Demucs weights from local Models directory
-        let weightsPath = "\(Self.projectRoot)/Models/demucs_mlx_swift/Weights"
+        let weightsPath = try reference("Models/demucs_mlx_swift/Weights").path
         
         // Verify weights exist
         guard FileManager.default.fileExists(atPath: weightsPath + "/vocals.safetensors") else {

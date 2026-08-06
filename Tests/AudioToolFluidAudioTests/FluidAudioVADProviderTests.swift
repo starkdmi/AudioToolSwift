@@ -6,12 +6,13 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class FluidAudioVADProviderTests: XCTestCase {
+final class FluidAudioVADProviderTests: IntegrationTestCase {
     
     var provider: FluidAudioVADProvider!
     

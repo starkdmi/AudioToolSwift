@@ -7,12 +7,13 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class SortformerComparisonTests: XCTestCase {
+final class SortformerComparisonTests: IntegrationTestCase {
     
     // MARK: - Shared Test Infrastructure
     

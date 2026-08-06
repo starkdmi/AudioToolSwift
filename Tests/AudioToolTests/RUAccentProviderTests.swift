@@ -9,35 +9,33 @@ import Testing
 import Foundation
 @testable import AudioToolTTS
 @testable import AudioToolCore
+import AudioToolTestSupport
 
 @Suite("RUAccent Provider Tests", .enabled(if: TestConfiguration.runIntegrationTests,
         "integration test - set RUN_INTEGRATION_TESTS=1"))
 struct RUAccentProviderTests {
     
-    // Compute project root from source file path
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
-    
-    // Path to ruaccent assets - relative to project root
-    static let modelsDir = URL(fileURLWithPath: "\(projectRoot)/Models/ruaccent/models/balanced")
-    static let assetsDir = URL(fileURLWithPath: "\(projectRoot)/Models/ruaccent/assets/balanced")
-    
-    /// Check if models are available (use with try #require)
-    static var modelsAvailable: Bool {
-        FileManager.default.fileExists(atPath: modelsDir.path)
+    // RUAccent's dictionaries and models live in the sibling research checkout.
+    static let modelsDir = TestGate.reference("Models/ruaccent/models/balanced")
+    static let assetsDir = TestGate.reference("Models/ruaccent/assets/balanced")
+
+    /// The RUAccent asset pair, or a `#require` failure naming what is missing.
+    static func requireAssets() throws -> (models: URL, assets: URL) {
+        let models = try #require(modelsDir,
+                                  Comment(rawValue: TestGate.missingReference("Models/ruaccent/models/balanced")))
+        let assets = try #require(assetsDir,
+                                  Comment(rawValue: TestGate.missingReference("Models/ruaccent/assets/balanced")))
+        return (models, assets)
     }
     
     @Test("Basic stress marking")
     func testBasicStressMarking() throws {
-        try #require(Self.modelsAvailable, "RUAccent models not found at \(Self.modelsDir.path)")
+        let (modelsDir, assetsDir) = try Self.requireAssets()
         
         let provider = try RUAccentProvider(
             profile: .balanced,
-            modelsDir: Self.modelsDir,
-            assetsDir: Self.assetsDir
+            modelsDir: modelsDir,
+            assetsDir: assetsDir
         )
         
         // Test simple word
@@ -48,12 +46,12 @@ struct RUAccentProviderTests {
     
     @Test("Multiple words")
     func testMultipleWords() throws {
-        try #require(Self.modelsAvailable, "RUAccent models not found")
+        let (modelsDir, assetsDir) = try Self.requireAssets()
         
         let provider = try RUAccentProvider(
             profile: .balanced,
-            modelsDir: Self.modelsDir,
-            assetsDir: Self.assetsDir
+            modelsDir: modelsDir,
+            assetsDir: assetsDir
         )
         
         let result = try provider.process("привет мир")
@@ -63,12 +61,12 @@ struct RUAccentProviderTests {
     
     @Test("Dictionary lookup")
     func testDictionaryLookup() throws {
-        try #require(Self.modelsAvailable, "RUAccent models not found")
+        let (modelsDir, assetsDir) = try Self.requireAssets()
         
         let provider = try RUAccentProvider(
             profile: .balanced,
-            modelsDir: Self.modelsDir,
-            assetsDir: Self.assetsDir
+            modelsDir: modelsDir,
+            assetsDir: assetsDir
         )
         
         // Test word that should be in dictionary
@@ -78,12 +76,12 @@ struct RUAccentProviderTests {
     
     @Test("Punctuation preserved")
     func testPunctuationPreserved() throws {
-        try #require(Self.modelsAvailable, "RUAccent models not found")
+        let (modelsDir, assetsDir) = try Self.requireAssets()
         
         let provider = try RUAccentProvider(
             profile: .balanced,
-            modelsDir: Self.modelsDir,
-            assetsDir: Self.assetsDir
+            modelsDir: modelsDir,
+            assetsDir: assetsDir
         )
         
         // Test with punctuation
@@ -95,12 +93,12 @@ struct RUAccentProviderTests {
     
     @Test("Empty string")
     func testEmptyString() throws {
-        try #require(Self.modelsAvailable, "RUAccent models not found")
+        let (modelsDir, assetsDir) = try Self.requireAssets()
         
         let provider = try RUAccentProvider(
             profile: .balanced,
-            modelsDir: Self.modelsDir,
-            assetsDir: Self.assetsDir
+            modelsDir: modelsDir,
+            assetsDir: assetsDir
         )
         
         let result = try provider.process("")
@@ -110,12 +108,12 @@ struct RUAccentProviderTests {
     
     @Test("AudioTool integration")
     func testAudioToolIntegration() async throws {
-        try #require(Self.modelsAvailable, "RUAccent models not found")
+        let (modelsDir, assetsDir) = try Self.requireAssets()
         
         // Test factory method
         let provider = try TTSProviders.ruaccent(
-            modelsDir: Self.modelsDir,
-            assetsDir: Self.assetsDir
+            modelsDir: modelsDir,
+            assetsDir: assetsDir
         )
         
         let result = try provider.process("Москва столица России")

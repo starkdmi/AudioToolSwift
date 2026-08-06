@@ -7,6 +7,7 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 @testable import AudioTool
 import AudioToolCore
 import AudioToolFluidAudio
@@ -14,13 +15,8 @@ import AudioToolMLX
 import AudioUtils
 import MLX
 
-final class SpeakerSeparationPipelineTests: XCTestCase {
+final class SpeakerSeparationPipelineTests: IntegrationTestCase {
     
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
     
     // MARK: - Event Tracker
     
@@ -62,9 +58,9 @@ final class SpeakerSeparationPipelineTests: XCTestCase {
             return url
         }
         
-        let fallback = URL(fileURLWithPath: "\(Self.projectRoot)/Docs/harry_potter.wav")
-        guard FileManager.default.fileExists(atPath: fallback.path) else {
-            throw XCTSkip("harry_potter.wav not found in Fixtures or Docs")
+        // Fixtures are gitignored, so fall back to the sibling research checkout.
+        guard let fallback = TestGate.reference("Docs/harry_potter.wav") else {
+            throw XCTSkip("no long-speech fixture: neither Fixtures/speech_long.wav nor \(TestGate.missingReference("Docs/harry_potter.wav"))")
         }
         return fallback
     }

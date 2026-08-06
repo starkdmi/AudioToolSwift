@@ -6,13 +6,14 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolMLX
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class VADSEIntegrationTests: XCTestCase {
+final class VADSEIntegrationTests: IntegrationTestCase {
     
     /// Full pipeline test: VAD detects speech → SE 48K enhances speech segments
     func testVADToSE48KPipeline() async throws {

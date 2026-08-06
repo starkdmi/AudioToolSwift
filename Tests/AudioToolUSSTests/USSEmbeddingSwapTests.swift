@@ -10,26 +10,22 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolUSS
 import AudioToolCore
 import AudioUtils
 import MLX
 @preconcurrency import USSMLXSwift
 
-final class USSEmbeddingSwapTests: XCTestCase {
+final class USSEmbeddingSwapTests: IntegrationTestCase {
     
     // Compute project root from source file path
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
     
     // MARK: - Test Fixtures
     
     /// Load test audio at 32kHz (USS native rate)
     private func loadTestAudio(duration: Double = 2.0) throws -> AudioBuffer {
-        let testPath = "\(Self.projectRoot)/Models/uss_mlx_swift/test.wav"
+        let testPath = try reference("Models/uss_mlx_swift/test.wav").path
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 32000,
             normalizationMode: .none

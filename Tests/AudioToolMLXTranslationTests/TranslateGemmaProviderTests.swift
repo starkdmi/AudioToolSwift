@@ -10,16 +10,23 @@ import Foundation
 @testable import AudioTool
 @testable import AudioToolCore
 @testable import AudioToolMLXTranslation
+import AudioToolTestSupport
 
-/// Whether MLX tests should run (default: yes, set SKIP_MLX_TESTS=1 to skip)
+/// Whether these tests should run.
+///
+/// They download a multi-gigabyte Gemma checkpoint from HuggingFace and run it, so
+/// they are opt-in like every other suite that leaves the machine. `SKIP_MLX_TESTS`
+/// alone was not enough: unset, it meant *run*, so an offline `swift test` spent
+/// seven minutes timing out on network calls and then reported five failures.
 private var shouldRunMLXTests: Bool {
-    ProcessInfo.processInfo.environment["SKIP_MLX_TESTS"] != "1"
+    TestGate.runIntegrationTests && !TestGate.skipMLXTests
 }
 
-/// Trait for enabling tests only when MLX tests are not skipped
+/// Trait for enabling tests only when MLX integration tests are opted into
 private extension Trait where Self == Testing.ConditionTrait {
     static var enabledForMLX: Self {
-        .enabled(if: shouldRunMLXTests, "MLX tests disabled via SKIP_MLX_TESTS=1")
+        .enabled(if: shouldRunMLXTests,
+                 "MLX integration test - set RUN_INTEGRATION_TESTS=1 (downloads a Gemma checkpoint)")
     }
 }
 

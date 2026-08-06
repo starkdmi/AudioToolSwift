@@ -7,26 +7,22 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolUSS
 import AudioToolCore
 import AudioUtils
 import MLX
 @preconcurrency import USSMLXSwift
 
-final class USSPrewarmBenchmarkTests: XCTestCase {
+final class USSPrewarmBenchmarkTests: IntegrationTestCase {
     
     // Compute project root from source file path
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
     
     // MARK: - Test Fixtures
     
     /// Load harry_potter_short.wav at 32kHz (USS native rate)
     private func loadHarryPotterAudio() throws -> AudioBuffer {
-        let testPath = "\(Self.projectRoot)/Models/uss_mlx_swift/USSSwift/Samples/harry_potter_short.wav"
+        let testPath = try reference("Models/uss_mlx_swift/USSSwift/Samples/harry_potter_short.wav").path
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 32000,
             normalizationMode: .none

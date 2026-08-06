@@ -6,19 +6,15 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class HarryPotterDiarizationTest: XCTestCase {
+final class HarryPotterDiarizationTest: IntegrationTestCase {
     
     // Compute project root from source file path
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
     
     /// Test diarization on harry_potter.wav (2:16 trailer, ~10 speakers, background music)
     func testDiarizeHarryPotter() async throws {
@@ -26,8 +22,7 @@ final class HarryPotterDiarizationTest: XCTestCase {
         print("Expected: Up to 10 speakers, with background music\n")
         
         // Use direct file path instead of bundle to match CLI exactly
-        // projectRoot is /Users/.../ProjectTwo, file is at Docs/harry_potter.wav
-        let testURL = URL(fileURLWithPath: "\(Self.projectRoot)/Docs/harry_potter.wav")
+        let testURL = try reference("Docs/harry_potter.wav")
         
         // Load at 16kHz for diarization
         let loader = AudioLoader(config: AudioLoader.Configuration(
@@ -90,7 +85,7 @@ final class HarryPotterDiarizationTest: XCTestCase {
     func testCompareURLvsAudioBuffer() async throws {
         print("\n=== URL vs AudioBuffer Comparison ===\n")
         
-        let testURL = URL(fileURLWithPath: "\(Self.projectRoot)/Docs/harry_potter.wav")
+        let testURL = try reference("Docs/harry_potter.wav")
         
         // Load audio
         let loader = AudioLoader(config: AudioLoader.Configuration(

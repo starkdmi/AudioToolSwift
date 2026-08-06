@@ -6,12 +6,13 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class FluidAudioDiarizationTests: XCTestCase {
+final class FluidAudioDiarizationTests: IntegrationTestCase {
     
     /// Test diarization on watson_30s.wav (interview with 2+ speakers)
     func testDiarizeWatson() async throws {

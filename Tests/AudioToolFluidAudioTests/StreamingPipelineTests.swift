@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 @testable import AudioTool
 import AudioToolCore
 import AudioToolFluidAudio
@@ -15,13 +16,8 @@ import AudioUtils
 import MLX
 import USSMLXSwift
 
-final class StreamingPipelineTests: XCTestCase {
+final class StreamingPipelineTests: IntegrationTestCase {
     
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
     
     private actor ProgressTracker {
         private var progressEvents: [(stage: String, percent: Double)] = []
@@ -50,9 +46,9 @@ final class StreamingPipelineTests: XCTestCase {
             return url
         }
         
-        let fallback = URL(fileURLWithPath: "\(Self.projectRoot)/Docs/harry_potter.wav")
-        guard FileManager.default.fileExists(atPath: fallback.path) else {
-            throw XCTSkip("harry_potter.wav not found in Fixtures or Docs")
+        // Fixtures are gitignored, so fall back to the sibling research checkout.
+        guard let fallback = TestGate.reference("Docs/harry_potter.wav") else {
+            throw XCTSkip("no long-speech fixture: neither Fixtures/speech_long.wav nor \(TestGate.missingReference("Docs/harry_potter.wav"))")
         }
         return fallback
     }
@@ -153,7 +149,11 @@ final class StreamingPipelineTests: XCTestCase {
     
     // MARK: - Output Saving Helpers
     
-    private static let outputDir = URL(fileURLWithPath: "\(projectRoot)/temp/pipeline_outputs")
+    /// Scratch, not `<checkout>/temp` - these are inspection artifacts, not fixtures.
+    private static let outputDir: URL = {
+        (try? TestGate.outputDirectory("StreamingPipeline"))
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("StreamingPipeline")
+    }()
     
     private func writeWAV(_ audio: AudioBuffer, to filename: String) throws {
         let url = Self.outputDir.appendingPathComponent(filename)

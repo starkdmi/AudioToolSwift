@@ -6,12 +6,13 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class VADThresholdTests: XCTestCase {
+final class VADThresholdTests: IntegrationTestCase {
     
     /// Test music.wav (35s trim from 25-60s) with different thresholds and settings
     func testMusicWithVADSettings() async throws {

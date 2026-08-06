@@ -6,12 +6,13 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolFluidAudio
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class TranscriptionTruncationTests: XCTestCase {
+final class TranscriptionTruncationTests: IntegrationTestCase {
     
     /// Regression test for transcription truncation at chunk boundaries
     ///

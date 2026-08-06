@@ -15,7 +15,14 @@ import Foundation
 
 /// Integration tests that download real models from HuggingFace
 /// These tests require network access and may take time
-@Suite("Model Download Integration", .tags(.integration), .serialized)
+///
+/// Opt-in, like every other suite that leaves the machine. This one is the reason
+/// `swift test` was not offline-clean even after the slow Apple-framework suites
+/// were gated: it reached HuggingFace on every run. The hermetic half of the
+/// downloader's behaviour is covered by `ModelDownloadTests`.
+@Suite("Model Download Integration", .tags(.integration), .serialized,
+       .enabled(if: TestConfiguration.runIntegrationTests,
+                "integration test - set RUN_INTEGRATION_TESTS=1 (downloads from HuggingFace)"))
 struct ModelDownloadIntegrationTests {
     
     // Small test models - use actual public repos

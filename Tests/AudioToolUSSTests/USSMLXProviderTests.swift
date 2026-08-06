@@ -6,13 +6,14 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolUSS
 import AudioToolCore
 import AudioUtils
 import MLX
 @preconcurrency import USSMLXSwift
 
-final class USSMLXProviderTests: XCTestCase {
+final class USSMLXProviderTests: IntegrationTestCase {
     
     /// Test speech separation on watson_30s.wav
     func testSpeechSeparation() async throws {

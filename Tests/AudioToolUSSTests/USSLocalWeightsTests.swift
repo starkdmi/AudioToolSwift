@@ -6,10 +6,11 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolCore
 import AudioToolUSS
 
-final class USSLocalWeightsTests: XCTestCase {
+final class USSLocalWeightsTests: IntegrationTestCase {
 
     /// Proves the explicit-path escape hatch works end to end: load real weights from
     /// disk and separate, with no HuggingFace access. Skips when the env var is unset.

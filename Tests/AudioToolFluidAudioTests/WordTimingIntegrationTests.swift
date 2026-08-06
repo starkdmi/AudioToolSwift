@@ -7,12 +7,13 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 @testable import AudioToolFluidAudio
 import AudioToolCore
 import AudioUtils
 import MLX
 
-final class WordTimingIntegrationTests: XCTestCase {
+final class WordTimingIntegrationTests: IntegrationTestCase {
     
     // MARK: - Reference Data Model
     

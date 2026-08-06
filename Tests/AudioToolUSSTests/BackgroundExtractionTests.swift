@@ -1,6 +1,6 @@
 //
 //  BackgroundExtractionTests.swift
-//  AudioToolTests
+//  AudioToolUSSTests
 //
 //  Test background extraction for GAN SE, USS, and Demucs
 //
@@ -10,97 +10,84 @@ import AudioToolUSS
 import AudioToolCoreML
 import AudioToolMLX
 import AudioToolCore
+import AudioToolTestSupport
 import AudioUtils
 import MLX
 
-final class BackgroundExtractionTests: XCTestCase {
-    
-    // Compute project root from source file path
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() } // file → AudioToolUSSTests → Tests → AudioTool → ProjectTwo
-        return url.path
-    }()
-    
+/// Every test here needs real weights and real audio from the sibling research
+/// checkout, and none of that exists in a standalone clone.
+///
+/// This used to reach into `../Models` unconditionally and write its outputs back
+/// there - overwriting `frcrn_enhanced.wav`, `demucs_vocals.wav` and five others
+/// that belong to those directories, not to this suite. Inputs are now optional
+/// and outputs go to a scratch directory.
+final class BackgroundExtractionTests: IntegrationTestCase {
+
     /// Test USS speech separation with background extraction
     func testUSSBackground() async throws {
-        print("\n=== USS Background Extraction Test ===")
-        
-        let outputDir = "\(Self.projectRoot)/Models/uss_mlx_swift"
-        
+        let sample = "Models/uss_mlx_swift/USSSwift/Samples/harry_potter_short.wav"
+        let testPath = try reference(sample)
+        let outputDir = try outputDirectory()
+
         // Load test audio at 32kHz (USS native rate)
-        let testPath = "\(Self.projectRoot)/Models/uss_mlx_swift/USSSwift/Samples/harry_potter_short.wav"
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 32000,
             normalizationMode: .none
         ))
-        let audio = try loader.loadMono(from: URL(fileURLWithPath: testPath))
+        let audio = try loader.loadMono(from: testPath)
         eval(audio)
         let samples = audio.asArray(Float.self)
-        
-        print("Input: \(samples.count) samples @ 32kHz (\(String(format: "%.1f", Double(samples.count) / 32000))s)")
-        
+
         // Load USS
         let uss = USSProviders.speechSeparation()
         try await uss.load()
-        
+
         // Separate with background
-        let start = Date()
         let input = AudioBuffer(samples: samples, sampleRate: 32000)
         let result = try await uss.separateWithBackground(input)
-        let elapsed = Date().timeIntervalSince(start)
-        
-        print("Separation: \(String(format: "%.2f", elapsed))s")
-        print("  Speech: \(result.separated.samples.count) samples, max: \(String(format: "%.4f", result.separated.samples.max() ?? 0))")
-        print("  Background: \(result.background.samples.count) samples, max: \(String(format: "%.4f", result.background.samples.max() ?? 0))")
-        
-        // Save outputs
-        try AudioSaver.saveWAV(MLXArray(result.separated.samples), to: "\(outputDir)/uss_speech.wav", sampleRate: 32000)
-        try AudioSaver.saveWAV(MLXArray(result.background.samples), to: "\(outputDir)/uss_background.wav", sampleRate: 32000)
-        print("✓ Saved: uss_speech.wav, uss_background.wav to \(outputDir)")
-        
+
+        try AudioSaver.saveWAV(MLXArray(result.separated.samples),
+                               to: outputDir.appendingPathComponent("uss_speech.wav").path,
+                               sampleRate: 32000)
+        try AudioSaver.saveWAV(MLXArray(result.background.samples),
+                               to: outputDir.appendingPathComponent("uss_background.wav").path,
+                               sampleRate: 32000)
+
         XCTAssertGreaterThan(result.separated.samples.max() ?? 0, 0.01)
     }
-    
+
     /// Test GAN SE CoreML with background extraction
     func testGANSEBackground() async throws {
-        print("\n=== GAN SE CoreML Background Extraction Test ===")
-        
-        let outputDir = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml"
-        
+        let sample = "Models/mossformer_gan_se_coreml/test.wav"
+        let referenceOutput = "Models/mossformer_gan_se_coreml/enhanced_output_no_chunk.wav"
+        let model = "Models/mossformer_gan_se_coreml/MossFormerGAN_256frames.mlpackage"
+        let testPath = try reference(sample)
+        let refPath = try reference(referenceOutput)
+        let modelPath = try reference(model)
+        let outputDir = try outputDirectory()
+
         // Load test audio at 16kHz (GAN SE native rate)
-        let testPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/test.wav"
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 16000,
             normalizationMode: .none
         ))
-        let audio = try loader.loadMono(from: URL(fileURLWithPath: testPath))
+        let audio = try loader.loadMono(from: testPath)
         eval(audio)
         let samples = audio.asArray(Float.self)
-        
-        print("Input: \(samples.count) samples @ 16kHz (\(String(format: "%.1f", Double(samples.count) / 16000))s), max: \(String(format: "%.4f", samples.max() ?? 0))")
-        
-        // Load reference output for comparison
-        let refPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/enhanced_output_no_chunk.wav"
-        let refAudio = try loader.loadMono(from: URL(fileURLWithPath: refPath))
+
+        // Reference output, for a drift check against the standard path
+        let refAudio = try loader.loadMono(from: refPath)
         eval(refAudio)
         let refSamples = refAudio.asArray(Float.self)
-        print("Reference: \(refSamples.count) samples, max: \(String(format: "%.4f", refSamples.max() ?? 0))")
-        
+
         // Load GAN SE (auto-compiles .mlpackage)
-        let modelPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/MossFormerGAN_256frames.mlpackage"
-        let gan = MossFormerGANCoreMLProvider(modelPath: modelPath)
+        let gan = MossFormerGANCoreMLProvider(modelPath: modelPath.path)
         try await gan.load()
-        
+
         // Test standard process() first
         let input = AudioBuffer(samples: samples, sampleRate: 16000)
-        let startStd = Date()
         let enhancedStd = try await gan.process(input)
-        let elapsedStd = Date().timeIntervalSince(startStd)
-        print("\nStandard process():")
-        print("  Time: \(String(format: "%.2f", elapsedStd))s")
-        print("  Output: \(enhancedStd.samples.count) samples, max: \(String(format: "%.4f", enhancedStd.samples.max() ?? 0))")
-        
+
         // Compare with reference
         let minLen = min(enhancedStd.samples.count, refSamples.count)
         var diff: Float = 0
@@ -108,108 +95,92 @@ final class BackgroundExtractionTests: XCTestCase {
             diff += abs(enhancedStd.samples[i] - refSamples[i])
         }
         let avgDiff = diff / Float(minLen)
-        print("  Avg diff from reference: \(String(format: "%.6f", avgDiff))")
-        
-        // Save standard enhanced for inspection
-        try AudioSaver.saveWAV(MLXArray(enhancedStd.samples), to: "\(outputDir)/ganse_enhanced_std.wav", sampleRate: 16000)
-        
+        XCTAssertLessThan(avgDiff, 0.01, "standard process() drifted from the stored reference output")
+
+        try AudioSaver.saveWAV(MLXArray(enhancedStd.samples),
+                               to: outputDir.appendingPathComponent("ganse_enhanced_std.wav").path,
+                               sampleRate: 16000)
+
         // Process with background
-        let start = Date()
         let result = try await gan.processWithBackground(input)
-        let elapsed = Date().timeIntervalSince(start)
-        
-        print("\nprocessWithBackground():")
-        print("  Time: \(String(format: "%.2f", elapsed))s")
-        print("  Enhanced: \(result.enhanced.samples.count) samples, max: \(String(format: "%.4f", result.enhanced.samples.max() ?? 0))")
-        print("  Background: \(result.background.samples.count) samples, max: \(String(format: "%.4f", result.background.samples.max() ?? 0))")
-        
-        // Save outputs
-        try AudioSaver.saveWAV(MLXArray(result.enhanced.samples), to: "\(outputDir)/ganse_enhanced.wav", sampleRate: 16000)
-        try AudioSaver.saveWAV(MLXArray(result.background.samples), to: "\(outputDir)/ganse_background.wav", sampleRate: 16000)
-        print("✓ Saved: ganse_enhanced.wav, ganse_background.wav, ganse_enhanced_std.wav to \(outputDir)")
-        
+
+        try AudioSaver.saveWAV(MLXArray(result.enhanced.samples),
+                               to: outputDir.appendingPathComponent("ganse_enhanced.wav").path,
+                               sampleRate: 16000)
+        try AudioSaver.saveWAV(MLXArray(result.background.samples),
+                               to: outputDir.appendingPathComponent("ganse_background.wav").path,
+                               sampleRate: 16000)
+
         XCTAssertGreaterThan(result.enhanced.samples.max() ?? 0, 0.01)
     }
-    
+
     /// Test Demucs vocals/accompaniment separation
     func testDemucsBackground() async throws {
-        print("\n=== Demucs Vocals/Accompaniment Test ===")
-        
-        let outputDir = "\(Self.projectRoot)/Models/demucs_mlx_swift"
-        
+        let sample = "Models/demucs_mlx_swift/test.wav"
+        let weights = "Models/demucs_mlx_swift/Weights"
+        let testPath = try reference(sample)
+        let weightsDir = try reference(weights)
+        let outputDir = try outputDirectory()
+
         // Load test audio at 44.1kHz (Demucs native rate)
-        let testPath = "\(Self.projectRoot)/Models/demucs_mlx_swift/test.wav"
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 44100,
             normalizationMode: .none
         ))
-        let audio = try loader.loadMono(from: URL(fileURLWithPath: testPath))
+        let audio = try loader.loadMono(from: testPath)
         eval(audio)
         let samples = audio.asArray(Float.self)
-        
-        print("Input: \(samples.count) samples @ 44.1kHz (\(String(format: "%.1f", Double(samples.count) / 44100))s)")
-        
+
         // Load Demucs (all 4 source models)
-        let weightsDir = "\(Self.projectRoot)/Models/demucs_mlx_swift/Weights"
-        let demucs = DemucsProvider(weightsDirectory: weightsDir)
+        let demucs = DemucsProvider(weightsDirectory: weightsDir.path)
         try await demucs.loadAll()
-        
+
         // Separate vocals and accompaniment
-        let start = Date()
         let input = AudioBuffer(samples: samples, sampleRate: 44100)
         let result = try await demucs.separateVocalsWithAccompaniment(input)
-        let elapsed = Date().timeIntervalSince(start)
-        
-        print("Separation: \(String(format: "%.2f", elapsed))s")
-        print("  Vocals: \(result.vocals.samples.count) samples, max: \(String(format: "%.4f", result.vocals.samples.max() ?? 0))")
-        print("  Accompaniment: \(result.accompaniment.samples.count) samples, max: \(String(format: "%.4f", result.accompaniment.samples.max() ?? 0))")
-        
-        // Save outputs
-        try AudioSaver.saveWAV(MLXArray(result.vocals.samples), to: "\(outputDir)/demucs_vocals.wav", sampleRate: 44100)
-        try AudioSaver.saveWAV(MLXArray(result.accompaniment.samples), to: "\(outputDir)/demucs_accompaniment.wav", sampleRate: 44100)
-        print("✓ Saved: demucs_vocals.wav, demucs_accompaniment.wav to \(outputDir)")
-        
+
+        try AudioSaver.saveWAV(MLXArray(result.vocals.samples),
+                               to: outputDir.appendingPathComponent("demucs_vocals.wav").path,
+                               sampleRate: 44100)
+        try AudioSaver.saveWAV(MLXArray(result.accompaniment.samples),
+                               to: outputDir.appendingPathComponent("demucs_accompaniment.wav").path,
+                               sampleRate: 44100)
+
         XCTAssertGreaterThan(result.vocals.samples.max() ?? 0, 0.001)
     }
-    
+
     /// Test FRCRN SE with background extraction
     func testFRCRNBackground() async throws {
-        print("\n=== FRCRN SE Background Extraction Test ===")
-        
-        let outputDir = "\(Self.projectRoot)/Models/frcrn_se_mlx_swift"
-        
-        // Load test audio at 16kHz (FRCRN native rate) - use same file as GAN SE test
-        let testPath = "\(Self.projectRoot)/Models/mossformer_gan_se_coreml/test.wav"
+        // Same input as the GAN SE test - both models are 16 kHz
+        let sample = "Models/mossformer_gan_se_coreml/test.wav"
+        let weights = "Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
+        let testPath = try reference(sample)
+        let weightsPath = try reference(weights)
+        let outputDir = try outputDirectory()
+
         let loader = AudioLoader(config: AudioLoader.Configuration(
             targetSampleRate: 16000,
             normalizationMode: .none
         ))
-        let audio = try loader.loadMono(from: URL(fileURLWithPath: testPath))
+        let audio = try loader.loadMono(from: testPath)
         eval(audio)
         let samples = audio.asArray(Float.self)
-        
-        print("Input: \(samples.count) samples @ 16kHz (\(String(format: "%.1f", Double(samples.count) / 16000))s), max: \(String(format: "%.4f", samples.max() ?? 0))")
-        
+
         // Load FRCRN
-        let weightsPath = "\(Self.projectRoot)/Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
-        let frcrn = MLXProviders.frcrnSE16K(weightsPath: weightsPath)
+        let frcrn = MLXProviders.frcrnSE16K(weightsPath: weightsPath.path)
         try await frcrn.load()
-        
+
         // Process with background extraction
-        let start = Date()
         let input = AudioBuffer(samples: samples, sampleRate: 16000)
         let result = try await frcrn.processWithBackground(input)
-        let elapsed = Date().timeIntervalSince(start)
-        
-        print("Enhancement: \(String(format: "%.2f", elapsed))s")
-        print("  Enhanced: \(result.enhanced.samples.count) samples, max: \(String(format: "%.4f", result.enhanced.samples.max() ?? 0))")
-        print("  Background: \(result.background.samples.count) samples, max: \(String(format: "%.4f", result.background.samples.max() ?? 0))")
-        
-        // Save outputs
-        try AudioSaver.saveWAV(MLXArray(result.enhanced.samples), to: "\(outputDir)/frcrn_enhanced.wav", sampleRate: 16000)
-        try AudioSaver.saveWAV(MLXArray(result.background.samples), to: "\(outputDir)/frcrn_background.wav", sampleRate: 16000)
-        print("✓ Saved: frcrn_enhanced.wav, frcrn_background.wav to \(outputDir)")
-        
+
+        try AudioSaver.saveWAV(MLXArray(result.enhanced.samples),
+                               to: outputDir.appendingPathComponent("frcrn_enhanced.wav").path,
+                               sampleRate: 16000)
+        try AudioSaver.saveWAV(MLXArray(result.background.samples),
+                               to: outputDir.appendingPathComponent("frcrn_background.wav").path,
+                               sampleRate: 16000)
+
         XCTAssertGreaterThan(result.enhanced.samples.max() ?? 0, 0.01)
         XCTAssertGreaterThan(result.background.samples.max() ?? 0, 0.001)
     }

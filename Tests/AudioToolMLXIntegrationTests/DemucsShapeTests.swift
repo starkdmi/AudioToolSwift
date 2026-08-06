@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import AudioToolTestSupport
 import AudioToolCore
 import AudioToolMLX
 
@@ -15,7 +16,7 @@ import AudioToolMLX
 /// `maxDirectDuration` routes short and long audio to different ones.
 ///
 /// Set AUDIOTOOL_DEMUCS_WEIGHTS to the directory holding <stem>.safetensors.
-final class DemucsShapeTests: XCTestCase {
+final class DemucsShapeTests: IntegrationTestCase {
 
     private var weightsDirectory: String? {
         guard let v = ProcessInfo.processInfo.environment["AUDIOTOOL_DEMUCS_WEIGHTS"],

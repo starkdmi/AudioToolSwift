@@ -9,18 +9,12 @@ import Testing
 @testable import AudioToolCore
 @testable import AudioToolSpeech
 import AudioUtils
+import AudioToolTestSupport
 import MLX
 
 @Suite("Transcription Integration Tests", .enabled(if: TestConfiguration.runIntegrationTests,
         "integration test - set RUN_INTEGRATION_TESTS=1"))
 struct TranscriptionIntegrationTests {
-    
-    // Compute project root from source file path
-    static let projectRoot: String = {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
     
     @available(iOS 26.0, macOS 26.0, *)
     @Test("Transcribe test.wav with Apple Speech", .timeLimit(.minutes(2)))
@@ -29,10 +23,8 @@ struct TranscriptionIntegrationTests {
         print("\n=== Apple Speech Transcription Test ===")
         
         // Load the audio file
-        let testURL = URL(fileURLWithPath: "\(Self.projectRoot)/Models/mossformer2_se_mlx_swift/test.wav")
-        
-        try #require(FileManager.default.fileExists(atPath: testURL.path), 
-                     "test.wav not found at: \(testURL.path)")
+        let path = "Models/mossformer2_se_mlx_swift/test.wav"
+        let testURL = try #require(TestGate.reference(path), Comment(rawValue: TestGate.missingReference(path)))
         
         // Load audio at 16kHz
         let loader = AudioLoader(config: AudioLoader.Configuration(

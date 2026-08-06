@@ -8,6 +8,7 @@
 
 import Foundation
 import Testing
+import AudioToolTestSupport
 
 // MARK: - Test Configuration
 
@@ -19,18 +20,12 @@ import Testing
 /// - `CI=1`: Indicates running in CI environment (adjusts performance thresholds)
 public enum TestConfiguration {
     
-    // MARK: - Project Paths
-    
-    /// Project root computed from source file location
-    public static let projectRoot: String = {
-        let filePath = #filePath
-        var url = URL(fileURLWithPath: filePath)
-        for _ in 0..<4 { url.deleteLastPathComponent() }
-        return url.path
-    }()
-    
-    // MARK: - Environment Checks
-    
+    // MARK: - Environment
+    //
+    // One source of truth: these forward to ``TestGate``, which every test target
+    // shares. Duplicating the env checks per target is how the integration suites
+    // ended up ungated in the first place.
+
     /// Whether to skip integration tests (set SKIP_INTEGRATION_TESTS=1)
     public static var skipIntegrationTests: Bool {
         ProcessInfo.processInfo.environment["SKIP_INTEGRATION_TESTS"] == "1"
@@ -48,21 +43,14 @@ public enum TestConfiguration {
     /// swift test                          # fast: mocks only
     /// RUN_INTEGRATION_TESTS=1 swift test  # everything
     /// ```
-    public static var runIntegrationTests: Bool {
-        guard !skipIntegrationTests else { return false }
-        return ProcessInfo.processInfo.environment["RUN_INTEGRATION_TESTS"] == "1"
-    }
-    
+    public static var runIntegrationTests: Bool { TestGate.runIntegrationTests }
+
     /// Whether to skip MLX tests (set SKIP_MLX_TESTS=1)
-    public static var skipMLXTests: Bool {
-        ProcessInfo.processInfo.environment["SKIP_MLX_TESTS"] == "1"
-    }
-    
+    public static var skipMLXTests: Bool { TestGate.skipMLXTests }
+
     /// Whether running in CI environment (set CI=1)
-    public static var isCI: Bool {
-        ProcessInfo.processInfo.environment["CI"] == "1"
-    }
-    
+    public static var isCI: Bool { TestGate.isCI }
+
     // MARK: - Performance Thresholds
     
     /// RTF threshold for VAD (adjusted for CI)
