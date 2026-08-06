@@ -37,7 +37,22 @@ extension CVAudioBuffer {
         case .balanced:
             resampled = resampleCubic(samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate))
         case .high:
-            resampled = try resampleAVAudioConverter(samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate))
+            resampled = try resampleAVAudioConverter(
+                samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate),
+                algorithm: AVSampleRateConverterAlgorithm_Mastering,
+                quality: AVAudioQuality.max)
+        case .auto:
+            // Mirrors AudioLoader's `.auto` exactly - see ResamplingQuality.auto.
+            // Upsampling cannot alias, so cubic; downsampling gets AVAudioConverter's
+            // ordinary settings, which is what the models were trained against.
+            if targetSampleRate > sampleRate {
+                resampled = resampleCubic(samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate))
+            } else {
+                resampled = try resampleAVAudioConverter(
+                    samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate),
+                    algorithm: AVSampleRateConverterAlgorithm_Normal,
+                    quality: AVAudioQuality.medium)
+            }
         }
         
         return CVAudioBuffer(samples: resampled, sampleRate: targetSampleRate, channels: channels)
@@ -146,7 +161,13 @@ private func resampleCubic(_ samples: [Float], fromRate: Float, toRate: Float) -
 
 /// High-quality resampling using AVAudioConverter
 /// Provides professional-grade quality with hardware acceleration and anti-aliasing
-private func resampleAVAudioConverter(_ samples: [Float], fromRate: Float, toRate: Float) throws -> [Float] {
+private func resampleAVAudioConverter(
+    _ samples: [Float],
+    fromRate: Float,
+    toRate: Float,
+    algorithm: String,
+    quality: AVAudioQuality
+) throws -> [Float] {
     guard let inputFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
         sampleRate: Double(fromRate),
@@ -169,16 +190,13 @@ private func resampleAVAudioConverter(_ samples: [Float], fromRate: Float, toRat
         throw ResamplingError.conversionFailed
     }
 
-    // Mastering at maximum quality, explicitly. AVAudioConverter defaults to
-    // `AVSampleRateConverterAlgorithm_Normal` at quality 64 (medium), which is not
-    // what `.high` promises and not what any reference pipeline here uses: every
-    // standalone Swift generator under `Models/` asks for Mastering/.max, and USS
-    // declares `.high` precisely to reproduce that. Measured on a 48 -> 16 kHz
-    // downsample of a signal with content to 22 kHz, the default sits 25% RMS away
-    // from Mastering/max - so a provider asking for the reference resampler was
-    // quietly getting something else.
-    converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Mastering
-    converter.sampleRateConverterQuality = AVAudioQuality.max.rawValue
+    // Set explicitly rather than inherited. AVAudioConverter's own defaults are
+    // Normal at quality 64, which is neither of the two settings this package needs
+    // to be able to reproduce: Mastering/`.max` for the generators that ask for it,
+    // and Normal/`.medium` for `AudioLoader`'s `.auto`. Leaving it implicit meant
+    // `.high` silently delivered the former's promise with the latter's algorithm.
+    converter.sampleRateConverterAlgorithm = algorithm
+    converter.sampleRateConverterQuality = quality.rawValue
     
     // Create input buffer
     guard let inputBuffer = AVAudioPCMBuffer(

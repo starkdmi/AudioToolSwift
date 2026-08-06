@@ -324,12 +324,14 @@ public actor DemucsProvider: MusicSeparator {
     
     public nonisolated let sampleRate: Int = 44100
 
-    // No declaration on purpose. The reference resamples with
-    // `torchaudio.transforms.Resample` (`Models/python/demucs_mlx/run.py:39`) - a
-    // windowed-sinc kernel with its own width and rolloff - and the Swift standalone
-    // does not resample at all. AVAudioConverter Mastering is not that filter, and
-    // picking it because both suppress aliasing is the substitution this type's
-    // documentation warns against. Declare once measured against Python.
+    /// Matches the standalone generator, which builds `AudioLoader` with
+    /// `targetSampleRate: 44100` and leaves the resampling method at `.auto`.
+    ///
+    /// Not Mastering. The Python reference uses `torchaudio.transforms.Resample`, and
+    /// the Swift port was validated against it through the loader's ordinary
+    /// settings - so `.auto` is the measured answer and Mastering would be a guess
+    /// that happens to sound better.
+    public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .auto }
     public nonisolated let inputChannels: Int = 2
     public nonisolated let outputChannels: Int = 1
     

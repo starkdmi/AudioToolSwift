@@ -46,34 +46,78 @@ final class ResamplingPreferenceTests: XCTestCase {
         }
     }
 
-    /// The models whose only reference is Python must *not* declare one yet.
+    /// The rest match `AudioLoader`'s `.auto`, because their generators construct the
+    /// loader without naming a resampling method.
     ///
-    /// MossFormer2 SE resamples with `scipy.signal.resample` and Demucs with
-    /// `torchaudio.transforms.Resample`; FRCRN's reference never resamples at all.
-    /// None of those is AVAudioConverter Mastering. They are all anti-aliased, but
-    /// "also anti-aliased" is not "the same filter" - they differ in transition band,
-    /// stopband depth and phase, and a separator's output is sensitive enough to
-    /// input perturbation to make that matter.
+    /// | Provider        | Swift reference                                             |
+    /// | --------------- | ----------------------------------------------------------- |
+    /// | MossFormer2 SE  | `starkdmi/mossformer_se_mlx` swift/Sources/Generate           |
+    /// | Demucs          | Demucs MLX generator, `targetSampleRate: 44100`              |
+    /// | FRCRN           | FRCRN generator, `normalizationMode: .none`                  |
     ///
-    /// Declaring `.high` for them would substitute Apple's algorithm for the one the
-    /// model was validated against, on the reasoning that both suppress aliasing -
-    /// which is precisely what `ResamplingQuality`'s documentation says not to do.
-    /// The right move is to measure against Python first, and possibly to implement
-    /// the actual kernels rather than approximate them.
+    /// `.auto` is cubic upward and AVAudioConverter `Normal` at `.medium` downward -
+    /// deliberately not Mastering. SwiftAudio chose those settings "for ML model
+    /// compatibility (matches FluidAudio/pyannote training data resampling)": the
+    /// models were trained on audio that had been through an ordinary resampler, so
+    /// an ordinary resampler is what reproduces them.
     ///
-    /// This test exists so that "no declaration" reads as a deliberate open question
-    /// rather than an oversight, and so that adding one is a decision someone has to
-    /// make on purpose.
-    func testProvidersWithOnlyAPythonReferenceStayUndeclared() {
-        let undeclared: [(name: String, quality: ResamplingQuality)] = [
+    /// This is the correction that matters most here. An earlier pass set these three
+    /// to `.high` on the reasoning that their Python references (`scipy.signal
+    /// .resample`, `torchaudio.transforms.Resample`) are anti-aliased and therefore
+    /// Mastering is the closest match. Both halves were wrong: the Swift port is the
+    /// thing that was validated, and it used the loader's ordinary path, so the
+    /// "closest analogue" argument was answering a question that had already been
+    /// settled by measurement.
+    func testProvidersMatchingTheLoaderDefaultDeclareAuto() {
+        let auto: [(name: String, quality: ResamplingQuality)] = [
             ("MossFormer2SE48K", MossFormer2SE48KProvider(precision: .fp32).preferredResamplingQuality),
             ("FRCRNSE16K", FRCRNSE16KProvider(weightsPath: "/nonexistent").preferredResamplingQuality),
             ("Demucs", DemucsProvider(weightsDirectory: "/nonexistent").preferredResamplingQuality),
         ]
 
-        for (name, quality) in undeclared {
-            XCTAssertEqual(quality, .balanced,
-                           "\(name) has only a Python reference (scipy/torchaudio, or none at all). Declaring a resampler here means claiming parity that has not been measured - do the measurement, then update this test with what it showed")
+        for (name, quality) in auto {
+            XCTAssertEqual(quality, .auto,
+                           "\(name)'s generator leaves AudioLoader at its default, so `.auto` is what it was validated with - `.high` would be a better-sounding guess, not a match")
         }
+    }
+
+    /// `.auto` is not a synonym for either of the others, in either direction.
+    /// If it collapsed onto one of them the declarations above would be decorative.
+    func testAutoDiffersFromBothFixedChoices() throws {
+        let rate = 48000
+        let samples = (0..<rate).map { i -> Float in
+            let t = Float(i) / Float(rate)
+            var sum: Float = 0
+            for frequency in stride(from: Float(200), to: Float(22000), by: 700) {
+                sum += sin(2 * Float.pi * frequency * t)
+            }
+            return sum / 32
+        }
+        let input = AudioBuffer(samples: samples, sampleRate: rate, channels: 1)
+
+        func rms(_ values: [Float]) -> Float {
+            sqrt(values.reduce(0) { $0 + $1 * $1 } / Float(max(values.count, 1)))
+        }
+        func difference(_ a: AudioBuffer, _ b: AudioBuffer) -> Float {
+            let n = min(a.samples.count, b.samples.count)
+            return rms((0..<n).map { a.samples[$0] - b.samples[$0] }) / max(rms(b.samples), 1e-9)
+        }
+
+        // Downsampling: `.auto` is Normal/.medium, distinct from both cubic and Mastering.
+        let autoDown = try input.resampled(to: 16000, quality: .auto)
+        let cubicDown = try input.resampled(to: 16000, quality: .balanced)
+        let masteringDown = try input.resampled(to: 16000, quality: .high)
+
+        XCTAssertGreaterThan(difference(autoDown, cubicDown), 0.1,
+                             "`.auto` should not be cubic on the way down - that is the aliasing it exists to avoid")
+        XCTAssertGreaterThan(difference(autoDown, masteringDown), 0.01,
+                             "`.auto` should not be Mastering either; it is Normal at .medium")
+
+        // Upsampling: `.auto` is cubic, so it should agree with `.balanced` exactly.
+        let autoUp = try input.resampled(to: 96000, quality: .auto)
+        let cubicUp = try input.resampled(to: 96000, quality: .balanced)
+        XCTAssertEqual(autoUp.samples.count, cubicUp.samples.count)
+        XCTAssertLessThan(difference(autoUp, cubicUp), 1e-6,
+                          "`.auto` upsamples with cubic, so it should be identical to `.balanced` going up")
     }
 }

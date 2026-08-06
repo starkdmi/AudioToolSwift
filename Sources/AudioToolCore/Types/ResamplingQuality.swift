@@ -16,30 +16,36 @@ import Foundation
 ///   signal-processing grounds; changing which resampler feeds a model changes that
 ///   model's output, and needs measuring against the reference.
 ///
-///   The references have been read, and they do not agree with each other:
+///   The references have been read. They do not agree with each other, and the
+///   deciding evidence is the *Swift* port in each case - that is the thing that was
+///   validated against Python, kaldi filters, FFT conventions and the rest:
 ///
-///   | Model            | Reference resampler                                    |
-///   | ---------------- | ------------------------------------------------------ |
-///   | MossFormer2 SE   | `scipy.signal.resample` (FFT)                           |
-///   | MossFormer2 SR   | `librosa.resample`; Swift generator: Mastering/`.max`   |
-///   | MossFormer2 SS   | Swift generator: Mastering/`.max`                       |
-///   | Demucs           | `torchaudio.transforms.Resample` (windowed sinc)        |
-///   | USS              | `librosa.load`; Swift generator: Mastering/`.max`       |
-///   | Chatterbox       | none - loads without resampling                         |
+///   | Model            | Python reference          | Swift generator asks for      |
+///   | ---------------- | ------------------------- | ----------------------------- |
+///   | MossFormer2 SE   | `scipy.signal.resample`   | `AudioLoader` default: `.auto` |
+///   | MossFormer2 SR   | `librosa.resample`        | Mastering / `.max`            |
+///   | MossFormer2 SS   | -                         | Mastering / `.max`            |
+///   | Demucs           | `torchaudio` Resample     | `AudioLoader` default: `.auto` |
+///   | FRCRN            | none - 16 kHz in          | `AudioLoader` default: `.auto` |
+///   | USS              | `librosa.load`            | Mastering / `.max`            |
+///   | Chatterbox       | -                         | no resampling at all          |
 ///
-///   All of the resampling ones are band-limited, and none of them is cubic. It does
-///   not follow that they are interchangeable. An FFT method, a windowed sinc and
-///   AVAudioConverter's Mastering algorithm differ in transition band, stopband depth
-///   and phase, and a separator's output is sensitive enough to input perturbation
-///   that those differences survive to the result. "Also anti-aliased" is not "the
-///   same filter", and picking the platform's best-sounding option because it is the
-///   best-sounding option is the substitution this note exists to prevent.
+///   Two settings, not one, and the split does not follow "which is better". A model
+///   whose generator names Mastering gets ``high``; a model whose generator leaves
+///   `AudioLoader` alone gets ``auto``, which is cubic upward and AVAudioConverter
+///   `Normal` at `.medium` downward. SwiftAudio chose those downsampling settings
+///   "for ML model compatibility (matches FluidAudio/pyannote training data
+///   resampling)" - the training audio went through an ordinary resampler, so an
+///   ordinary resampler is what reproduces it. Mastering would sound better and match
+///   less.
 ///
-///   So ``high`` is declared only where a *Swift* reference asked for exactly it -
-///   MossFormer2 SR, MossFormer2 SS and USS, whose standalone generators request
-///   Mastering at maximum quality. The models whose only reference is Python are left
-///   on the default until someone measures; matching scipy or torchaudio properly may
-///   mean implementing those kernels rather than approximating them with a fourth.
+///   The trap this table exists to close: every Python reference that resamples is
+///   band-limited, so it is tempting to conclude they all want the best band-limited
+///   option the platform offers. They do not. `scipy`'s FFT method, `torchaudio`'s
+///   windowed sinc, librosa's soxr and AVAudioConverter's two algorithms are five
+///   different filters differing in transition band, stopband and phase, and a
+///   separator's output is sensitive enough to input perturbation that the difference
+///   survives to the result. Reproducing the port beats approximating the paper.
 ///
 ///   For scale, on a 48 -> 16 kHz downsample of a signal carrying content to 22 kHz:
 ///
@@ -70,10 +76,24 @@ public enum ResamplingQuality: Sendable {
     case balanced
     /// AVAudioConverter with the Mastering algorithm at maximum quality.
     ///
-    /// Band-limited, and the same request every standalone generator under `Models/`
-    /// makes. Not bit-identical to soxr, scipy or torchaudio - the nearest analogue
-    /// available on the platform.
+    /// Band-limited. Requested explicitly by the MossFormer2 SR, MossFormer2 SS and
+    /// USS generators. Not bit-identical to soxr, scipy or torchaudio - the nearest
+    /// analogue available on the platform, and not automatically the right one.
     case high
+    /// What `AudioLoader` does when nothing asks for anything else: cubic when
+    /// upsampling, AVAudioConverter `Normal` at `.medium` when downsampling.
+    ///
+    /// Deliberately *not* the best-sounding option on the downsample side. SwiftAudio
+    /// picked `Normal`/`.medium` "for ML model compatibility (matches
+    /// FluidAudio/pyannote training data resampling)" - the models were trained on
+    /// audio that had been through an ordinary resampler, so reproducing an ordinary
+    /// resampler is what matches them. Upsampling has nothing to alias, so cubic is
+    /// used there for speed.
+    ///
+    /// This is what any generator that constructs `AudioLoader` without naming a
+    /// method gets, which makes it the validated behaviour for every model ported
+    /// that way rather than a fallback.
+    case auto
 }
 
 // MARK: - Resampling Errors

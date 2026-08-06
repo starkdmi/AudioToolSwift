@@ -51,11 +51,17 @@ public extension AudioProcessor {
     /// Matches the historical facade behaviour, so a provider that has not been
     /// checked against its reference implementation keeps its current output.
     ///
-    /// Deliberately still ``ResamplingQuality/balanced`` even though every reference
-    /// that has been audited wants ``ResamplingQuality/high``. Flipping the default
-    /// would change the output of providers nobody has checked - the CoreML
-    /// enhancer, the FluidAudio and Apple backends - which is the same class of
-    /// silent change this seam exists to prevent. Audit a provider, then declare.
+    /// Still ``ResamplingQuality/balanced``, but it is probably the wrong default and
+    /// is kept only because changing it would move providers nobody has audited - the
+    /// CoreML enhancer, the FluidAudio and Apple backends.
+    ///
+    /// ``ResamplingQuality/auto`` is the better candidate: it is what `AudioLoader`
+    /// does when a caller names nothing, so it is what every model ported through the
+    /// loader was validated with, and SwiftAudio picked its downsampling settings to
+    /// match FluidAudio/pyannote training data specifically. The difference from
+    /// ``ResamplingQuality/balanced`` is confined to downsampling, where `balanced`
+    /// has no anti-aliasing stage at all. Worth switching once the unaudited
+    /// providers have been measured - not before.
     var preferredResamplingQuality: ResamplingQuality { .balanced }
 }
 
