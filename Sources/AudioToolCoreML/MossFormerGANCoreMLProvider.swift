@@ -447,15 +447,59 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         // Output is [1, 2, T, F]
         let T = multiArray.shape[2].intValue
         let F = multiArray.shape[3].intValue
-        
-        // Convert to flat array using buffer pointer (much faster than element-by-element)
+
+        // Read through the array's own strides rather than assuming the backing
+        // buffer is packed.
+        //
+        // It is not. CoreML returns this model's output as [1, 2, 256, 201] with
+        // strides [106496, 53248, 208, 1] - the innermost dimension is 201 wide but
+        // rows sit 208 floats apart, padded up to a 16-float boundary. A flat copy
+        // of 2*T*F floats therefore reads every row after the first 7 floats
+        // further out of place than the last, and 256 rows in the spectrogram is
+        // sheared beyond recognition. That is what produced ganse_enhanced.wav.
+        //
+        // Python never hits this: coremltools unpacks MLMultiArray into a proper
+        // C-contiguous ndarray before predict() returns, which is why run.py needs
+        // no equivalent and its outputs were always correct. Swift's dataPointer is
+        // the raw backing store, padding included.
+        //
+        // Measured on one segment, same prediction read both ways: flat copy gives
+        // -1.1 dB against the MLX Python reference, this gives 129.3 dB. The
+        // padding is present under every compute unit, so this path never worked.
+        //
+        // The fast path is kept for the case where CoreML does hand back packed
+        // data, which is what the shape implies and what a smaller F would give.
+        let strides = multiArray.strides.map(\.intValue)
         let totalCount = 2 * T * F
         var flatData = [Float](repeating: 0, count: totalCount)
         let srcPointer = multiArray.dataPointer.assumingMemoryBound(to: Float.self)
-        flatData.withUnsafeMutableBufferPointer { dstPtr in
-            dstPtr.baseAddress!.update(from: srcPointer, count: totalCount)
+
+        if strides == [totalCount, T * F, F, 1] {
+            flatData.withUnsafeMutableBufferPointer { dstPtr in
+                dstPtr.baseAddress!.update(from: srcPointer, count: totalCount)
+            }
+        } else {
+            flatData.withUnsafeMutableBufferPointer { dstPtr in
+                guard let destination = dstPtr.baseAddress else { return }
+                for part in 0..<2 {
+                    for frame in 0..<T {
+                        let row = part * strides[1] + frame * strides[2]
+                        let offset = (part * T + frame) * F
+                        if strides[3] == 1 {
+                            // Rows are contiguous even though the array is not:
+                            // copy each one whole rather than bin by bin.
+                            destination.advanced(by: offset)
+                                .update(from: srcPointer.advanced(by: row), count: F)
+                        } else {
+                            for bin in 0..<F {
+                                destination[offset + bin] = srcPointer[row + bin * strides[3]]
+                            }
+                        }
+                    }
+                }
+            }
         }
-        
+
         let mlxData = MLXArray(flatData).reshaped([1, 2, T, F])
         
         // Extract real/imag and transpose to [1, F, T]
