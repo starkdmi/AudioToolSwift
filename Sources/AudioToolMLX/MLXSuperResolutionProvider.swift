@@ -226,30 +226,16 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         return AudioBuffer(samples: outputs.asArray(Float.self), sampleRate: outputSampleRate, channels: 1)
     }
     
-    /// Resample input to 48kHz
+    /// Resample input to 48 kHz - the first step of inference, not plumbing.
+    ///
+    /// Delegates to ``SuperResolutionResampler``, which lives in its own file
+    /// because importing AVFoundation here makes `AudioBuffer` ambiguous with
+    /// CoreAudioTypes'.
     private func resampleTo48k(_ input: AudioBuffer) async throws -> [Float] {
-        let tempDir = FileManager.default.temporaryDirectory
-        let inputPath = tempDir.appendingPathComponent("sr_input_\(UUID().uuidString).wav").path
-        
-        defer {
-            try? FileManager.default.removeItem(atPath: inputPath)
-        }
-        
-        // Save input at its native sample rate
-        let saverConfig = AudioSaver.Configuration(sampleRate: Double(input.sampleRate))
-        let saver = AudioSaver(config: saverConfig)
-        try saver.save(MLXArray(input.samples), to: inputPath)
-        
-        // Load and resample to 48kHz
-        let loaderConfig = AudioLoader.Configuration(
-            targetSampleRate: 48000,
-            normalizationMode: .none
+        guard input.sampleRate != outputSampleRate else { return input.samples }
+        return try SuperResolutionResampler.upsample(
+            input.samples, from: input.sampleRate, to: outputSampleRate
         )
-        let loader = AudioLoader(config: loaderConfig)
-        let audio48k = try loader.loadMono(from: URL(fileURLWithPath: inputPath))
-        eval(audio48k)
-        
-        return audio48k.asArray(Float.self)
     }
 }
 
