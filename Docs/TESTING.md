@@ -22,17 +22,26 @@ xcodebuild test \
   -derivedDataPath .build/DerivedData
 
 # MLX tests only
-RUN_MLX_TESTS=1 xcodebuild test \
+TEST_RUNNER_RUN_MLX_TESTS=1 xcodebuild test \
   -scheme AudioToolSwift-Package \
   -destination 'platform=macOS' \
   -only-testing:AudioToolMLXIntegrationTests
 ```
+
+> **The `TEST_RUNNER_` prefix is required under `xcodebuild`.** `xcodebuild`
+> consumes bare environment variables itself and does not forward them to the
+> test process, so `RUN_MLX_TESTS=1 xcodebuild test` runs, skips every gated
+> test, and still reports success. Prefix each variable below with
+> `TEST_RUNNER_` when using `xcodebuild`; use the bare names under `swift test`.
 
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `RUN_MLX_TESTS=1` | Enable MLX integration tests |
+| `RUN_PARITY_TESTS=1` | Enable parity tests against the MLX Python references |
+| `PARITY_RECORD=1` | Measure and report parity SNR instead of asserting |
+| `PARITY_DUMP_DIR=/path` | Write both sides of each parity comparison as wav |
 | `SKIP_MLX_TESTS=1` | Skip MLX tests in command-line builds |
 | `FRCRN_WEIGHTS=/path/to/model.safetensors` | FRCRN weights path |
 | `MOSSFORMER_GAN_WEIGHTS=/path/to/weights.npz` | MossFormer GAN weights path |
