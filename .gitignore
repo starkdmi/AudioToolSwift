@@ -105,3 +105,10 @@ Weights/
 DerivedData/
 .swiftpm/xcode/
 *.xcuserstate
+
+# Parity artifacts: generated from the reference implementations, published
+# alongside the weights rather than committed. See Parity/README.md.
+Parity/artifacts/
+Parity/__pycache__/
+Parity/adapters/__pycache__/
+Parity/weights/

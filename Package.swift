@@ -90,7 +90,7 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMinor(from: "1.1.6")),
 
         // Resampling, STFT, and audio I/O.
-        .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.0.0"),
+        .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.1.0"),
 
         // G2P for Kokoro TTS. A fork of mlalma/MisakiSwift whose only change is the
         // manifest - the Swift source at this revision is byte-identical to upstream
@@ -446,6 +446,33 @@ let package = Package(
             resources: [
                 .copy("Fixtures")
             ],
+            swiftSettings: commonSwiftSettings
+        ),
+        // Parity against the MLX Python references. Opt-in twice over:
+        // RUN_PARITY_TESTS=1 and the artifacts being present on disk. See
+        // Parity/README.md for how the artifacts are generated and why they are
+        // published with the weights rather than committed.
+        //
+        // Measure first, then assert. Note the TEST_RUNNER_ prefix: xcodebuild
+        // consumes bare variables itself and does not forward them to the test
+        // process, so the unprefixed form runs and skips everything while still
+        // reporting success.
+        //   TEST_RUNNER_RUN_PARITY_TESTS=1 TEST_RUNNER_PARITY_RECORD=1 \
+        //     xcodebuild test -only-testing:AudioToolParityTests
+        // Under `swift test`, use the names without the prefix.
+        .testTarget(
+            name: "AudioToolParityTests",
+            dependencies: [
+                "AudioTool",
+                "AudioToolCore",
+                "AudioToolMLX",
+                "AudioToolCoreML",
+                "AudioToolUSS",
+                "USSMLXSwift",
+                "AudioToolTestSupport",
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+            ],
+            path: "Tests/AudioToolParityTests",
             swiftSettings: commonSwiftSettings
         ),
         // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolMLXTranslationTests
