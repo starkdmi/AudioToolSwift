@@ -48,10 +48,18 @@ public struct MLXOverlap {
     
     /// Create Hann window
     /// Python: np.hanning(length)
+    ///
+    /// Uses `sin²(πi/(N-1))`, which is algebraically the same as
+    /// `0.5(1 - cos(2πi/(N-1)))` but survives Float32. In the direct form `cos(x)`
+    /// rounds to exactly 1 for small `x`, so `1 - cos(x)` cancels to zero: at the
+    /// 192000-sample chunk the SR provider uses, that zeroed `i` = 1...7 and the
+    /// overlap-add divide-by-weight then left those output samples at silence.
+    /// NumPy does not show it because `np.hanning` evaluates in Float64.
     public static func hannWindow(length: Int) -> MLXArray {
         var window = [Float](repeating: 0, count: length)
         for i in 0..<length {
-            window[i] = 0.5 * (1 - cos(2 * Float.pi * Float(i) / Float(length - 1)))
+            let s = sin(Float.pi * Float(i) / Float(length - 1))
+            window[i] = s * s
         }
         return MLXArray(window)
     }

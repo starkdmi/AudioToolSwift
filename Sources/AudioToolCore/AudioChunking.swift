@@ -287,10 +287,15 @@ public struct AudioChunker: Sendable {
     
     // MARK: - Window Functions
     
+    /// Uses `sin²(πi/(N-1))` rather than `0.5(1 - cos(2πi/(N-1)))`: the two are
+    /// equal on paper, but in Float32 `cos(x)` rounds to exactly 1 for small `x`,
+    /// so the subtraction cancels to zero over the opening samples of a long
+    /// window. See ``MLXOverlap/hannWindow(length:)``.
     private func hannWindow(_ length: Int) -> [Float] {
         var window = [Float](repeating: 0, count: length)
         for i in 0..<length {
-            window[i] = 0.5 * (1 - cos(2 * Float.pi * Float(i) / Float(length - 1)))
+            let s = sin(Float.pi * Float(i) / Float(length - 1))
+            window[i] = s * s
         }
         return window
     }
