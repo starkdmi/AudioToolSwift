@@ -205,10 +205,29 @@ final class MLXOverlapTests: MLXTestCase {
             let resultArray = result.asArray(Float.self)
             XCTAssertEqual(resultArray.count, 1000, "Strategy \(strategy) produced wrong length")
             for (index, value) in resultArray.enumerated() {
+                if Self.isZeroWeightEdge(index: index, strategy: strategy, totalLength: 1000) {
+                    XCTAssertEqual(value, 0, accuracy: 1e-6,
+                                   "Strategy \(strategy) should leave sample \(index) at silence")
+                    continue
+                }
                 XCTAssertEqual(value, 1, accuracy: 1e-6,
                                "Strategy \(strategy) changed identity sample \(index)")
             }
         }
+    }
+
+    /// Hann is exactly zero at both ends of its window, so the very first output
+    /// sample - the only one that no other chunk overlaps - accumulates zero weight
+    /// and stays silent. `benchmark_chunking.py` does the same thing: its
+    /// `sum_weight > 0` mask simply skips that sample. Asserting identity there
+    /// instead is what drove the first sample to full scale and cost SR parity
+    /// 25 dB, so this expectation is deliberately shaped like the reference.
+    private static func isZeroWeightEdge(
+        index: Int,
+        strategy: OverlapStrategy,
+        totalLength: Int
+    ) -> Bool {
+        strategy == .hann && index == 0
     }
 
     func testDiscardEdgesProcessesAudioShorterThanItsDiscardMargin() async throws {
@@ -240,9 +259,11 @@ final class MLXOverlapTests: MLXTestCase {
             XCTAssertEqual(firstSamples.count, 1000)
             XCTAssertEqual(secondSamples.count, 1000)
             for index in 0..<1000 {
-                XCTAssertEqual(firstSamples[index], 1, accuracy: 1e-6,
+                let silent = Self.isZeroWeightEdge(
+                    index: index, strategy: strategy, totalLength: 1000)
+                XCTAssertEqual(firstSamples[index], silent ? 0 : 1, accuracy: 1e-6,
                                "First output failed for \(strategy) at \(index)")
-                XCTAssertEqual(secondSamples[index], 2, accuracy: 1e-6,
+                XCTAssertEqual(secondSamples[index], silent ? 0 : 2, accuracy: 1e-6,
                                "Second output failed for \(strategy) at \(index)")
             }
         }

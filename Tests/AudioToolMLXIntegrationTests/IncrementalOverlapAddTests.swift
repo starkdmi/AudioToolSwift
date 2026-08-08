@@ -22,6 +22,77 @@ import MLX
 /// Not an `IntegrationTestCase` - this is array arithmetic on synthetic input.
 final class IncrementalOverlapAddTests: MLXTestCase {
 
+    /// `benchmark_chunking.process_with_chunking`, transcribed. This is the code the
+    /// Swift chunking was ported from and the code the parity references are
+    /// generated with, so it - not our own reassembler - defines correct.
+    ///
+    ///     w = window[:chunk_length]
+    ///     result[i:end] += w * output[:chunk_length]
+    ///     sum_weight[i:end] += w
+    ///     result[sum_weight > 0] /= sum_weight[sum_weight > 0]
+    private func referenceOverlapAdd(
+        chunks: [(chunk: [Float], startIdx: Int)],
+        chunkSamples: Int,
+        window: [Float],
+        totalLength: Int
+    ) -> [Float] {
+        var result = [Float](repeating: 0, count: totalLength)
+        var sumWeight = [Float](repeating: 0, count: totalLength)
+        for (chunk, startIdx) in chunks {
+            let end = min(startIdx + chunkSamples, totalLength)
+            for i in 0..<(end - startIdx) {
+                result[startIdx + i] += window[i] * chunk[i]
+                sumWeight[startIdx + i] += window[i]
+            }
+        }
+        for index in result.indices where sumWeight[index] > 0 {
+            result[index] /= sumWeight[index]
+        }
+        return result
+    }
+
+    /// The exact geometry of the failing SR parity case: 4 s chunks at 50% overlap,
+    /// 48 kHz, Hann blend. Scaled down by 100x in length - the seam behaviour is a
+    /// function of the chunk/stride ratio, not the absolute count.
+    func testHannBlendMatchesTheReferenceAlgorithm() {
+        let chunkSamples = 1_920
+        let stride = 960
+        let totalLength = 5_000
+        let window = MLXOverlap.hannWindow(length: chunkSamples).asArray(Float.self)
+
+        var chunks: [(chunk: [Float], startIdx: Int)] = []
+        var startIdx = 0
+        var seed: UInt64 = 99
+        while startIdx < totalLength {
+            seed &+= 1
+            chunks.append((samples(count: chunkSamples, seed: seed), startIdx))
+            startIdx += stride
+        }
+
+        let expected = referenceOverlapAdd(
+            chunks: chunks, chunkSamples: chunkSamples,
+            window: window, totalLength: totalLength)
+
+        var assembler = IncrementalOverlapAdd(
+            chunkSamples: chunkSamples, stride: stride,
+            window: window, totalLength: totalLength)
+        var actual: [Float] = []
+        for (chunk, startIdx) in chunks {
+            actual.append(contentsOf: assembler.add(chunk, startIdx: startIdx))
+        }
+        actual.append(contentsOf: assembler.finish())
+
+        XCTAssertEqual(actual.count, expected.count)
+        var worst: (index: Int, delta: Float) = (0, 0)
+        for index in expected.indices where abs(actual[index] - expected[index]) > worst.delta {
+            worst = (index, abs(actual[index] - expected[index]))
+        }
+        XCTAssertLessThan(
+            worst.delta, 1e-5,
+            "streaming Hann blend diverges from benchmark_chunking at frame \(worst.index) "
+            + "of \(totalLength) (expected \(expected[worst.index]), got \(actual[worst.index]))")
+    }
+
     /// Deterministic pseudo-random samples, so a failure is reproducible.
     private func samples(count: Int, seed: UInt64) -> [Float] {
         var state = seed

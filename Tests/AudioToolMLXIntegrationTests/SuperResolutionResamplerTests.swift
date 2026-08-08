@@ -42,6 +42,38 @@ final class SuperResolutionResamplerTests: XCTestCase {
         }
     }
 
+    /// The 997-frame case above is a smaller pull than the converter's own packet
+    /// size. The chunked SR path pulls a whole 4 s chunk first (192000 frames at
+    /// 48 kHz) and then one 2 s stride at a time, so the invariance has to hold at
+    /// those sizes too - that is the only thing standing between chunked SR and the
+    /// contiguous 48 kHz array the reference slices.
+    func testConversionIsInvariantAtSuperResolutionChunkSizes() throws {
+        // 12 s at 16 kHz: four 4 s chunks at 50% overlap once upsampled.
+        let input = (0..<192_000).map { index -> Float in
+            let time = Float(index) / 16_000
+            return 0.5 * sin(2 * .pi * 220 * time) + 0.25 * sin(2 * .pi * 5_100 * time)
+        }
+
+        let expected = try SuperResolutionResampler.upsample(input, from: 16_000, to: 48_000)
+        let stream = try SuperResolutionResampler.Stream(input, from: 16_000, to: 48_000)
+
+        var incremental: [Float] = []
+        var pull = 192_000
+        while let chunk = try stream.next(maxFrames: pull) {
+            incremental.append(contentsOf: chunk)
+            pull = 96_000
+        }
+
+        XCTAssertEqual(incremental.count, expected.count)
+        var worst: (index: Int, delta: Float) = (0, 0)
+        for index in expected.indices where abs(incremental[index] - expected[index]) > worst.delta {
+            worst = (index, abs(incremental[index] - expected[index]))
+        }
+        XCTAssertLessThan(
+            worst.delta, 1e-6,
+            "converter output changed with large sink chunking; worst at frame \(worst.index)")
+    }
+
     func testSameRateStreamIsBoundedAndLossless() throws {
         let input = (0..<2_050).map(Float.init)
         let stream = try SuperResolutionResampler.Stream(

@@ -154,24 +154,17 @@ public struct MLXOverlap {
         // Get window as Float array
         let windowArray = window.asArray(Float.self)
         
-        for (chunkIndex, chunkData) in processedChunks.enumerated() {
-            let (chunk, startIdx) = chunkData
-            let isFinalChunk = chunkIndex == processedChunks.index(before: processedChunks.endIndex)
+        for (chunk, startIdx) in processedChunks {
             eval(chunk)
             let chunkArray = chunk.asArray(Float.self)
             let endIdx = min(startIdx + chunkSamples, originalLength)
             let chunkLength = endIdx - startIdx
-            
-            // Weighted overlap-add
+
+            // Weighted overlap-add. The window applies unmodified at the edges -
+            // see the note in `IncrementalOverlapAdd.add` for why forcing them to
+            // 1 costs 25 dB of parity.
             for i in 0..<chunkLength {
-                var w = i < windowArray.count ? windowArray[i] : 1.0
-                if startIdx == 0 && i < stride {
-                    w = 1
-                }
-                if isFinalChunk,
-                   i >= max(0, chunkSamples - stride) {
-                    w = 1
-                }
+                let w = i < windowArray.count ? windowArray[i] : 1.0
                 let sample = i < chunkArray.count ? chunkArray[i] : 0.0
                 resultArray[startIdx + i] += w * sample
                 weightArray[startIdx + i] += w
@@ -559,23 +552,23 @@ public struct IncrementalOverlapAdd: Sendable {
         let contributionCount = min(min(chunk.count, chunkSamples),
                                     max(0, totalLength - startIdx))
         let offset = startIdx - emittedCount
-        // All incremental producers advance by `stride` while their start is
-        // below `totalLength`; this is the actual final produced start, unlike
-        // `startIdx + chunkSamples >= totalLength`, which can be true for several
-        // overlapping chunks.
-        let isFinalChunk = startIdx + stride >= totalLength
+        // The window applies unmodified at the edges, as it does everywhere else.
+        //
+        // Forcing the first and last stride to weight 1 looks like it should be
+        // harmless - those regions have a single contributor, so `w * x / w == x`
+        // either way - and it is, except at the one sample per end where the Hann
+        // window is exactly zero. There the reference leaves silence (`sum_weight`
+        // is 0, so its mask skips the divide) and forcing emits a full-scale
+        // sample instead. One sample was worth 25 dB: it put SR parity at 69.5 dB
+        // against a 95 dB floor.
+        //
+        // The Float32 cancellation that motivated the forcing was already fixed in
+        // 53d723b, by building the window as sin^2 rather than 0.5*(1-cos).
         for i in 0..<contributionCount {
             let position = offset + i
             guard position >= 0, position < accumulator.count else { continue }
             let storageIndex = (head + position) % accumulator.count
-            var weight = i < window.count ? window[i] : 1.0
-            if startIdx == 0 && i < stride {
-                weight = 1
-            }
-            if isFinalChunk,
-               i >= max(0, chunkSamples - stride) {
-                weight = 1
-            }
+            let weight = i < window.count ? window[i] : 1.0
             accumulator[storageIndex] += weight * chunk[i]
             weights[storageIndex] += weight
         }
