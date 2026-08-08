@@ -87,19 +87,18 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
         if let path = weightsPath {
             resolvedPath = path
         } else {
+            let requiredFiles = ModelFiles.standard(precision)
             // Check if already downloaded
-            if let cached = ModelDownloader.shared.localPath(for: Self.repo) {
-                let modelPath = cached.appendingPathComponent(precision.weightsFilename).path
-                if FileManager.default.fileExists(atPath: modelPath) {
-                    resolvedPath = modelPath
-                } else {
-                    throw AudioToolError.modelNotFound("Precision \(precision.rawValue) not available for MossFormer2SE48K")
-                }
+            if let cached = ModelDownloader.shared.localPath(
+                for: Self.repo,
+                matching: requiredFiles
+            ) {
+                resolvedPath = cached.appendingPathComponent(precision.weightsFilename).path
             } else {
                 // Auto-download from HuggingFace
                 let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
                     repo: Self.repo,
-                    matching: [precision.weightsFilename, "config.json"]
+                    matching: requiredFiles
                 )
                 resolvedPath = modelDir.appendingPathComponent(precision.weightsFilename).path
             }
@@ -197,11 +196,12 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     
     public nonisolated func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 for await chunk in input {
                     do {
+                        try Task.checkCancellation()
                         let processed = try await process(chunk)
-                        continuation.yield(processed)
+                        if case .terminated = continuation.yield(processed) { return }
                     } catch {
                         continuation.finish(throwing: error)
                         return
@@ -209,6 +209,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
                 }
                 continuation.finish()
             }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
         }
     }
     
@@ -229,6 +230,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
         guard let pipeline = pipeline else {
             throw AudioToolError.modelNotLoaded("MossFormer2SE48K")
         }
+        try validateInputFormat(input)
         
         // Use direct processing with background extraction (matches Python implementation)
         let inputMLX = MLXArray(input.samples)
@@ -251,13 +253,14 @@ extension MossFormer2SE48KProvider: StreamableOutput {
     /// - Returns: Async stream of processed audio chunks (in sequential order)
     public nonisolated func processStream(_ input: AudioBuffer) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     try await self.processStreamImpl(input, continuation: continuation)
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
         }
     }
     
@@ -266,6 +269,7 @@ extension MossFormer2SE48KProvider: StreamableOutput {
         guard let pipeline = pipeline else {
             throw AudioToolError.modelNotLoaded("MossFormer2SE48K")
         }
+        try validateInputFormat(input)
         
         let audio = input.samples
         let totalLength = audio.count
@@ -274,7 +278,7 @@ extension MossFormer2SE48KProvider: StreamableOutput {
         // For short audio, just yield single result
         if durationSeconds <= maxDirectDuration {
             let result = try await processChunk(audio, pipeline: pipeline)
-            continuation.yield(result)
+            if case .terminated = continuation.yield(result) { throw CancellationError() }
             continuation.finish()
             return
         }
@@ -288,6 +292,7 @@ extension MossFormer2SE48KProvider: StreamableOutput {
         var isFirst = true
         
         while currentIdx + chunkSamples <= totalLength + stride {
+            try Task.checkCancellation()
             let endIdx = min(currentIdx + chunkSamples, totalLength)
             
             // Extract and pad chunk
@@ -317,7 +322,7 @@ extension MossFormer2SE48KProvider: StreamableOutput {
                     sampleRate: sampleRate,
                     channels: 1
                 )
-                continuation.yield(chunkBuffer)
+                if case .terminated = continuation.yield(chunkBuffer) { throw CancellationError() }
             }
             
             // Clear GPU cache between chunks
@@ -421,15 +426,16 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
         if let path = weightsPath { return path }
 
         let filename = precision.weightsFilename
-        if let cached = ModelDownloader.shared.localPath(for: Self.repo) {
-            let candidate = cached.appendingPathComponent(filename).path
-            if FileManager.default.fileExists(atPath: candidate) {
-                return candidate
-            }
+        let requiredFiles = ModelFiles.standard(precision)
+        if let cached = ModelDownloader.shared.localPath(
+            for: Self.repo,
+            matching: requiredFiles
+        ) {
+            return cached.appendingPathComponent(filename).path
         }
         let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
             repo: Self.repo,
-            matching: ModelFiles.standard(precision)
+            matching: requiredFiles
         )
         return modelDir.appendingPathComponent(filename).path
     }
@@ -447,23 +453,47 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     /// Process with chunking using MLXOverlap
     /// Uses discard-edges strategy: keep center of each chunk, discard edges
     private func processWithChunking(_ input: AudioBuffer, model: FRCRN_SE_16K) async throws -> AudioBuffer {
-        let inputMLX = MLXArray(input.samples)
-        
-        let result = try await MLXOverlap.processWithChunking(
-            audio: inputMLX,
-            chunkSamples: chunkingConfig.chunkSamples,
-            overlapRatio: chunkingConfig.overlapRatio,
-            strategy: .discardEdges
-        ) { chunk in
-            // Process chunk through FRCRN model
-            let batchedChunk = chunk.reshaped([1, -1])
-            let output = model(batchedChunk)
-            eval(output)
-            return output[0]
+        let audio = input.samples
+        let totalLength = audio.count
+        let chunkSamples = chunkingConfig.chunkSamples
+        let stride = chunkingConfig.strideSamples
+        let giveUp = chunkingConfig.overlapSamples / 2
+        var result = [Float](repeating: 0, count: totalLength)
+        var currentIdx = 0
+        var chunkIndex = 0
+
+        // Keep the recording in its existing CPU AudioBuffer. A single MLXArray for
+        // the complete input is recording-sized device memory once evaluated; only
+        // the active chunk belongs in the MLX graph.
+        while currentIdx + chunkSamples <= totalLength + stride {
+            try Task.checkCancellation()
+            let endIdx = min(currentIdx + chunkSamples, totalLength)
+            var chunk = Array(audio[currentIdx..<endIdx])
+            if chunk.count < chunkSamples {
+                chunk.append(contentsOf: repeatElement(0, count: chunkSamples - chunk.count))
+            }
+
+            let processed = try await processChunk(chunk, model: model).samples
+            let keepStart = chunkIndex == 0 ? 0 : giveUp
+            let outputStart = chunkIndex == 0 ? 0 : currentIdx + giveUp
+            let outputEnd = min(currentIdx + chunkSamples - giveUp, totalLength)
+            let count = min(
+                max(0, outputEnd - outputStart),
+                max(0, processed.count - keepStart)
+            )
+            if count > 0 {
+                result.replaceSubrange(
+                    outputStart..<(outputStart + count),
+                    with: processed[keepStart..<(keepStart + count)]
+                )
+            }
+
+            currentIdx += stride
+            chunkIndex += 1
+            GPU.clearCache()
         }
-        eval(result)
-        
-        return AudioBuffer(samples: result.asArray(Float.self), sampleRate: sampleRate, channels: 1)
+
+        return AudioBuffer(samples: result, sampleRate: sampleRate, channels: 1)
     }
     
     /// Process a single chunk
@@ -482,11 +512,12 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     
     public nonisolated func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 for await chunk in input {
                     do {
+                        try Task.checkCancellation()
                         let processed = try await process(chunk)
-                        continuation.yield(processed)
+                        if case .terminated = continuation.yield(processed) { return }
                     } catch {
                         continuation.finish(throwing: error)
                         return
@@ -494,6 +525,7 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
                 }
                 continuation.finish()
             }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
         }
     }
     
@@ -509,6 +541,7 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
         guard let model = model else {
             throw AudioToolError.modelNotLoaded("FRCRN_SE_16K")
         }
+        try validateInputFormat(input)
         
         let inputMLX = MLXArray(input.samples).reshaped([1, -1])
         
@@ -542,13 +575,14 @@ extension FRCRNSE16KProvider: StreamableOutput {
     /// Uses discardEdges strategy - each chunk is independent after edge trimming.
     public nonisolated func processStream(_ input: AudioBuffer) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     try await self.processStreamImpl(input, continuation: continuation)
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
         }
     }
     
@@ -557,6 +591,7 @@ extension FRCRNSE16KProvider: StreamableOutput {
         guard let model = model else {
             throw AudioToolError.modelNotLoaded("FRCRN_SE_16K")
         }
+        try validateInputFormat(input)
         
         let audio = input.samples
         let totalLength = audio.count
@@ -565,32 +600,20 @@ extension FRCRNSE16KProvider: StreamableOutput {
         let stride = chunkSamples - overlapSamples
         let giveUp = overlapSamples / 2
         
-        // Split into chunks
-        let inputMLX = MLXArray(audio)
         var currentIdx = 0
         var isFirst = true
         
         while currentIdx + chunkSamples <= totalLength + stride {
+            try Task.checkCancellation()
             let endIdx = min(currentIdx + chunkSamples, totalLength)
             
-            // Extract chunk
-            var chunk = inputMLX[currentIdx..<endIdx]
-            eval(chunk)
-            
-            // Pad if needed
-            let chunkLength = endIdx - currentIdx
-            if chunkLength < chunkSamples {
-                let padding = MLXArray.zeros([chunkSamples - chunkLength])
-                chunk = concatenated([chunk, padding], axis: 0)
-                eval(chunk)
+            // Keep the complete recording on CPU and materialize just this chunk.
+            var chunk = Array(audio[currentIdx..<endIdx])
+            if chunk.count < chunkSamples {
+                chunk.append(contentsOf: repeatElement(0, count: chunkSamples - chunk.count))
             }
-            
-            // Process through FRCRN model
-            let batchedChunk = chunk.reshaped([1, -1])
-            let output = model(batchedChunk)
-            eval(output)
-            let processed = output[0]
-            eval(processed)
+
+            let processed = try await processChunk(chunk, model: model).samples
             
             // Determine valid range (discard edges)
             let keepStart = isFirst ? 0 : giveUp
@@ -602,16 +625,15 @@ extension FRCRNSE16KProvider: StreamableOutput {
             let actualLen = outputRangeEnd - outputRangeStart
             
             if keepEnd > keepStart && actualLen > 0 {
-                let trimmed = processed[keepStart..<min(keepStart + actualLen, keepEnd)]
-                eval(trimmed)
-                let trimmedSamples = trimmed.asArray(Float.self)
-                
-                let chunkBuffer = AudioBuffer(
-                    samples: trimmedSamples,
-                    sampleRate: sampleRate,
-                    channels: 1
-                )
-                continuation.yield(chunkBuffer)
+                let trimmedEnd = min(keepStart + actualLen, keepEnd, processed.count)
+                if trimmedEnd > keepStart {
+                    let chunkBuffer = AudioBuffer(
+                        samples: Array(processed[keepStart..<trimmedEnd]),
+                        sampleRate: sampleRate,
+                        channels: 1
+                    )
+                    if case .terminated = continuation.yield(chunkBuffer) { throw CancellationError() }
+                }
             }
             
             GPU.clearCache()

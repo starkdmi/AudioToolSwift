@@ -10,6 +10,36 @@ import Foundation
 import AVFoundation
 import AudioToolCore
 
+private final class AppleTTSStreamCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var complete = false
+    private var cancelled = false
+
+    var isComplete: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return complete
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func finish() {
+        lock.lock()
+        complete = true
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+}
+
 /// Apple TTS provider using AVSpeechSynthesizer
 ///
 /// Supports 60+ languages with no external dependencies.
@@ -121,7 +151,8 @@ public actor AppleTTSProvider: SpeechSynthesizer {
     /// Stream synthesized audio chunks
     public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
+            let completion = AppleTTSStreamCompletion()
+            let producer = DispatchWorkItem {
                 let synthesizer = AVSpeechSynthesizer()
                 
                 let utterance = AVSpeechUtterance(string: text)
@@ -132,8 +163,6 @@ public actor AppleTTSProvider: SpeechSynthesizer {
                     utterance.voice = AVSpeechSynthesisVoice(language: self.language)
                 }
                 
-                var isComplete = false
-                
                 synthesizer.write(utterance) { buffer in
                     if let pcmBuffer = buffer as? AVAudioPCMBuffer, pcmBuffer.frameLength > 0 {
                         let samples = self.extractSamples(from: pcmBuffer)
@@ -142,20 +171,36 @@ public actor AppleTTSProvider: SpeechSynthesizer {
                             sampleRate: Int(pcmBuffer.format.sampleRate),
                             channels: Int(pcmBuffer.format.channelCount)
                         )
-                        continuation.yield(chunk)
+                        if case .terminated = continuation.yield(chunk) {
+                            completion.finish()
+                        }
                     } else {
-                        isComplete = true
+                        completion.finish()
                     }
                 }
                 
                 // Pump run loop
                 let runLoop = RunLoop.current
                 let timeout = Date(timeIntervalSinceNow: self.synthesisTimeout)
-                while !isComplete && Date() < timeout {
+                while !completion.isComplete && !completion.isCancelled && Date() < timeout {
                     runLoop.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
                 }
-                
-                continuation.finish()
+
+                if completion.isCancelled {
+                    synthesizer.stopSpeaking(at: .immediate)
+                    continuation.finish(throwing: CancellationError())
+                } else if !completion.isComplete {
+                    synthesizer.stopSpeaking(at: .immediate)
+                    continuation.finish(throwing: AudioToolError.resourceUnavailable(
+                        "Synthesis timed out after \(Int(self.synthesisTimeout)) seconds"
+                    ))
+                } else {
+                    continuation.finish()
+                }
+            }
+            DispatchQueue.global(qos: .userInitiated).async(execute: producer)
+            continuation.onTermination = { @Sendable _ in
+                completion.cancel()
             }
         }
     }

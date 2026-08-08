@@ -14,6 +14,269 @@ import Foundation
 
 @Suite("Model Download Types")
 struct ModelDownloadTypeTests {
+
+    @Test("Variant globs match files without crossing path components")
+    func testVariantGlobMatching() {
+        #expect(ModelDownloader.path("model_fp16.safetensors", matches: "*.safetensors"))
+        #expect(ModelDownloader.path("voices/af_heart.npy", matches: "voices/*.npy"))
+        #expect(!ModelDownloader.path("nested/model.safetensors", matches: "*.safetensors"))
+        #expect(ModelDownloader.path("model.safetensors", matches: "**/*.safetensors"))
+        #expect(ModelDownloader.path("nested/model.safetensors", matches: "**/*.safetensors"))
+        #expect(ModelDownloader.path("config.json", matches: "config.json"))
+        #expect(!ModelDownloader.path("config.json.bak", matches: "config.json"))
+    }
+
+    @Test("Variant verification requires every pattern")
+    func testVariantFileVerification() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let voices = root.appendingPathComponent("voices", isDirectory: true)
+        try FileManager.default.createDirectory(at: voices, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data().write(to: root.appendingPathComponent("model_fp16.safetensors"))
+        try Data().write(to: voices.appendingPathComponent("af_heart.npy"))
+
+        #expect(ModelDownloader.hasRequiredFiles(
+            at: root,
+            patterns: ["model_fp16.safetensors", "voices/*.npy"]
+        ))
+        #expect(!ModelDownloader.hasRequiredFiles(
+            at: root,
+            patterns: ["model_fp32.safetensors", "voices/*.npy"]
+        ))
+        #expect(!ModelDownloader.hasRequiredFiles(at: root, patterns: []))
+
+        let brokenWeight = root.appendingPathComponent("model_fp32.safetensors")
+        try FileManager.default.createSymbolicLink(
+            atPath: brokenWeight.path,
+            withDestinationPath: "missing-blob"
+        )
+        #expect(!ModelDownloader.hasRequiredFiles(
+            at: root,
+            patterns: ["model_fp32.safetensors", "voices/*.npy"]
+        ))
+    }
+
+    @Test("Verified lookup skips a newer incomplete snapshot")
+    func testVerifiedLookupFallsBackToCompleteSnapshot() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let olderComplete = root.appendingPathComponent("older-complete", isDirectory: true)
+        let newerIncomplete = root.appendingPathComponent("newer-incomplete", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: olderComplete,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: newerIncomplete,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data([1]).write(
+            to: olderComplete.appendingPathComponent("model_fp16.safetensors")
+        )
+        try Data([2]).write(
+            to: olderComplete.appendingPathComponent("config.json")
+        )
+        try Data([3]).write(
+            to: newerIncomplete.appendingPathComponent("config.json")
+        )
+
+        let selected = ModelDownloader.firstCompletePath(
+            in: [newerIncomplete, olderComplete],
+            matching: ["model_fp16.safetensors", "config.json"]
+        )
+
+        #expect(selected?.standardizedFileURL == olderComplete.standardizedFileURL)
+    }
+
+    @Test("Partial variants remain discoverable for deletion")
+    func testPartialVariantDeletionDiscovery() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let partialWeight = root.appendingPathComponent("model_fp16.safetensors")
+        try Data([1]).write(to: partialWeight)
+        let requiredFiles = ["model_fp16.safetensors", "config.json"]
+
+        #expect(!ModelDownloader.hasRequiredFiles(at: root, patterns: requiredFiles))
+        #expect(ModelDownloader.hasAnyMatchingFile(at: root, patterns: requiredFiles))
+
+        try ModelDownloader.deleteVariantFiles(
+            at: root,
+            targetPatterns: requiredFiles,
+            protectedPatterns: []
+        )
+        #expect(!FileManager.default.fileExists(atPath: partialWeight.path))
+    }
+
+    @Test("Deleting one variant preserves sibling weights and shared files")
+    func testVariantFileDeletion() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fp16 = root.appendingPathComponent("model_fp16.safetensors")
+        let fp32 = root.appendingPathComponent("model_fp32.safetensors")
+        let config = root.appendingPathComponent("config.json")
+        try Data().write(to: fp16)
+        try Data().write(to: fp32)
+        try Data().write(to: config)
+
+        try ModelDownloader.deleteVariantFiles(
+            at: root,
+            targetPatterns: ["model_fp16.safetensors", "config.json"],
+            protectedPatterns: ["model_fp32.safetensors", "config.json"]
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: fp16.path))
+        #expect(FileManager.default.fileExists(atPath: fp32.path))
+        #expect(FileManager.default.fileExists(atPath: config.path))
+    }
+
+    @Test("Deleting snapshot links removes only unreferenced HuggingFace blobs")
+    func testVariantBlobDeletion() throws {
+        let repositoryCache = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("models--test--repo", isDirectory: true)
+        let blobs = repositoryCache.appendingPathComponent("blobs", isDirectory: true)
+        let snapshots = repositoryCache.appendingPathComponent("snapshots", isDirectory: true)
+        let firstSnapshot = snapshots.appendingPathComponent("first", isDirectory: true)
+        let secondSnapshot = snapshots.appendingPathComponent("second", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: firstSnapshot,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: secondSnapshot,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repositoryCache.deletingLastPathComponent()) }
+
+        let exclusiveBlob = blobs.appendingPathComponent("exclusive-weight")
+        let sharedBlob = blobs.appendingPathComponent("shared-config")
+        try Data([1]).write(to: exclusiveBlob)
+        try Data([2]).write(to: sharedBlob)
+
+        try FileManager.default.createSymbolicLink(
+            atPath: firstSnapshot.appendingPathComponent("model_fp16.safetensors").path,
+            withDestinationPath: "../../blobs/exclusive-weight"
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: firstSnapshot.appendingPathComponent("config.json").path,
+            withDestinationPath: "../../blobs/shared-config"
+        )
+        let remainingReference = secondSnapshot.appendingPathComponent("config.json")
+        try FileManager.default.createSymbolicLink(
+            atPath: remainingReference.path,
+            withDestinationPath: "../../blobs/shared-config"
+        )
+
+        try ModelDownloader.deleteVariantFiles(
+            at: firstSnapshot,
+            targetPatterns: ["model_fp16.safetensors", "config.json"],
+            protectedPatterns: []
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: exclusiveBlob.path))
+        #expect(FileManager.default.fileExists(atPath: sharedBlob.path))
+        #expect(FileManager.default.fileExists(atPath: remainingReference.path))
+
+        try ModelDownloader.deleteVariantFiles(
+            at: secondSnapshot,
+            targetPatterns: ["config.json"],
+            protectedPatterns: []
+        )
+        #expect(!FileManager.default.fileExists(atPath: sharedBlob.path))
+    }
+
+    @Test("Package downloads exclude variants owned by active downloads")
+    func testPackageExcludesActiveVariants() {
+        let registry = ModelCatalog.shared
+        guard let package = registry.packages.first,
+              let activeId = package.variantIds.first else {
+            Issue.record("model catalog must contain a non-empty package")
+            return
+        }
+
+        let scoped = ModelManager.packageForDownload(
+            package,
+            excluding: [activeId],
+            registry: registry
+        )
+        #expect(scoped?.variantIds.contains(activeId) == false)
+        #expect(scoped?.variantIds == Array(package.variantIds.dropFirst()))
+        let expectedSize = package.variantIds.dropFirst().reduce(into: Int64(0)) {
+            $0 += registry.variant(id: $1)?.sizeBytes ?? 0
+        }
+        #expect(scoped?.totalSizeBytes == expectedSize)
+
+        #expect(ModelManager.packageForDownload(
+            package,
+            excluding: Set(package.variantIds),
+            registry: registry
+        ) == nil)
+    }
+
+    @Test("Package failure cleanup removes completed owned task entries")
+    func testPackageFailureCompletedTaskCleanup() {
+        func task(id: String, status: DownloadStatus) -> DownloadTask {
+            let variant = ModelVariant(
+                id: id,
+                name: id,
+                quantization: .fp16,
+                sizeBytes: 1,
+                repo: "test/package",
+                files: ["\(id).bin"]
+            )
+            return DownloadTask(
+                id: id,
+                variant: variant,
+                status: status,
+                startedAt: Date()
+            )
+        }
+
+        let tasks = [
+            "completed": task(id: "completed", status: .completed),
+            "active": task(id: "active", status: .downloading),
+            "unrelated": task(id: "unrelated", status: .completed),
+        ]
+        let completedIds = ModelManager.completedTaskIdsToRemoveAfterPackageFailure(
+            ownedVariantIds: ["completed", "active"],
+            downloadTasks: tasks
+        )
+
+        #expect(completedIds == ["completed"])
+    }
+
+    @Test("Package task rows exist before the first progress event")
+    func testPackageTasksArePreparedBeforeProgress() {
+        let registry = ModelCatalog.shared
+        guard let package = registry.packages.first else {
+            Issue.record("model catalog must contain a package")
+            return
+        }
+        let startedAt = Date(timeIntervalSince1970: 123)
+
+        let tasks = ModelManager.packageDownloadTasks(
+            for: package,
+            registry: registry,
+            startedAt: startedAt
+        )
+
+        #expect(Set(tasks.keys) == Set(package.variantIds))
+        for task in tasks.values {
+            #expect(task.status == .downloading)
+            #expect(task.progress == nil)
+            #expect(task.startedAt == startedAt)
+        }
+    }
     
     // MARK: - Quantization
     
@@ -190,6 +453,12 @@ struct ModelCatalogTests {
         let registry = ModelCatalog.shared
         
         #expect(!registry.packages.isEmpty)
+        for package in registry.packages {
+            for variantId in package.variantIds {
+                #expect(registry.variant(id: variantId) != nil,
+                        "Package \(package.id) references missing variant \(variantId)")
+            }
+        }
     }
     
     @Test("Registry lookup by ID")
@@ -399,5 +668,41 @@ struct PackageDownloadProgressTests {
         
         #expect(progress.overallFraction > 0.3 && progress.overallFraction < 0.4)
         #expect(progress.overallPercent == Int(progress.overallFraction * 100))
+    }
+
+    @Test("Byte completion is distinct from verified package completion")
+    func testVerifiedCompletionSignal() {
+        let variant = ModelVariant(
+            id: "test",
+            name: "Test",
+            quantization: .fp16,
+            sizeBytes: 1000,
+            repo: "test/repo",
+            files: ["model.safetensors"]
+        )
+        let byteComplete = DownloadProgress(
+            fractionCompleted: 1,
+            completedBytes: 1000,
+            totalBytes: 1000,
+            bytesPerSecond: nil
+        )
+
+        let transferring = PackageDownloadProgress(
+            currentVariant: variant,
+            variantProgress: byteComplete,
+            completedCount: 1,
+            totalCount: 4
+        )
+        #expect(!transferring.isCurrentVariantVerified)
+
+        let verified = PackageDownloadProgress(
+            currentVariant: variant,
+            variantProgress: byteComplete,
+            completedCount: 2,
+            totalCount: 4,
+            isCurrentVariantVerified: true
+        )
+        #expect(verified.isCurrentVariantVerified)
+        #expect(verified.overallFraction == 0.5)
     }
 }

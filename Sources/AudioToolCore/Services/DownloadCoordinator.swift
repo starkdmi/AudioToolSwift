@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import Hub
 
 /// Central coordinator for all model downloads
 ///
@@ -29,8 +28,15 @@ public actor DownloadCoordinator {
     /// Shared instance
     public static let shared = DownloadCoordinator()
     
-    /// Active download tasks by variant ID
-    private var activeTasks: [String: Task<Void, Never>] = [:]
+    private struct ActiveDownload: Sendable {
+        let token: UUID
+        let cancel: @Sendable () -> Void
+        let waitForCompletion: @Sendable () async -> Void
+    }
+
+    /// Active real download operations by variant ID. Tokens make cleanup safe
+    /// when a cancelled download is immediately restarted.
+    private var activeTasks: [String: ActiveDownload] = [:]
     
     /// Maximum concurrent downloads
     private let maxConcurrentDownloads = 2
@@ -71,74 +77,46 @@ public actor DownloadCoordinator {
             }
         }
         
-        // Create placeholder task to reserve the slot synchronously
-        let placeholderTask = Task<Void, Never> { }
-        activeTasks[variant.id] = placeholderTask
-        
-        return AsyncThrowingStream { continuation in
-            let task = Task(priority: priority) {
-                do {
-                    // Check storage availability
-                    try await self.checkStorageAvailable(for: variant)
-                    
-                    // Check for cancellation
-                    try Task.checkCancellation()
-                    
-                    // Start HuggingFace Hub download
-                    let hubRepo = Hub.Repo(id: variant.repo)
-                    
-                    let modelDir = try await HubApi.shared.snapshot(
-                        from: hubRepo,
-                        matching: variant.files
-                    ) { progress, speed in
-                        // Check for cancellation
-                        guard !Task.isCancelled else { return }
-                        
-                        let downloadProgress = DownloadProgress(
-                            fractionCompleted: progress.fractionCompleted,
-                            completedBytes: progress.completedUnitCount,
-                            totalBytes: progress.totalUnitCount,
-                            bytesPerSecond: speed
-                        )
-                        continuation.yield(downloadProgress)
-                    }
-                    
-                    // Check for cancellation after download
-                    try Task.checkCancellation()
-                    
-                    // Verify download
-                    try await self.verifyDownload(at: modelDir, for: variant)
-                    
-                    // Yield final 100% progress
-                    continuation.yield(DownloadProgress(
-                        fractionCompleted: 1.0,
-                        completedBytes: variant.sizeBytes,
-                        totalBytes: variant.sizeBytes,
-                        bytesPerSecond: nil
-                    ))
-                    
-                    continuation.finish()
-                    
-                } catch is CancellationError {
-                    continuation.finish(throwing: DownloadError.cancelled)
-                } catch {
-                    continuation.finish(throwing: error)
+        let token = UUID()
+        let pair = AsyncThrowingStream<DownloadProgress, Error>.makeStream()
+        let task = Task(priority: priority) {
+            do {
+                try await self.checkStorageAvailable(for: variant)
+                try Task.checkCancellation()
+
+                let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
+                    repo: variant.repo,
+                    matching: variant.files
+                ) { progress in
+                    _ = pair.continuation.yield(progress)
                 }
-                
-                // Clean up
-                self.removeTask(for: variant.id)
+
+                try Task.checkCancellation()
+                try await self.verifyDownload(at: modelDir, for: variant)
+                try Task.checkCancellation()
+                _ = pair.continuation.yield(DownloadProgress(
+                    fractionCompleted: 1,
+                    completedBytes: variant.sizeBytes,
+                    totalBytes: variant.sizeBytes,
+                    bytesPerSecond: nil
+                ))
+                pair.continuation.finish()
+            } catch is CancellationError {
+                pair.continuation.finish(throwing: DownloadError.cancelled)
+            } catch {
+                pair.continuation.finish(
+                    throwing: Task.isCancelled ? DownloadError.cancelled : error
+                )
             }
-            
-            // Replace placeholder with real task
-            Task {
-                self.registerTask(task, for: variant.id)
-            }
-            
-            // Handle stream termination
-            continuation.onTermination = { @Sendable _ in
-                task.cancel()
-            }
+            self.removeTask(for: variant.id, token: token)
         }
+        activeTasks[variant.id] = ActiveDownload(
+            token: token,
+            cancel: { task.cancel() },
+            waitForCompletion: { await task.value }
+        )
+        pair.continuation.onTermination = { @Sendable _ in task.cancel() }
+        return pair.stream
     }
     
     /// Download a model variant and return the local path
@@ -166,30 +144,40 @@ public actor DownloadCoordinator {
             )
         }
         
-        // Check storage
-        try await checkStorageAvailable(for: variant)
-        
-        // Register placeholder to reserve slot
-        let placeholderTask = Task<Void, Never> { }
-        activeTasks[variant.id] = placeholderTask
-        
-        defer {
-            activeTasks.removeValue(forKey: variant.id)
-        }
-        
-        let hubRepo = Hub.Repo(id: variant.repo)
-        
-        return try await HubApi.shared.snapshot(
-            from: hubRepo,
-            matching: variant.files
-        ) { foundationProgress, speed in
-            let downloadProgress = DownloadProgress(
-                fractionCompleted: foundationProgress.fractionCompleted,
-                completedBytes: foundationProgress.completedUnitCount,
-                totalBytes: foundationProgress.totalUnitCount,
-                bytesPerSecond: speed
+        let token = UUID()
+        let task = Task<URL, Error> {
+            try await self.checkStorageAvailable(for: variant)
+            try Task.checkCancellation()
+            let url = try await ModelDownloader.shared.downloadAndGetPath(
+                repo: variant.repo,
+                matching: variant.files,
+                progress: progress
             )
-            progress(downloadProgress)
+            try Task.checkCancellation()
+            try await self.verifyDownload(at: url, for: variant)
+            return url
+        }
+        activeTasks[variant.id] = ActiveDownload(
+            token: token,
+            cancel: { task.cancel() },
+            waitForCompletion: { _ = try? await task.value }
+        )
+
+        do {
+            let url = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            removeTask(for: variant.id, token: token)
+            return url
+        } catch is CancellationError {
+            removeTask(for: variant.id, token: token)
+            throw DownloadError.cancelled
+        } catch {
+            removeTask(for: variant.id, token: token)
+            if task.isCancelled { throw DownloadError.cancelled }
+            throw error
         }
     }
     
@@ -197,17 +185,28 @@ public actor DownloadCoordinator {
     
     /// Cancel a specific download
     /// - Parameter variantId: ID of the variant to cancel
-    public func cancel(variantId: String) {
-        activeTasks[variantId]?.cancel()
-        activeTasks.removeValue(forKey: variantId)
+    public func cancel(variantId: String) async {
+        guard let operation = activeTasks[variantId] else { return }
+        operation.cancel()
+        await operation.waitForCompletion()
+        removeTask(for: variantId, token: operation.token)
     }
     
     /// Cancel all active downloads
-    public func cancelAll() {
-        for task in activeTasks.values {
-            task.cancel()
+    public func cancelAll() async {
+        let operations = activeTasks
+        for operation in operations.values {
+            operation.cancel()
         }
-        activeTasks.removeAll()
+        await withTaskGroup(of: Void.self) { group in
+            for operation in operations.values {
+                group.addTask { await operation.waitForCompletion() }
+            }
+            await group.waitForAll()
+        }
+        for (variantId, operation) in operations {
+            removeTask(for: variantId, token: operation.token)
+        }
     }
     
     /// Check if a variant is currently downloading
@@ -228,23 +227,15 @@ public actor DownloadCoordinator {
     /// - Parameter variant: The model variant to delete
     public func delete(variant: ModelVariant) async throws {
         // Cancel if currently downloading
-        cancel(variantId: variant.id)
+        await cancel(variantId: variant.id)
         
-        // Get local path
-        guard let localPath = ModelDownloader.shared.localPath(for: variant.repo) else {
-            return // Already deleted or never downloaded
-        }
-        
-        // Remove the snapshot directory
-        try FileManager.default.removeItem(at: localPath)
-        
-        // Try to clean up empty parent directories in HF cache
-        cleanupEmptyHFCache(for: variant.repo)
+        let siblings = ModelCatalog.shared.allVariants.filter { $0.repo == variant.repo }
+        try await ModelDownloader.shared.delete(variant: variant, preserving: siblings)
     }
     
     /// Delete all installed models
     public func deleteAll(variants: [ModelVariant]) async {
-        cancelAll()
+        await cancelAll()
         
         for variant in variants {
             try? await delete(variant: variant)
@@ -263,7 +254,7 @@ public actor DownloadCoordinator {
         registry: ModelCatalog
     ) -> AsyncThrowingStream<PackageDownloadProgress, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 var completed = 0
                 let total = package.variantIds.count
                 
@@ -278,11 +269,30 @@ public actor DownloadCoordinator {
                         continuation.finish(throwing: DownloadError.variantNotFound(id: variantId))
                         return
                     }
-                    
-                    // Skip if already downloaded
-                    if ModelDownloader.shared.isDownloaded(repo: variant.repo) {
+
+                    // Join an operation that won the ownership race. A package
+                    // may report the variant complete only after that operation
+                    // finishes and the exact variant files verify successfully.
+                    if let operation = activeTasks[variant.id] {
+                        do {
+                            await operation.waitForCompletion()
+                            try Task.checkCancellation()
+                            guard let modelDirectory = ModelDownloader.shared.localPath(
+                                for: variant
+                            ) else {
+                                throw DownloadError.fileVerificationFailed
+                            }
+                            try await verifyDownload(at: modelDirectory, for: variant)
+                        } catch is CancellationError {
+                            continuation.finish(throwing: DownloadError.cancelled)
+                            return
+                        } catch {
+                            continuation.finish(throwing: error)
+                            return
+                        }
+
                         completed += 1
-                        continuation.yield(PackageDownloadProgress(
+                        if case .terminated = continuation.yield(PackageDownloadProgress(
                             currentVariant: variant,
                             variantProgress: DownloadProgress(
                                 fractionCompleted: 1.0,
@@ -291,22 +301,53 @@ public actor DownloadCoordinator {
                                 bytesPerSecond: nil
                             ),
                             completedCount: completed,
-                            totalCount: total
-                        ))
+                            totalCount: total,
+                            isCurrentVariantVerified: true
+                        )) { return }
+                        continue
+                    }
+                    
+                    // Skip if already downloaded
+                    if ModelDownloader.shared.isDownloaded(variant: variant) {
+                        completed += 1
+                        if case .terminated = continuation.yield(PackageDownloadProgress(
+                            currentVariant: variant,
+                            variantProgress: DownloadProgress(
+                                fractionCompleted: 1.0,
+                                completedBytes: variant.sizeBytes,
+                                totalBytes: variant.sizeBytes,
+                                bytesPerSecond: nil
+                            ),
+                            completedCount: completed,
+                            totalCount: total,
+                            isCurrentVariantVerified: true
+                        )) { return }
                         continue
                     }
                     
                     // Download this variant
                     do {
                         for try await progress in download(variant: variant) {
-                            continuation.yield(PackageDownloadProgress(
+                            if case .terminated = continuation.yield(PackageDownloadProgress(
                                 currentVariant: variant,
                                 variantProgress: progress,
                                 completedCount: completed,
                                 totalCount: total
-                            ))
+                            )) { return }
                         }
                         completed += 1
+                        if case .terminated = continuation.yield(PackageDownloadProgress(
+                            currentVariant: variant,
+                            variantProgress: DownloadProgress(
+                                fractionCompleted: 1.0,
+                                completedBytes: variant.sizeBytes,
+                                totalBytes: variant.sizeBytes,
+                                bytesPerSecond: nil
+                            ),
+                            completedCount: completed,
+                            totalCount: total,
+                            isCurrentVariantVerified: true
+                        )) { return }
                     } catch {
                         continuation.finish(throwing: error)
                         return
@@ -315,6 +356,7 @@ public actor DownloadCoordinator {
                 
                 continuation.finish()
             }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
         }
     }
     
@@ -350,7 +392,7 @@ public actor DownloadCoordinator {
         var requiredBytes: Int64 = storageBuffer
         for variantId in package.variantIds {
             guard let variant = registry.variant(id: variantId),
-                  !ModelDownloader.shared.isDownloaded(repo: variant.repo) else {
+                  !ModelDownloader.shared.isDownloaded(variant: variant) else {
                 continue
             }
             requiredBytes += variant.sizeBytes
@@ -366,38 +408,15 @@ public actor DownloadCoordinator {
     
     // MARK: - Private Helpers
     
-    private func registerTask(_ task: Task<Void, Never>, for variantId: String) {
-        activeTasks[variantId] = task
-    }
-    
-    private func removeTask(for variantId: String) {
+    private func removeTask(for variantId: String, token: UUID) {
+        guard activeTasks[variantId]?.token == token else { return }
         activeTasks.removeValue(forKey: variantId)
     }
     
     private func verifyDownload(at url: URL, for variant: ModelVariant) async throws {
-        // Verify expected files exist (skip glob patterns)
-        for pattern in variant.files {
-            if pattern.contains("*") { continue }
-            let fileURL = url.appendingPathComponent(pattern)
-            guard FileManager.default.fileExists(atPath: fileURL.path) else {
-                throw DownloadError.fileVerificationFailed
-            }
+        guard ModelDownloader.hasRequiredFiles(at: url, patterns: variant.files) else {
+            throw DownloadError.fileVerificationFailed
         }
     }
     
-    private nonisolated func cleanupEmptyHFCache(for repo: String) {
-        let repoName = repo.replacingOccurrences(of: "/", with: "--")
-        let hfCache = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub/models--\(repoName)")
-        
-        // Check if snapshots directory is empty or only has hidden files
-        let snapshotsDir = hfCache.appendingPathComponent("snapshots")
-        if let contents = try? FileManager.default.contentsOfDirectory(atPath: snapshotsDir.path) {
-            let visibleContents = contents.filter { !$0.hasPrefix(".") }
-            if visibleContents.isEmpty {
-                // Remove the entire model cache directory
-                try? FileManager.default.removeItem(at: hfCache)
-            }
-        }
-    }
 }

@@ -1,9 +1,49 @@
 import Foundation
 import MLX
 
+private final class DSPArrayCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximumEntries = 32
+    private var values: [String: MLXArray] = [:]
+    private var recency: [String] = []
+
+    func value(for key: String) -> MLXArray? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let value = values[key] else { return nil }
+        touch(key)
+        return value
+    }
+
+    func insertIfAbsent(_ value: MLXArray, for key: String) -> MLXArray {
+        eval(value)
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = values[key] {
+            touch(key)
+            return existing
+        }
+        if values.count >= maximumEntries, let evicted = recency.first {
+            values.removeValue(forKey: evicted)
+            recency.removeFirst()
+        }
+        values[key] = value
+        recency.append(key)
+        return value
+    }
+
+    /// Called only while `lock` is held.
+    private func touch(_ key: String) {
+        if let index = recency.firstIndex(of: key) {
+            recency.remove(at: index)
+        }
+        recency.append(key)
+    }
+}
+
 public enum DSP {
-    private static var windowCache: [String: MLXArray] = [:]
-    private static var melCache: [String: MLXArray] = [:]
+    private static let windowCache = DSPArrayCache()
+    private static let melCache = DSPArrayCache()
 
     /// Periodic Hanning window - matches Python DSP hanning which uses N denominator
     /// (librosa fftbins=True, torch.hann_window(periodic=True))
@@ -155,7 +195,7 @@ public enum DSP {
     ) -> MLXArray {
         let maxFreq = fMax ?? Float(sampleRate) / 2
         let key = "\(sampleRate)|\(nFFT)|\(nMels)|\(fMin)|\(maxFreq)|\(norm ?? "none")|\(melScale)"
-        if let cached = melCache[key] {
+        if let cached = melCache.value(for: key) {
             return cached
         }
 
@@ -215,8 +255,7 @@ public enum DSP {
         }
 
         filterbank = filterbank.transposed(0, 1)
-        melCache[key] = filterbank
-        return filterbank
+        return melCache.insertIfAbsent(filterbank, for: key)
     }
 
     private static func windowFromString(_ window: String, size: Int) -> MLXArray {
@@ -236,12 +275,11 @@ public enum DSP {
 
     private static func cachedWindow(_ name: String, size: Int, builder: () -> MLXArray) -> MLXArray {
         let key = "\(name)_\(size)"
-        if let cached = windowCache[key] {
+        if let cached = windowCache.value(for: key) {
             return cached
         }
         let window = builder()
-        windowCache[key] = window
-        return window
+        return windowCache.insertIfAbsent(window, for: key)
     }
 
     private static func pad1d(_ x: MLXArray, padding: Int, padMode: String) -> MLXArray {

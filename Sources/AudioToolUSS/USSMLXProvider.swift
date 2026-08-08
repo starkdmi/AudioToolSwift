@@ -157,16 +157,17 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
             return bundled.path
         }
 
-        if let cached = ModelDownloader.shared.localPath(for: Self.repo) {
-            let path = cached.appendingPathComponent(filename).path
-            if FileManager.default.fileExists(atPath: path) {
-                return path
-            }
+        let requiredFiles = [filename]
+        if let cached = ModelDownloader.shared.localPath(
+            for: Self.repo,
+            matching: requiredFiles
+        ) {
+            return cached.appendingPathComponent(filename).path
         }
 
         let directory = try await ModelDownloader.shared.downloadAndGetPath(
             repo: Self.repo,
-            matching: [filename]
+            matching: requiredFiles
         )
         let path = directory.appendingPathComponent(filename).path
         guard FileManager.default.fileExists(atPath: path) else {
@@ -273,14 +274,20 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         let tinyAudio = MLXArray(tinySamples).reshaped([1, -1])
         
         for type in types {
+            try Task.checkCancellation()
             guard let conditioning = embeddingCache[type] else { continue }
             
-            let _ = inference.separate(
+            let output = inference.separate(
                 audio: tinyAudio,
                 conditioning: conditioning,
                 compile: compile,
                 useSimpleSegmentation: true
             )
+            // MLX is lazy: retaining or discarding the graph does not compile it.
+            // Materialize the actual model output before reporting this embedding
+            // as prewarmed.
+            eval(output)
+            _ = output.asArray(Float.self)
         }
     }
     
@@ -323,6 +330,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         guard let inference = inference else {
             throw AudioToolError.modelNotLoaded("USS MLX")
         }
+        try validateInputFormat(input)
         
         // Collect conditionings from cache
         var conditionings: [MLXArray] = []
@@ -418,6 +426,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         guard let inference = inference, let conditioning = conditioning else {
             throw AudioToolError.modelNotLoaded("USS MLX")
         }
+        try validateInputFormat(audio)
         
         return try separateWithBackgroundInternal(audio, conditioning: conditioning, inference: inference)
     }
@@ -431,6 +440,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         guard let inference = inference else {
             throw AudioToolError.modelNotLoaded("USS MLX")
         }
+        try validateInputFormat(audio)
         
         guard let cachedConditioning = embeddingCache[type] else {
             throw AudioToolError.modelNotFound("USS embedding for \(type.rawValue) not in cache")

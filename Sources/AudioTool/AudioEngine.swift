@@ -116,6 +116,18 @@ public actor AudioEngine {
         }
     }
 
+    /// Convert once at the facade boundary to the exact format a provider declares.
+    private func adaptedInput(
+        _ audio: AudioToolCore.AudioBuffer,
+        for processor: any AudioProcessor
+    ) throws -> AudioToolCore.AudioBuffer {
+        let channelAdapted = try audio.converted(toChannels: processor.inputChannels)
+        return try channelAdapted.resampled(
+            to: processor.sampleRate,
+            quality: processor.preferredResamplingQuality
+        )
+    }
+
     /// Register an enhancement provider
     public func register(enhancer: any SpeechEnhancer, for model: EnhancementModel) {
         self.enhancerProviders[model] = enhancer
@@ -292,7 +304,7 @@ public actor AudioEngine {
         }
         
         // Resample to model's expected sample rate if needed
-        let input = try audio.resampled(to: vad.sampleRate, quality: vad.preferredResamplingQuality)
+        let input = try adaptedInput(audio, for: vad)
         return try await withResidency(vad) { try await vad.detect(input) }
     }
     
@@ -305,8 +317,7 @@ public actor AudioEngine {
             throw AudioToolError.modelNotLoaded("Diarization")
         }
         
-        // Diarization typically expects 16kHz
-        let input = try audio.resampled(to: 16000)
+        let input = try adaptedInput(audio, for: diarizer)
         
         return try await withResidency(diarizer) {
             if let hint = vadHint {
@@ -351,8 +362,7 @@ public actor AudioEngine {
         }
         
         // Adapt to the provider's rate - it validates rather than resampling.
-        let input = try audio.resampled(to: enhancer.sampleRate,
-                                        quality: enhancer.preferredResamplingQuality)
+        let input = try adaptedInput(audio, for: enhancer)
         let output = try await withResidency(enhancer) { try await enhancer.process(input) }
         
         guard preservingSampleRate, output.sampleRate != audio.sampleRate else {
@@ -373,8 +383,7 @@ public actor AudioEngine {
         }
         
         // Adapt to the provider's rate - it validates rather than resampling.
-        let resampledAudio = try audio.resampled(to: enhancer.sampleRate,
-                                                 quality: enhancer.preferredResamplingQuality)
+        let resampledAudio = try adaptedInput(audio, for: enhancer)
         
         var result = resampledAudio
         let speechSegments = segments.filter(\.isSpeech)
@@ -451,8 +460,7 @@ public actor AudioEngine {
         }
         
         // Adapt to the provider's rate - it validates rather than resampling.
-        let input = try audio.resampled(to: separator.sampleRate,
-                                        quality: separator.preferredResamplingQuality)
+        let input = try adaptedInput(audio, for: separator)
         
         // Use progress-aware separation
         let outputs = try await withResidency(separator) {
@@ -537,16 +545,18 @@ public actor AudioEngine {
         
         // Check if diarizer supports speaker identification
         // For now, we support FluidAudioSortformerProvider via protocol extension
-        let identifiedTracks = try await identifyTracksWithDiarizer(
-            separatedTracks,
-            diarizer: diarizer,
-            timeline: timeline,
-            sourceTimeRange: sourceTimeRange,
-            onProgress: { percent in
-                // Map identification progress to 70-100% of total
-                await onProgress?(70.0 + percent * 0.3)
-            }
-        )
+        let identifiedTracks = try await withResidency(diarizer) {
+            try await identifyTracksWithDiarizer(
+                separatedTracks,
+                diarizer: diarizer,
+                timeline: timeline,
+                sourceTimeRange: sourceTimeRange,
+                onProgress: { percent in
+                    // Map identification progress to 70-100% of total
+                    await onProgress?(70.0 + percent * 0.3)
+                }
+            )
+        }
         
         await onProgress?(100.0)
         return identifiedTracks
@@ -585,7 +595,8 @@ public actor AudioEngine {
                 let progressPerTrack = 100.0 / Double(tracks.count)
                 await onProgress?(Double(index) * progressPerTrack)
                 
-                let identification = try await identifier.identifySpeaker(track)
+                let identifierInput = try adaptedInput(track, for: diarizer)
+                let identification = try await identifier.identifySpeaker(identifierInput)
                 let speakerSlot = identification.speakerSlot
                 let mappedSpeaker = slotToSpeaker[speakerSlot]
                 
@@ -616,7 +627,8 @@ public actor AudioEngine {
                 let progressPerTrack = 100.0 / Double(tracks.count)
                 await onProgress?(Double(index) * progressPerTrack)
                 
-                let trackTimeline = try await diarizer.diarize(track)
+                let diarizerInput = try adaptedInput(track, for: diarizer)
+                let trackTimeline = try await diarizer.diarize(diarizerInput)
                 
                 // Find dominant speaker from timeline
                 var speakerDurations: [SpeakerID: Double] = [:]
@@ -667,8 +679,7 @@ public actor AudioEngine {
         // Adapt to the upscaler's input rate. There is deliberately no
         // preservingSampleRate here: changing the rate is the entire operation, so
         // the result always comes back at the upscaler's output rate.
-        let input = try audio.resampled(to: upscaler.sampleRate,
-                                        quality: upscaler.preferredResamplingQuality)
+        let input = try adaptedInput(audio, for: upscaler)
         return try await withResidency(upscaler) { try await upscaler.process(input) }
     }
     
@@ -683,8 +694,7 @@ public actor AudioEngine {
             throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
-        // Resample to model's expected sample rate if needed
-        let input = try audio.resampled(to: model.sampleRate)
+        let input = try adaptedInput(audio, for: transcriber)
         return try await withResidency(transcriber) { try await transcriber.transcribe(input) }
     }
     
@@ -703,8 +713,7 @@ public actor AudioEngine {
             throw AudioToolError.modelNotLoaded(model.modelName)
         }
         
-        // Resample to model's expected sample rate if needed
-        let input = try audio.resampled(to: model.sampleRate)
+        let input = try adaptedInput(audio, for: transcriber)
         return try await withResidency(transcriber) {
             try await transcriber.transcribe(input, onProgress: onProgress)
         }
@@ -804,7 +813,8 @@ public actor AudioEngine {
         guard let classifier = classifierProvider else {
             throw AudioToolError.modelNotLoaded("Classifier")
         }
-        return try await withResidency(classifier) { try await classifier.classify(audio) }
+        let input = try adaptedInput(audio, for: classifier)
+        return try await withResidency(classifier) { try await classifier.classify(input) }
     }
     
     // MARK: - Speaker Embedding Extraction
@@ -836,7 +846,8 @@ public actor AudioEngine {
         guard let extractor = embeddingExtractorProvider else {
             throw AudioToolError.modelNotLoaded("SpeakerEmbeddingExtractor")
         }
-        return try await withResidency(extractor) { try await extractor.extractEmbedding(audio) }
+        let input = try adaptedInput(audio, for: extractor)
+        return try await withResidency(extractor) { try await extractor.extractEmbedding(input) }
     }
     
     /// Extract speaker embeddings from multiple audio segments
@@ -851,7 +862,8 @@ public actor AudioEngine {
         guard let extractor = embeddingExtractorProvider else {
             throw AudioToolError.modelNotLoaded("SpeakerEmbeddingExtractor")
         }
-        return try await withResidency(extractor) { try await extractor.extractEmbeddings(audioSegments) }
+        let inputs = try audioSegments.map { try adaptedInput($0, for: extractor) }
+        return try await withResidency(extractor) { try await extractor.extractEmbeddings(inputs) }
     }
     
     /// Identify separated tracks using embedding similarity
@@ -897,7 +909,10 @@ public actor AudioEngine {
         }
         
         // Extract embeddings for all tracks
-        let trackEmbeddings = try await extractor.extractEmbeddings(tracks)
+        let inputs = try tracks.map { try adaptedInput($0, for: extractor) }
+        let trackEmbeddings = try await withResidency(extractor) {
+            try await extractor.extractEmbeddings(inputs)
+        }
         
         var results: [EmbeddingIdentificationResult] = []
         
@@ -984,7 +999,27 @@ public actor AudioEngine {
                 continuation.finish(throwing: AudioToolError.modelNotLoaded(model.modelName))
             }
         }
-        return synthesizer.streamSynthesis(text, voice: voice)
+        return AsyncThrowingStream { continuation in
+            let producer = Task {
+                do {
+                    try await self.withResidency(synthesizer) {
+                        let upstream = synthesizer.streamSynthesis(text, voice: voice)
+                        for try await chunk in upstream {
+                            try Task.checkCancellation()
+                            if case .terminated = continuation.yield(chunk) {
+                                throw CancellationError()
+                            }
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
+            }
+        }
     }
     
     // MARK: - Translation
@@ -1005,7 +1040,9 @@ public actor AudioEngine {
         guard let translator = translatorProviders[model] else {
             throw AudioToolError.modelNotLoaded(model.modelName)
         }
-        return try await translator.translate(text, from: source, to: target)
+        return try await withResidency(translator) {
+            try await translator.translate(text, from: source, to: target)
+        }
     }
     
     /// Translate batch of texts
@@ -1024,7 +1061,9 @@ public actor AudioEngine {
         guard let translator = translatorProviders[model] else {
             throw AudioToolError.modelNotLoaded(model.modelName)
         }
-        return try await translator.translateBatch(texts, from: source, to: target)
+        return try await withResidency(translator) {
+            try await translator.translateBatch(texts, from: source, to: target)
+        }
     }
     
     // MARK: - Text Preprocessing
@@ -1106,7 +1145,7 @@ public actor AudioEngine {
             let stageName = stage.name
             
             switch stage.type {
-            case .detect(let model):
+            case .detect:
                 await eventHandler?(.progress(stage: stageName, percent: 0))
                 
                 // Use progress-aware detection if available
@@ -1120,8 +1159,7 @@ public actor AudioEngine {
                 
                 let segments: [VADSegment]
                 if let vad = vadProvider {
-                    // Resample to model's expected sample rate if needed
-                    let input = try context.currentAudio.resampled(to: model.sampleRate)
+                    let input = try adaptedInput(context.currentAudio, for: vad)
                     segments = try await withResidency(vad) {
                         try await vad.detect(input, onProgress: progressCallback)
                     }
@@ -1138,7 +1176,10 @@ public actor AudioEngine {
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
+                    ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: result.classifications,
                     analysis: context.analysis,
                     metrics: result.metrics
@@ -1159,8 +1200,7 @@ public actor AudioEngine {
                 
                 let timeline: SpeakerTimeline
                 if let diarizer = diarizationProvider {
-                    // Diarization typically expects 16kHz
-                    let input = try context.currentAudio.resampled(to: 16000)
+                    let input = try adaptedInput(context.currentAudio, for: diarizer)
                     timeline = try await withResidency(diarizer) {
                         try await diarizer.diarize(input, onProgress: progressCallback)
                     }
@@ -1177,8 +1217,10 @@ public actor AudioEngine {
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: result.classifications,
                     analysis: context.analysis,
                     metrics: result.metrics
@@ -1196,8 +1238,10 @@ public actor AudioEngine {
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
                     classifications: result.classifications,
                     analysis: analysis,
                     metrics: result.metrics
@@ -1218,9 +1262,7 @@ public actor AudioEngine {
                         // already went through the facade for both. Using `model.sampleRate`
                         // and the default resampler here made the streaming result differ
                         // from the batch one for no reason a caller could see.
-                        let resampledAudio = try context.currentAudio.resampled(
-                            to: enhancer.sampleRate,
-                            quality: enhancer.preferredResamplingQuality)
+                        let resampledAudio = try adaptedInput(context.currentAudio, for: enhancer)
                         if !speechSegments.isEmpty {
                             let totalSpeechSamples = speechSegments.reduce(0) { partial, segment in
                                 partial + Int(segment.timeRange.duration * Double(enhancer.sampleRate))
@@ -1284,6 +1326,7 @@ public actor AudioEngine {
                 result = PipelineResult(
                     audio: enhanced,
                     separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     diarizedTranscription: result.diarizedTranscription,
@@ -1424,8 +1467,7 @@ public actor AudioEngine {
                 }
                 
                 // Resample to USS sample rate (32kHz)
-                let ussInput = try context.currentAudio.resampled(to: uss.sampleRate,
-                                                                  quality: uss.preferredResamplingQuality)
+                let ussInput = try adaptedInput(context.currentAudio, for: uss)
                 
                 // Use progress-aware multi-type separation
                 let progressCallback: ProgressCallback? = if let handler = eventHandler {
@@ -1437,22 +1479,27 @@ public actor AudioEngine {
                 }
                 
                 // Process each type and emit per-embedding progress
-                var ussSeparatedResults: [SoundEmbedding: AudioToolCore.AudioBuffer] = [:]
-                for (idx, target) in targets.enumerated() {
-                    let separated = try await uss.separateSound(ussInput, target: target)
-                    ussSeparatedResults[target] = separated
-                    
-                    // Emit per-embedding event
-                    await eventHandler?(.ussSeparated(target: target, audio: separated))
-                    
-                    // Emit progress per embedding
-                    let percent = Double(idx + 1) / Double(targets.count) * 100.0
-                    await progressCallback?(percent)
+                let ussSeparatedResults: [SoundEmbedding: AudioToolCore.AudioBuffer] = try await withResidency(uss) {
+                    var outputs: [SoundEmbedding: AudioToolCore.AudioBuffer] = [:]
+                    for (idx, target) in targets.enumerated() {
+                        try Task.checkCancellation()
+                        let separated = try await uss.separateSound(ussInput, target: target)
+                        outputs[target] = separated
+
+                        // Emit per-embedding event
+                        await eventHandler?(.ussSeparated(target: target, audio: separated))
+
+                        // Emit progress per embedding
+                        let percent = Double(idx + 1) / Double(targets.count) * 100.0
+                        await progressCallback?(percent)
+                    }
+                    return outputs
                 }
                 
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
                     ussSeparated: ussSeparatedResults,
                     transcription: result.transcription,
                     diarizedTranscription: result.diarizedTranscription,
@@ -1479,9 +1526,7 @@ public actor AudioEngine {
                         // an upscale pipeline on 44.1/48 kHz audio threw sampleRateMismatch
                         // the moment a progress handler was attached - the same call
                         // succeeded without one.
-                        let inputAudio = try context.currentAudio.resampled(
-                            to: upscaler.sampleRate,
-                            quality: upscaler.preferredResamplingQuality)
+                        let inputAudio = try adaptedInput(context.currentAudio, for: upscaler)
                         let totalSamples = inputAudio.samples.count
                         var processedSamples = 0
                         var streamedSamples: [Float] = []
@@ -1522,6 +1567,7 @@ public actor AudioEngine {
                     // away, returning the enhancer's audio merely resampled up.
                     audio: upscaled,
                     separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     diarizedTranscription: result.diarizedTranscription,
@@ -1543,6 +1589,7 @@ public actor AudioEngine {
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: transcription,
                     diarizedTranscription: result.diarizedTranscription,
@@ -1585,6 +1632,7 @@ public actor AudioEngine {
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     diarizedTranscription: diarizedTranscription,
@@ -1600,6 +1648,7 @@ public actor AudioEngine {
                 result = PipelineResult(
                     audio: result.audio,
                     separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
                     ussSeparated: result.ussSeparated,
                     transcription: result.transcription,
                     diarizedTranscription: result.diarizedTranscription,
@@ -1714,6 +1763,7 @@ public actor AudioEngine {
                     result = PipelineResult(
                         audio: result.audio,
                         separatedTracks: processedTracks,
+                        identifiedTracks: result.identifiedTracks,
                         ussSeparated: result.ussSeparated,
                         transcription: result.transcription,
                         diarizedTranscription: result.diarizedTranscription,
@@ -1733,24 +1783,49 @@ public actor AudioEngine {
         // The single conversion at the edge. Everything above ran at whatever rate
         // each model wanted; this is where the caller's expectation is honoured.
         let targetRate = targetOutputRate
-        if let produced = result.audio, produced.sampleRate != targetRate {
-            result = PipelineResult(
-                audio: try produced.resampled(to: targetRate),
-                separatedTracks: try result.separatedTracks?.map { try $0.resampled(to: targetRate) },
-                ussSeparated: result.ussSeparated,
-                transcription: result.transcription,
-                diarizedTranscription: result.diarizedTranscription,
-                classifications: result.classifications,
-                analysis: result.analysis,
-                metrics: result.metrics
+        let outputAudio = try result.audio.map { audio in
+            guard audio.sampleRate != targetRate else { return audio }
+            return try audio.resampled(to: targetRate)
+        }
+        let outputSeparatedTracks = try result.separatedTracks?.map { audio in
+            guard audio.sampleRate != targetRate else { return audio }
+            return try audio.resampled(to: targetRate)
+        }
+        let outputIdentifiedTracks = try result.identifiedTracks?.map { track in
+            let audio: AudioToolCore.AudioBuffer
+            if track.audio.sampleRate == targetRate {
+                audio = track.audio
+            } else {
+                audio = try track.audio.resampled(to: targetRate)
+            }
+            return SeparatedSpeakerTrack(
+                id: track.id,
+                audio: audio,
+                speakerSlot: track.speakerSlot,
+                speakerID: track.speakerID,
+                confidence: track.confidence,
+                sourceTimeRange: track.sourceTimeRange,
+                trackIndex: track.trackIndex
             )
         }
+        result = PipelineResult(
+            audio: outputAudio,
+            separatedTracks: outputSeparatedTracks,
+            identifiedTracks: outputIdentifiedTracks,
+            ussSeparated: result.ussSeparated,
+            transcription: result.transcription,
+            diarizedTranscription: result.diarizedTranscription,
+            classifications: result.classifications,
+            analysis: result.analysis,
+            metrics: result.metrics
+        )
         
         metrics.totalDuration = ContinuousClock.now - startTime
         
         return PipelineResult(
             audio: result.audio,
             separatedTracks: result.separatedTracks,
+            identifiedTracks: result.identifiedTracks,
             ussSeparated: result.ussSeparated,
             transcription: result.transcription,
             diarizedTranscription: result.diarizedTranscription,

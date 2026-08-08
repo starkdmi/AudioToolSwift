@@ -166,25 +166,35 @@ public struct PackageDownloadProgress: Sendable {
     
     /// Total number of downloads
     public let totalCount: Int
+
+    /// True only for the terminal event emitted after the current variant has
+    /// passed file verification. A byte-progress value of `1.0` alone does not
+    /// imply successful installation.
+    public let isCurrentVariantVerified: Bool
     
     public init(
         currentVariant: ModelVariant,
         variantProgress: DownloadProgress?,
         completedCount: Int,
-        totalCount: Int
+        totalCount: Int,
+        isCurrentVariantVerified: Bool = false
     ) {
         self.currentVariant = currentVariant
         self.variantProgress = variantProgress
         self.completedCount = completedCount
         self.totalCount = totalCount
+        self.isCurrentVariantVerified = isCurrentVariantVerified
     }
     
     /// Overall progress fraction (0.0 - 1.0)
     public var overallFraction: Double {
         guard totalCount > 0 else { return 0 }
+        if isCurrentVariantVerified {
+            return min(1, max(0, Double(completedCount) / Double(totalCount)))
+        }
         let base = Double(completedCount) / Double(totalCount)
         let current = (variantProgress?.fractionCompleted ?? 0) / Double(totalCount)
-        return base + current
+        return min(1, max(0, base + current))
     }
     
     /// Overall progress percentage (0-100)

@@ -23,6 +23,10 @@ public class USSInference {
         compile: Bool = true,
         segmentBatchSize: Int = 1  // Default to 1 based on performance testing
     ) {
+        precondition(sampleRate > 0, "Sample rate must be positive")
+        precondition(segmentDuration > 0, "Segment duration must be positive")
+        precondition(hopLength > 0, "Hop length must be positive")
+        precondition(segmentBatchSize > 0, "Segment batch size must be positive")
         self.model = model
         self.sampleRate = sampleRate
         self.segmentDuration = segmentDuration
@@ -32,8 +36,11 @@ public class USSInference {
         // Enable or disable compilation
         model.setCompile(compile)
         
-        // Pre-warm STFT normalization buffer cache
-        prewarmSTFTCache()
+        // Warm the exact normalization entry used by this model and segment
+        // length. The cache is keyed by the ISTFT window's identity, so a
+        // separately-created Hann window cannot warm the inference path.
+        let segmentSamples = Int(segmentDuration * Float(sampleRate))
+        model.prewarmNormalization(forSignalLength: segmentSamples)
     }
     
     /// Prewarm the model with dummy input to compile the graph
@@ -41,10 +48,6 @@ public class USSInference {
         if isPrewarmed { return }
         
         print("[Inference] Prewarming compiled model...")
-        
-        // Optimization: Set GPU cache limit for better memory management
-        // This helps with repeated allocations during segmented processing
-        GPU.set(cacheLimit: 3 * 1024 * 1024 * 1024) // 3GB cache
         
         let segmentSamples = Int(segmentDuration * Float(sampleRate))
         let dummyMixture = MLXArray.zeros([1, 1, segmentSamples])
@@ -56,8 +59,14 @@ public class USSInference {
         
         // Warm up with multiple calls to ensure JIT compilation is complete
         for i in 0..<2 {
-            let _ = model(inputs)
-            eval(dummyMixture) // Force evaluation
+            let outputs = model(inputs)
+            guard let waveform = outputs["waveform"] else {
+                preconditionFailure("USS model prewarm did not produce a waveform")
+            }
+            // Evaluating an input does not compile the model graph. Force the
+            // actual output graph and materialize it before declaring readiness.
+            eval(waveform)
+            _ = waveform.asArray(Float.self)
             if i == 0 {
                 // Clear cache after first run to ensure clean state
                 GPU.clearCache()
@@ -182,7 +191,7 @@ public class USSInference {
         var results: [MLXArray] = []
         for i in 0..<batchSize {
             // Each result should be [batch=1, channels=1, samples]
-            results.append(waveform[i, 0..., 0...].expandedDimensions(axis: 0).expandedDimensions(axis: 0))
+            results.append(waveform[i].expandedDimensions(axis: 0))
         }
         
         return results
@@ -197,13 +206,14 @@ public class USSInference {
         compile: Bool
     ) -> MLXArray {
         let audioLength = audio.shape[1]
-        let numSegments = (audioLength - segmentSamples) / hopSamples + 1
-        
-        var separatedSegments: [MLXArray] = []
-        var weights: [MLXArray] = []
+        let numSegments = 1 + Int(ceil(
+            Double(audioLength - segmentSamples) / Double(hopSamples)
+        ))
+        var output = [Float](repeating: 0, count: audioLength)
+        var outputWeights = [Float](repeating: 0, count: audioLength)
         
         // Create window for overlap-add
-        let window = createTriangularWindow(segmentSamples)
+        let window = createTriangularWindow(segmentSamples).asArray(Float.self)
         
         for i in 0..<numSegments {
             let start = i * hopSamples
@@ -226,42 +236,53 @@ public class USSInference {
                 compile: compile
             )
             
-            // Handle channel dimension - separated is [batch, channels, samples]
-            // Extract first channel to get [batch, samples]
-            let separatedMono = separated[0..., 0, 0...]
-            
-            // Apply window
-            let windowedSeparated = separatedMono * window.reshaped([1, -1])
-            
-            // Store segment and weight
-            if actualLength < segmentSamples {
-                separatedSegments.append(windowedSeparated[0..., 0..<actualLength])
-                weights.append(window[0..<actualLength])
-            } else {
-                separatedSegments.append(windowedSeparated)
-                weights.append(window)
+            eval(separated)
+            let separatedSamples = separated[0, 0, 0..<actualLength].asArray(Float.self)
+
+            for sampleIndex in 0..<actualLength {
+                let weight = Self.overlapAddWeight(
+                    windowWeight: window[sampleIndex],
+                    sampleIndex: sampleIndex,
+                    segmentSamples: segmentSamples,
+                    hopSamples: hopSamples,
+                    isFirstSegment: i == 0,
+                    isFinalSegment: i == numSegments - 1
+                )
+                let outputIndex = start + sampleIndex
+                output[outputIndex] += separatedSamples[sampleIndex] * weight
+                outputWeights[outputIndex] += weight
             }
-        }
-        
-        // Overlap-add reconstruction
-        var outputSeparated = MLXArray.zeros([1, audioLength])
-        let outputWeights = MLXArray.zeros([audioLength])
-        
-        for (i, segment) in separatedSegments.enumerated() {
-            let start = i * hopSamples
-            let length = segment.shape[1]
-            let end = start + length
-            
-            outputSeparated[0..., start..<end] = outputSeparated[0..., start..<end] + segment
-            outputWeights[start..<end] = outputWeights[start..<end] + weights[i]
+            GPU.clearCache()
         }
         
         // Normalize by weights
         let eps: Float = 1e-8
-        outputSeparated = outputSeparated / MLX.maximum(outputWeights.expandedDimensions(axis: 0), eps)
-        
-        // Add channel dimension back to match expected output format [batch, channels, samples]
-        return outputSeparated.expandedDimensions(axis: 1)
+        for index in output.indices where outputWeights[index] > eps {
+            output[index] /= outputWeights[index]
+        }
+
+        return MLXArray(output).reshaped([1, 1, audioLength])
+    }
+
+    /// Preserve the triangular crossfade wherever a neighboring segment still
+    /// contributes. A padded final segment can contain fewer than `hopSamples`
+    /// real samples, but that does not enlarge its non-overlapped region.
+    static func overlapAddWeight(
+        windowWeight: Float,
+        sampleIndex: Int,
+        segmentSamples: Int,
+        hopSamples: Int,
+        isFirstSegment: Bool,
+        isFinalSegment: Bool
+    ) -> Float {
+        if isFirstSegment && sampleIndex < hopSamples {
+            return 1
+        }
+        if isFinalSegment,
+           sampleIndex >= max(0, segmentSamples - hopSamples) {
+            return 1
+        }
+        return windowWeight
     }
     
     /// Process audio in simple non-overlapping segments (matches Python implementation)
@@ -273,23 +294,9 @@ public class USSInference {
     ) -> MLXArray {
         let audioLength = audio.shape[1]
         let numSegments = Int(ceil(Float(audioLength) / Float(segmentSamples)))
-        let totalSamples = numSegments * segmentSamples
         
         print("[Inference] Using optimized segmentation: \(numSegments) segments of \(segmentSamples) samples")
-        
-        // Pad entire audio upfront (like Python)
-        var paddedAudio = audio
-        if audioLength < totalSamples {
-            let padding = totalSamples - audioLength
-            paddedAudio = MLX.padded(audio, widths: [IntOrPair(0), IntOrPair([0, padding])])
-            print("[Inference] Padded audio from \(audioLength) to \(totalSamples) samples")
-        }
-        
-        // For now, skip asStrided optimization due to shape issues
-        // Will use direct slicing which is still efficient with MLX
-        
-        // Process all segments at once if possible
-        var separatedSegments: [MLXArray] = []
+        var output = [Float](repeating: 0, count: audioLength)
         
         // Use configurable batch size
         let batchSegments = segmentBatchSize
@@ -304,8 +311,15 @@ public class USSInference {
                 // For batch size 1, process sequentially (matches Python)
                 for i in startSeg..<endSeg {
                     let start = i * segmentSamples
-                    let end = start + segmentSamples
-                    let segment = paddedAudio[0..., start..<end]
+                    let end = min(start + segmentSamples, audioLength)
+                    let actualLength = end - start
+                    var segment = audio[0..., start..<end]
+                    if actualLength < segmentSamples {
+                        segment = MLX.padded(
+                            segment,
+                            widths: [IntOrPair(0), IntOrPair([0, segmentSamples - actualLength])]
+                        )
+                    }
                     
                     print("[Inference] Processing segment \(i + 1)/\(numSegments): [\(start):\(end)]")
                     
@@ -315,8 +329,10 @@ public class USSInference {
                         compile: compile
                     )
                     
-                    // No explicit eval needed - happens automatically
-                    separatedSegments.append(separated)
+                    eval(separated)
+                    let samples = separated[0, 0, 0..<actualLength].asArray(Float.self)
+                    output.replaceSubrange(start..<end, with: samples)
+                    GPU.clearCache()
                 }
             } else {
                 // For batch size > 1, use true batch processing
@@ -324,11 +340,19 @@ public class USSInference {
                 
                 // Collect segments for batch processing
                 var batchSegments: [MLXArray] = []
+                var batchRanges: [Range<Int>] = []
                 for i in startSeg..<endSeg {
                     let start = i * segmentSamples
-                    let end = start + segmentSamples
-                    let segment = paddedAudio[0..., start..<end]
+                    let end = min(start + segmentSamples, audioLength)
+                    var segment = audio[0..., start..<end]
+                    if end - start < segmentSamples {
+                        segment = MLX.padded(
+                            segment,
+                            widths: [IntOrPair(0), IntOrPair([0, segmentSamples - (end - start)])]
+                        )
+                    }
                     batchSegments.append(segment)
+                    batchRanges.append(start..<end)
                 }
                 
                 // Process entire batch at once
@@ -338,19 +362,16 @@ public class USSInference {
                     compile: compile
                 )
                 
-                // Add results
-                separatedSegments.append(contentsOf: batchResults)
-                
-                // Single evaluation for entire batch
                 eval(batchResults)
+                for (result, range) in zip(batchResults, batchRanges) {
+                    let samples = result[0, 0, 0..<range.count].asArray(Float.self)
+                    output.replaceSubrange(range, with: samples)
+                }
+                GPU.clearCache()
             }
         }
-        
-        // Concatenate all segments along the samples dimension
-        let concatenated = MLX.concatenated(separatedSegments, axis: 2)  // axis=2 is samples dimension
-        
-        // Trim to original audio length
-        return concatenated[0..., 0..., 0..<audioLength]
+
+        return MLXArray(output).reshaped([1, 1, audioLength])
     }
     
     /// Create triangular window for overlap-add

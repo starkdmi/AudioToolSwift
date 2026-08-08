@@ -92,13 +92,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     
     /// Observable state stream for UI
     public nonisolated var stateStream: AsyncStream<ModelState> {
-        AsyncStream { continuation in
-            Task { await addStateContinuation(continuation) }
-        }
-    }
-    
-    private func addStateContinuation(_ continuation: AsyncStream<ModelState>.Continuation) {
-        stateContinuations.append(continuation)
+        stateBroadcaster.makeStream()
     }
     
     // MARK: - SpeechSynthesizer Conformance
@@ -120,6 +114,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     private nonisolated let language: ChatterboxLanguage
     private nonisolated let repo: String
     private nonisolated let precision: ModelPrecision
+    private nonisolated let modelIdentity: String
     
     /// Optional Russian text preprocessor
     private var ruAccentProvider: RUAccentProvider?
@@ -131,6 +126,11 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     private var referenceSampleRate: Int?
     private var speakerEmbedding: MLXArray?
     private var refDict: [String: MLXArray]?
+
+    /// User-provided reference audio is durable configuration. Keep a mono CPU
+    /// copy across residency eviction and rebuild all MLX conditioning tensors
+    /// from it after the model is loaded again.
+    private var referenceAudioConfiguration: AudioToolCore.AudioBuffer?
     
     /// Default voice conditioning from conds.safetensors (loaded during load())
     private var defaultT3Cond: T3Cond?
@@ -141,8 +141,11 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     private var vadProvider: FluidAudioVADProvider?
     private var vadTrimEnabled: Bool = true  // Enabled by default - ChatterBox produces start/end artifacts
     
-    /// State stream continuations
-    private var stateContinuations: [AsyncStream<ModelState>.Continuation] = []
+    /// Kept outside actor isolation so subscription and cancellation registration
+    /// are synchronous and cannot overtake each other.
+    private nonisolated let stateBroadcaster = AsyncStateBroadcaster(
+        initialState: ModelState.notLoaded
+    )
     
     /// Synthesis parameters
     private var exaggeration: Float = 0.5
@@ -167,9 +170,8 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         useRuAccent: Bool = true,
         convertToStressMarks: Bool = true
     ) {
-        self.precision = precision
         // ChatterBox repos use different suffix pattern
-        self.repo = switch precision {
+        let repo = switch precision {
         case .fp32: Self.baseRepo
         case .fp16: "\(Self.baseRepo)-fp16"
         case .bit8: "\(Self.baseRepo)-8bit"
@@ -177,6 +179,9 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         case .bit4: "\(Self.baseRepo)-4bit"
         default: precision.repo(base: Self.baseRepo)
         }
+        self.precision = precision
+        self.repo = repo
+        self.modelIdentity = repo
         self.language = language
         self.useRuAccent = useRuAccent
         self.convertToStressMarks = convertToStressMarks
@@ -196,6 +201,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     ) {
         self.precision = .fp32
         self.repo = repo
+        self.modelIdentity = repo
         self.language = language
         self.useRuAccent = useRuAccent
         self.convertToStressMarks = convertToStressMarks
@@ -216,6 +222,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         self.modelPath = modelPath
         self.precision = .fp32
         self.repo = ChatterboxTTSProvider.baseRepo
+        self.modelIdentity = modelPath.standardizedFileURL.path
         self.language = language
         self.useRuAccent = useRuAccent
         self.convertToStressMarks = convertToStressMarks
@@ -230,9 +237,14 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             try await loadFromPath(path)
             return
         }
+
+        let requiredFiles = ["*.safetensors", "*.json"]
         
         // Check if already downloaded
-        if let cached = ModelDownloader.shared.localPath(for: repo) {
+        if let cached = ModelDownloader.shared.localPath(
+            for: repo,
+            matching: requiredFiles
+        ) {
             try await loadFromPath(cached)
             return
         }
@@ -243,7 +255,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         do {
             let path = try await ModelDownloader.shared.downloadAndGetPath(
                 repo: repo,
-                matching: ["*.safetensors", "*.json"]
+                matching: requiredFiles
             ) { [weak self] progress in
                 Task { @MainActor in
                     await self?.updateState(.downloading(progress: progress.fractionCompleted))
@@ -252,6 +264,20 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             
             try await loadFromPath(path)
         } catch {
+            voiceEncoder = nil
+            t3 = nil
+            s3Tokenizer = nil
+            s3Gen = nil
+            textTokenizer = nil
+            referenceWav = nil
+            referenceSampleRate = nil
+            speakerEmbedding = nil
+            refDict = nil
+            defaultT3Cond = nil
+            defaultRefDict = nil
+            hasDefaultVoice = false
+            vadProvider = nil
+            GPU.clearCache()
             updateState(.failed(error.localizedDescription))
             throw error
         }
@@ -260,6 +286,16 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     /// Load from a specific path
     private func loadFromPath(_ path: URL) async throws {
         updateState(.loading)
+
+        // Never carry conditioning tensors from an older model instance into a
+        // reload. The CPU configuration below remains available for rebuilding.
+        referenceWav = nil
+        referenceSampleRate = nil
+        speakerEmbedding = nil
+        refDict = nil
+        defaultT3Cond = nil
+        defaultRefDict = nil
+        hasDefaultVoice = false
         
         do {
             // Find the model weights
@@ -348,6 +384,10 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             if FileManager.default.fileExists(atPath: condsPath.path) {
                 try loadDefaultConds(from: condsPath)
             }
+
+            if let referenceAudioConfiguration {
+                try rebuildReferenceConditioning(from: referenceAudioConfiguration)
+            }
             
             // Load VAD provider for trimming start/end artifacts (enabled by default)
             // Parameters tuned for TTS output based on Silero VAD best practices:
@@ -368,6 +408,20 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             modelPath = path
             updateState(.ready)
         } catch {
+            voiceEncoder = nil
+            t3 = nil
+            s3Tokenizer = nil
+            s3Gen = nil
+            textTokenizer = nil
+            referenceWav = nil
+            referenceSampleRate = nil
+            speakerEmbedding = nil
+            refDict = nil
+            defaultT3Cond = nil
+            defaultRefDict = nil
+            hasDefaultVoice = false
+            vadProvider = nil
+            GPU.clearCache()
             updateState(.failed(error.localizedDescription))
             throw error
         }
@@ -377,9 +431,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     
     private func updateState(_ newState: ModelState) {
         state = newState
-        for continuation in stateContinuations {
-            continuation.yield(newState)
-        }
+        stateBroadcaster.send(newState)
     }
     
     // MARK: - Reference Audio
@@ -387,7 +439,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     /// Set reference audio for voice cloning from URL
     /// - Parameter url: Path to reference audio file (WAV recommended)
     public func setReferenceAudio(from url: URL) async throws {
-        guard let voiceEncoder = voiceEncoder else {
+        guard voiceEncoder != nil, s3Gen != nil, s3Tokenizer != nil else {
             throw AudioToolError.modelNotLoaded("ChatterBox")
         }
         
@@ -399,76 +451,94 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         )
         let loader = AudioLoader(config: config)
         let audio = try loader.load(from: url.path)
-        
-        // Convert to mono if needed
-        let wav = audio.ndim == 1 ? audio : MLX.mean(audio, axis: 0)
-        
-        referenceWav = wav
-        referenceSampleRate = Int(info.sampleRate)
-        
-        // Compute speaker embedding - MUST resample to 16kHz first (VoiceEncoder expects 16kHz)
-        let refWav16kForVE = resampleAudioPolyphase(wav, origSR: Int(info.sampleRate), targetSR: S3_SR)
-        speakerEmbedding = voiceEncoder.embedsFromWavs([refWav16kForVE], sampleRate: S3_SR)
-        
-        // Precompute reference dictionary if s3Gen is loaded
-        if let s3Gen = s3Gen, let s3Tokenizer = s3Tokenizer {
-            let refWav24k = resampleAudioPolyphase(wav, origSR: Int(info.sampleRate), targetSR: S3GEN_SR)
-            let decCondLen = 10 * S3GEN_SR
-            let refWav24kTrim = refWav24k[0..<min(decCondLen, refWav24k.shape[0])]
-            let refWav16kFrom24 = resampleAudioPolyphase(refWav24kTrim, origSR: S3GEN_SR, targetSR: S3_SR)
-            
-            let s3genMel = logMelSpectrogramCompat(refWav16kFrom24, nMels: 128)
-            let s3genMelBatch = s3genMel.expandedDimensions(axis: 0)
-            let s3genMelLen = MLXArray([Int32(s3genMelBatch.shape[2])])
-            let (s3genTokens, s3genTokenLens) = s3Tokenizer(s3genMelBatch, s3genMelLen)
-            
-            refDict = s3Gen.embed_ref(
-                ref_wav: refWav24kTrim.expandedDimensions(axis: 0),
-                ref_sr: S3GEN_SR,
-                ref_speech_tokens: s3genTokens,
-                ref_speech_token_lens: s3genTokenLens
-            )
-        }
+
+        let reference = AudioToolCore.AudioBuffer(
+            samples: audio.asArray(Float.self),
+            sampleRate: Int(info.sampleRate),
+            channels: 1
+        )
+        try configureReferenceAudio(reference)
     }
     
     /// Set reference audio from an AudioBuffer
     /// - Parameter audio: Audio buffer with reference speech
     public func setReferenceAudio(_ audio: AudioToolCore.AudioBuffer) async throws {
-        guard let voiceEncoder = voiceEncoder else {
+        guard voiceEncoder != nil, s3Gen != nil, s3Tokenizer != nil else {
             throw AudioToolError.modelNotLoaded("ChatterBox")
         }
-        
-        let wav = MLXArray(audio.samples)
-        let sr = audio.sampleRate
-        
-        // Convert to mono if needed
-        let monoWav = wav.ndim == 1 ? wav : MLX.mean(wav, axis: 0)
-        
-        referenceWav = monoWav
-        referenceSampleRate = sr
-        
-        // Compute speaker embedding
-        speakerEmbedding = voiceEncoder.embedsFromWavs([monoWav], sampleRate: sr)
-        
-        // Precompute reference dictionary
-        if let s3Gen = s3Gen, let s3Tokenizer = s3Tokenizer {
-            let refWav24k = resampleAudioPolyphase(monoWav, origSR: sr, targetSR: S3GEN_SR)
-            let decCondLen = 10 * S3GEN_SR
-            let refWav24kTrim = refWav24k[0..<min(decCondLen, refWav24k.shape[0])]
-            let refWav16kFrom24 = resampleAudioPolyphase(refWav24kTrim, origSR: S3GEN_SR, targetSR: S3_SR)
-            
-            let s3genMel = logMelSpectrogramCompat(refWav16kFrom24, nMels: 128)
-            let s3genMelBatch = s3genMel.expandedDimensions(axis: 0)
-            let s3genMelLen = MLXArray([Int32(s3genMelBatch.shape[2])])
-            let (s3genTokens, s3genTokenLens) = s3Tokenizer(s3genMelBatch, s3genMelLen)
-            
-            refDict = s3Gen.embed_ref(
-                ref_wav: refWav24kTrim.expandedDimensions(axis: 0),
-                ref_sr: S3GEN_SR,
-                ref_speech_tokens: s3genTokens,
-                ref_speech_token_lens: s3genTokenLens
+
+        try configureReferenceAudio(audio)
+    }
+
+    private func configureReferenceAudio(
+        _ audio: AudioToolCore.AudioBuffer
+    ) throws {
+        let mono = try audio.converted(toChannels: 1)
+        guard !mono.isEmpty else { throw AudioToolError.emptyAudioBuffer }
+        guard !mono.samples.contains(where: { !$0.isFinite }) else {
+            throw AudioToolError.invalidAudioFormat(
+                expected: "finite reference samples",
+                found: "NaN or infinity"
             )
         }
+
+        // Build first and commit the durable configuration only after all
+        // conditioning is available, so a bad replacement does not erase a
+        // previously working voice.
+        try rebuildReferenceConditioning(from: mono)
+        referenceAudioConfiguration = mono
+    }
+
+    private func rebuildReferenceConditioning(
+        from audio: AudioToolCore.AudioBuffer
+    ) throws {
+        guard let voiceEncoder, let s3Gen, let s3Tokenizer else {
+            throw AudioToolError.modelNotLoaded("ChatterBox")
+        }
+
+        let wav = MLXArray(audio.samples)
+        let sourceSampleRate = audio.sampleRate
+
+        // VoiceEncoder expects 16 kHz. Resample explicitly so both file and
+        // AudioBuffer configuration follow the same conditioning path.
+        let wav16k = resampleAudioPolyphase(
+            wav,
+            origSR: sourceSampleRate,
+            targetSR: S3_SR
+        )
+        let newSpeakerEmbedding = voiceEncoder.embedsFromWavs(
+            [wav16k],
+            sampleRate: S3_SR
+        )
+
+        let wav24k = resampleAudioPolyphase(
+            wav,
+            origSR: sourceSampleRate,
+            targetSR: S3GEN_SR
+        )
+        let decoderConditioningLength = 10 * S3GEN_SR
+        let wav24kTrimmed = wav24k[0..<min(decoderConditioningLength, wav24k.shape[0])]
+        let wav16kFrom24k = resampleAudioPolyphase(
+            wav24kTrimmed,
+            origSR: S3GEN_SR,
+            targetSR: S3_SR
+        )
+        let mel = logMelSpectrogramCompat(wav16kFrom24k, nMels: 128)
+        let melBatch = mel.expandedDimensions(axis: 0)
+        let melLength = MLXArray([Int32(melBatch.shape[2])])
+        let (tokens, tokenLengths) = s3Tokenizer(melBatch, melLength)
+        let newRefDict = s3Gen.embed_ref(
+            ref_wav: wav24kTrimmed.expandedDimensions(axis: 0),
+            ref_sr: S3GEN_SR,
+            ref_speech_tokens: tokens,
+            ref_speech_token_lens: tokenLengths
+        )
+
+        eval([newSpeakerEmbedding] + Array(newRefDict.values))
+        referenceWav = wav
+        referenceSampleRate = sourceSampleRate
+        speakerEmbedding = newSpeakerEmbedding
+        refDict = newRefDict
     }
     
     // MARK: - Default Voice Loading
@@ -617,6 +687,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     ///   - voice: Voice identifier (ignored - uses reference audio or default voice)
     /// - Returns: Audio buffer with synthesized speech (24kHz mono)
     public func synthesize(_ text: String, voice: String) async throws -> AudioToolCore.AudioBuffer {
+        try Task.checkCancellation()
         guard let t3 = t3, let s3Gen = s3Gen, let textTokenizer = textTokenizer else {
             throw AudioToolError.modelNotLoaded("ChatterBox")
         }
@@ -711,7 +782,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         
         // Run T3 inference
         MLXRandom.seed(seed)
-        let rawSpeechTokens = t3.inference(
+        let rawSpeechTokens = try t3.inference(
             t3_cond: &t3Cond,
             text_tokens: textTokens,
             initial_speech_tokens: nil,
@@ -723,6 +794,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             cfg_weight: t3CfgWeight,
             language_id: language.rawValue
         )
+        try Task.checkCancellation()
         
         // Filter speech tokens
         let dropped = dropInvalidTokens(rawSpeechTokens)
@@ -730,6 +802,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         
         // Generate audio
         let fullWav = s3Gen(speechTokens: speechTokens.asType(.int32), refDict: useRefDict, finalize: true)
+        try Task.checkCancellation()
         let wavMono = fullWav.ndim == 1 ? fullWav : fullWav[0]
         
         // Convert to samples
@@ -841,16 +914,22 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     /// - Returns: Async stream of audio chunks
     public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     // For now, generate full audio and yield as single chunk
                     // TODO: Implement sentence-level streaming for lower latency
                     let audio = try await synthesize(text, voice: voice)
-                    continuation.yield(audio)
+                    try Task.checkCancellation()
+                    if case .terminated = continuation.yield(audio) {
+                        throw CancellationError()
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }
@@ -1064,5 +1143,47 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         }
         
         return nil
+    }
+}
+
+// MARK: - ManagedModel
+
+extension ChatterboxTTSProvider: ManagedModel {
+    public nonisolated var modelId: String {
+        "chatterbox:\(modelIdentity):\(precision.rawValue):\(language.rawValue)"
+    }
+
+    public nonisolated var estimatedMemoryBytes: Int {
+        switch precision {
+        case .fp32: 2_400_000_000
+        case .fp16, .bf16: 1_300_000_000
+        case .int8, .bit8: 850_000_000
+        case .bit6: 700_000_000
+        case .int4, .bit4: 550_000_000
+        }
+    }
+
+    public func checkIfLoaded() async -> Bool {
+        voiceEncoder != nil && t3 != nil && s3Tokenizer != nil && s3Gen != nil && textTokenizer != nil
+    }
+
+    public func unload() async {
+        voiceEncoder = nil
+        t3 = nil
+        s3Tokenizer = nil
+        s3Gen = nil
+        textTokenizer = nil
+        referenceWav = nil
+        referenceSampleRate = nil
+        speakerEmbedding = nil
+        refDict = nil
+        // `referenceAudioConfiguration` is CPU-backed user configuration and is
+        // intentionally retained for rebuildReferenceConditioning(from:).
+        defaultT3Cond = nil
+        defaultRefDict = nil
+        hasDefaultVoice = false
+        vadProvider = nil
+        updateState(.notLoaded)
+        GPU.clearCache()
     }
 }

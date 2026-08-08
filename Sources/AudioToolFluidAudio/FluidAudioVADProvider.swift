@@ -81,6 +81,7 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
         guard let manager = manager else {
             throw AudioToolError.modelNotLoaded("FluidAudio VAD")
         }
+        try validateInputFormat(audio)
         
         let samples = audio.samples
         
@@ -134,7 +135,7 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
     /// Stream VAD segments as detected
     public nonisolated func streamDetection(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<VADSegment, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 guard let manager = await self.manager else {
                     continuation.finish(throwing: AudioToolError.modelNotLoaded("FluidAudio VAD"))
                     return
@@ -144,6 +145,7 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
                 
                 for await chunk in audio {
                     do {
+                        try Task.checkCancellation()
                         let result = try await manager.processStreamingChunk(
                             chunk.samples,
                             state: state,
@@ -164,7 +166,7 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
                                 isSpeech: isSpeech,
                                 probability: Float(result.probability)
                             )
-                            continuation.yield(segment)
+                            if case .terminated = continuation.yield(segment) { return }
                         }
                     } catch {
                         continuation.finish(throwing: error)
@@ -174,6 +176,7 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
                 
                 continuation.finish()
             }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
         }
     }
     

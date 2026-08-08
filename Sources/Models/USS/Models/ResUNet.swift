@@ -511,4 +511,10 @@ public class ResUNet30: Module {
             forwardCompiled = nil
         }
     }
+
+    /// Warm the normalization entry used by this model's owned STFT pair.
+    func prewarmNormalization(forSignalLength signalLength: Int) {
+        let numFrames = base.stft.frameCount(forSignalLength: signalLength)
+        base.istft.prewarmNormalization(numFrames: numFrames)
+    }
 }

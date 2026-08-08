@@ -233,6 +233,7 @@ public final class KokoroTTS {
   /// - Throws: `KokoroTTSError.tooManyTokens` if text is too long,
   ///           or `G2PProcessorError` if G2P processing fails
   public func generateAudio(voice: MLXArray, language: Language, text: String, speed: Float = 1.0) throws -> ([Float], [MToken]?) {
+    try Task.checkCancellation()
     // Update language if it has changed
     try updateLanguageIfNeeded(language)
 
@@ -242,9 +243,11 @@ public final class KokoroTTS {
 
     // Step 1: Convert text to phonemes
     let (phonemizedText, tokenArray) = try phonemizeText(text)
+    try Task.checkCancellation()
     
     // Step 2: Tokenize and prepare input
     let (paddedInputIds, attentionMask, inputLengths, textMask, inputIds) = try prepareInputTensors(phonemizedText)
+    try Task.checkCancellation()
     
     // Step 3: Extract style embeddings from voice
     let (globalStyle, acousticStyle) = extractStyleEmbeddings(from: voice, tokenCount: inputIds.count)
@@ -279,9 +282,10 @@ public final class KokoroTTS {
       N: nPrediction,
       s: acousticStyle
     )[0]
-    
+    try Task.checkCancellation()
     // Single eval at the end triggers complete graph evaluation
     audio.eval()
+    try Task.checkCancellation()
     
     // Try to predict timestamp of each token if G2P processor returns tokens
     if let tokenArray {

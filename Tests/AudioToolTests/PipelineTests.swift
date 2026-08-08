@@ -105,6 +105,50 @@ struct PipelineTests {
         #expect(mockVAD.detectCallCount == 1)
         #expect(mockEnhancer.processCallCount >= 1)
     }
+
+    @Test("Identified overlap tracks survive later stages and final output conversion")
+    func testIdentifiedTracksPropagation() async throws {
+        let diarizer = MockDiarization()
+        diarizer.mockTimeline = SpeakerTimeline(segments: [
+            DiarizedSegment(
+                timeRange: TimeRange(start: 0, end: 1.25),
+                speakerID: SpeakerID(0),
+                confidence: 0.95
+            ),
+            DiarizedSegment(
+                timeRange: TimeRange(start: 0.5, end: 1.75),
+                speakerID: SpeakerID(1),
+                confidence: 0.9
+            ),
+        ])
+        let separator = MockSeparator(outputCount: 2)
+        let enhancer = MockEnhancer()
+        let engine = AudioEngine(
+            configuration: .default,
+            diarization: diarizer,
+            enhancer: (.mossformerSE16k, enhancer),
+            separator: (.mossformerWhamr, separator)
+        )
+
+        let pipeline = engine.pipeline()
+            .diarize()
+            .separateOverlap(.separate)
+            .enhance(.mossformerSE16k)
+        let result = try await engine.executePipeline(
+            pipeline,
+            audio: .sine(frequency: 220, duration: 2, sampleRate: 16_000),
+            outputSampleRate: 48_000
+        )
+
+        #expect(result.identifiedTracks?.count == 2)
+        #expect(result.identifiedTracks?.allSatisfy {
+            $0.sourceTimeRange == TimeRange(start: 0.5, end: 1.25)
+        } == true)
+        #expect(result.identifiedTracks?.allSatisfy {
+            $0.audio.sampleRate == 48_000
+        } == true)
+        #expect(result.audio?.sampleRate == 48_000)
+    }
     
     @Test("Analyze runs VAD and diarization in parallel")
     func testAnalyzePipeline() async throws {
@@ -228,6 +272,63 @@ struct PipelineTests {
         #expect(result.metrics.totalDuration.components.seconds >= 0)
         #expect(result.metrics.stageDurations["vad"] != nil)
     }
+
+    @Test("Stopping pipeline event consumption cancels in-flight inference")
+    func testPipelineStreamCancellation() async throws {
+        let vad = CancellationAwareVAD()
+        let engine = AudioEngine(configuration: .default, vad: vad)
+
+        for try await _ in engine.pipeline()
+            .detect(.silero)
+            .stream(source: .buffer(.silence(duration: 1, sampleRate: 16_000))) {
+            break
+        }
+
+        // The first progress event is emitted before VAD begins. Give the producer
+        // enough time to observe iterator termination; it must not finish the
+        // deliberately long inference after the consumer has gone away.
+        try await Task.sleep(for: .milliseconds(100))
+        let counts = await vad.counts
+        #expect(counts.completed == 0)
+        #expect(counts.started == 0 || counts.cancelled == counts.started)
+    }
+}
+
+private actor CancellationAwareVAD: VADProvider {
+    nonisolated let sampleRate = 16_000
+    nonisolated let inputChannels = 1
+    nonisolated let outputChannels = 1
+    nonisolated let minChunkSize = 512
+    nonisolated let recommendedChunkSize = 16_000
+
+    private var started = 0
+    private var completed = 0
+    private var cancelled = 0
+
+    var counts: (started: Int, completed: Int, cancelled: Int) {
+        (started, completed, cancelled)
+    }
+
+    func detect(_ audio: AudioBuffer) async throws -> [VADSegment] {
+        try validateInputFormat(audio)
+        started += 1
+        do {
+            try await Task.sleep(for: .seconds(10))
+            completed += 1
+            return []
+        } catch is CancellationError {
+            cancelled += 1
+            throw CancellationError()
+        }
+    }
+
+    nonisolated func streamDetection(
+        _ audio: AsyncStream<AudioBuffer>
+    ) -> AsyncThrowingStream<VADSegment, Error> {
+        AsyncThrowingStream { continuation in continuation.finish() }
+    }
+
+    func reset() async {}
 }
 
 @Suite("Concurrency Tests")
@@ -283,13 +384,88 @@ struct ConcurrencyTests {
         
         #expect(received == [1, 2, 3, 4, 5])
     }
+
+    @Test("BoundedChannel timeout removes the blocked value")
+    func testBoundedChannelTimeout() async throws {
+        let channel = BoundedChannel<Int>(capacity: 1)
+        await channel.send(1)
+        let started = ContinuousClock.now
+
+        do {
+            try await channel.send(2, timeout: .milliseconds(25))
+            Issue.record("expected backpressureTimeout")
+        } catch let error as AudioToolError {
+            guard case .backpressureTimeout = error else {
+                Issue.record("unexpected error: \(error)")
+                return
+            }
+        }
+
+        #expect(ContinuousClock.now - started < .seconds(1),
+                "timeout remained suspended behind the cancelled sender")
+        #expect(await channel.receive() == 1)
+        try await Task.sleep(for: .milliseconds(25))
+        #expect(await channel.count == 0,
+                "the timed-out value was enqueued after the call returned")
+    }
+
+    @Test("Cancelling a blocked sender removes its waiter")
+    func testBoundedChannelSenderCancellation() async throws {
+        let channel = BoundedChannel<Int>(capacity: 1)
+        await channel.send(1)
+
+        let sender = Task { await channel.send(2) }
+        try await Task.sleep(for: .milliseconds(10))
+        sender.cancel()
+        _ = await sender.result
+
+        #expect(await channel.receive() == 1)
+        try await Task.sleep(for: .milliseconds(10))
+        #expect(await channel.count == 0)
+    }
+
+    @Test("Cancelling an awakened sender transfers its slot")
+    func testBoundedChannelAwakenedSenderCancellation() async throws {
+        let channel = BoundedChannel<Int>(capacity: 1)
+        await channel.send(0)
+
+        let firstSender = Task(priority: .background) {
+            await channel.send(1)
+        }
+        try await Task.sleep(for: .milliseconds(10))
+
+        let secondSender = Task(priority: .background) { () -> Bool in
+            do {
+                try await channel.send(2, timeout: .seconds(1))
+                return true
+            } catch {
+                return false
+            }
+        }
+        try await Task.sleep(for: .milliseconds(10))
+
+        // The high-priority consumer resumes before the background sender can
+        // use the slot it was granted, making the cancellation-after-wake race
+        // deterministic rather than timing dependent.
+        let initialValue = await Task(priority: .userInitiated) {
+            let value = await channel.receive()
+            firstSender.cancel()
+            return value
+        }.value
+
+        _ = await firstSender.result
+        #expect(initialValue == 0)
+        #expect(await secondSender.value,
+                "the following sender remained suspended after the grant was abandoned")
+        #expect(await channel.receive() == 2)
+    }
     
     @Test("SegmentPool acquire and release")
     func testSegmentPool() async throws {
         let pool = SegmentPool(capacity: 4, segmentSize: 16000, sampleRate: 16000)
         
         // Acquire some buffers
-        let buffer1 = await pool.acquire()
+        var buffer1 = await pool.acquire()
         let buffer2 = await pool.acquire()
         
         #expect(buffer1.frameCount == 16000)
@@ -297,6 +473,8 @@ struct ConcurrencyTests {
         
         let stats = await pool.stats
         #expect(stats.currentlyInUse == 2)
+
+        buffer1.samples[0] = 42
         
         // Release back
         await pool.release(buffer1)
@@ -305,5 +483,10 @@ struct ConcurrencyTests {
         let statsAfter = await pool.stats
         #expect(statsAfter.currentlyInUse == 0)
         #expect(statsAfter.available == 2)
+
+        let reused = await pool.acquire()
+        #expect(reused.samples[0] == 0, "reused scratch storage must be cleared")
+        let finalStats = await pool.stats
+        #expect(finalStats.totalAllocated == 2)
     }
 }

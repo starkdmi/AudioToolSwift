@@ -1,3 +1,4 @@
+import Foundation
 import MLX
 import MLXNN
 
@@ -250,6 +251,15 @@ public class STFT: Module {
         /// - Returns: Tuple containing real and imaginary parts of STFT, shape (batch, channels, time, freq)
         return _forwardImpl(x)
     }
+
+    /// Number of frames produced by ``stft`` for this configuration.
+    func frameCount(forSignalLength signalLength: Int) -> Int {
+        guard signalLength > 0 else { return 0 }
+        let padding = center ? 2 * (n_fft / 2) : 0
+        let paddedLength = signalLength + padding
+        guard paddedLength >= win_length else { return 0 }
+        return (paddedLength - win_length) / hop_length + 1
+    }
 }
 
 /// ISTFT that matches torchlibrosa interface.
@@ -322,12 +332,119 @@ public class ISTFT: Module {
         /// - Returns: Reconstructed signal, shape (batch, samples) or (batch, channels, samples)
         return _forwardImpl(real: real, imag: imag, length: length)
     }
+
+    /// Materialize the normalization entry that this ISTFT instance will use.
+    /// Cache identity includes `window_func`, so prewarming must use this owned
+    /// window rather than a newly-created window with equivalent values.
+    func prewarmNormalization(numFrames: Int) {
+        guard numFrames > 0, window_func.shape == [n_fft] else { return }
+        _ = _mlxNormBufferCache.value(
+            numFrames: numFrames,
+            hopLength: hop_length,
+            frameLength: n_fft,
+            window: window_func
+        ) {
+            createISTFTNormBuffer(
+                nFFT: n_fft,
+                hopLength: hop_length,
+                winLength: win_length,
+                window: window_func,
+                numFrames: numFrames
+            )
+        }
+    }
+
+    func isNormalizationPrewarmed(numFrames: Int) -> Bool {
+        _mlxNormBufferCache.contains(
+            numFrames: numFrames,
+            hopLength: hop_length,
+            frameLength: n_fft,
+            window: window_func
+        )
+    }
 }
 
 // MARK: - MLX-Optimized iSTFT Implementation
 
-/// Cache for normalization buffers
-private var _mlxNormBufferCache: [String: MLXArray] = [:]
+private struct ISTFTNormCacheKey: Hashable, CustomStringConvertible {
+    let numFrames: Int
+    let hopLength: Int
+    let frameLength: Int
+    let windowID: ObjectIdentifier
+
+    var description: String {
+        "\(numFrames)_\(hopLength)_\(frameLength)_\(windowID)"
+    }
+}
+
+/// A normalization buffer depends on the actual window, not just its shape.
+/// Retaining the window alongside the buffer also prevents ObjectIdentifier
+/// reuse while the cache entry exists.
+private final class ISTFTNormBufferCache: @unchecked Sendable {
+    private struct Entry {
+        let window: MLXArray
+        let buffer: MLXArray
+    }
+
+    private let lock = NSLock()
+    private let maximumEntries = 32
+    private var entries: [ISTFTNormCacheKey: Entry] = [:]
+
+    func value(
+        numFrames: Int,
+        hopLength: Int,
+        frameLength: Int,
+        window: MLXArray,
+        create: () -> MLXArray
+    ) -> MLXArray {
+        let key = ISTFTNormCacheKey(
+            numFrames: numFrames,
+            hopLength: hopLength,
+            frameLength: frameLength,
+            windowID: ObjectIdentifier(window)
+        )
+
+        lock.lock()
+        if let cached = entries[key]?.buffer {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let candidate = create()
+        eval(candidate)
+
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = entries[key]?.buffer {
+            return cached
+        }
+        if entries.count >= maximumEntries, let oldest = entries.keys.first {
+            entries.removeValue(forKey: oldest)
+        }
+        entries[key] = Entry(window: window, buffer: candidate)
+        return candidate
+    }
+
+    func contains(
+        numFrames: Int,
+        hopLength: Int,
+        frameLength: Int,
+        window: MLXArray
+    ) -> Bool {
+        let key = ISTFTNormCacheKey(
+            numFrames: numFrames,
+            hopLength: hopLength,
+            frameLength: frameLength,
+            windowID: ObjectIdentifier(window)
+        )
+        lock.lock()
+        defer { lock.unlock() }
+        return entries[key] != nil
+    }
+}
+
+private let _mlxNormBufferCache = ISTFTNormBufferCache()
 
 /// MLX-optimized iSTFT using scatter-add operations like Python
 public func istft(
@@ -351,12 +468,12 @@ public func istft(
     let olaLen = (numFrames - 1) * hopLength + frameLength
     
     // Step 2: Pre-compute normalization buffer (with caching)
-    let cacheKey = "\(numFrames)_\(hopLength)_\(frameLength)"
-    let normBuffer: MLXArray
-    
-    if let cached = _mlxNormBufferCache[cacheKey] {
-        normBuffer = cached
-    } else {
+    let normBuffer = _mlxNormBufferCache.value(
+        numFrames: numFrames,
+        hopLength: hopLength,
+        frameLength: frameLength,
+        window: window
+    ) {
         let windowSquared = window * window
         var buffer = MLXArray.zeros([olaLen], dtype: .float32)
         
@@ -369,9 +486,7 @@ public func istft(
         // Use MLX's at[].add() for efficient scatter-add
         buffer = buffer.at[positionsFlat].add(windowSqTiled)
         
-        buffer = MLX.maximum(buffer, MLXArray(Float(1e-8)))
-        _mlxNormBufferCache[cacheKey] = buffer
-        normBuffer = buffer
+        return MLX.maximum(buffer, MLXArray(Float(1e-8)))
     }
     
     // Step 3: Optimized overlap-add using MLX scatter operations
@@ -508,30 +623,6 @@ public func createISTFTNormBuffer(
 /*public func getMLXCacheInfo() -> (items: Int, keys: [String]) {
     return (items: _mlxNormBufferCache.count, keys: Array(_mlxNormBufferCache.keys))
 }*/
-
-/// Pre-warm STFT normalization buffer cache for common configurations
-public func prewarmSTFTCache() {
-    // Common configurations for USS model at 32kHz sample rate
-    let commonConfigs = [
-        // 2-second segments at 32kHz = 64000 samples
-        // With n_fft=1024, hop_length=256: (64000 - 1024) / 256 + 1 ≈ 246 frames
-        (numFrames: 246, hopLength: 256, frameLength: 1024),
-        // Variations for different segment sizes
-        (numFrames: 125, hopLength: 256, frameLength: 1024),  // 1 second
-        (numFrames: 492, hopLength: 256, frameLength: 1024),  // 4 seconds
-    ]
-    
-    for config in commonConfigs {
-        let window = createHannWindow(config.frameLength, periodic: true)
-        let _ = createISTFTNormBuffer(
-            nFFT: config.frameLength,
-            hopLength: config.hopLength,
-            winLength: config.frameLength,
-            window: window,
-            numFrames: config.numFrames
-        )
-    }
-}
 
 // MARK: Ultra-fast STFT
 

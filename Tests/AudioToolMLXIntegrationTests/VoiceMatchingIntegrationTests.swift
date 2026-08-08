@@ -45,18 +45,20 @@ final class VoiceMatchingIntegrationTests: IntegrationTestCase {
         let downloader = ModelDownloader.shared
         var modelPath: URL? = nil
         do {
-            // "Cached" has to mean usable, not merely present. An interrupted
-            // download leaves the directory with config.json and voices/ but no
-            // weights, and taking that branch turned a missing model into a
-            // failure at load time instead of a skip.
-            if let cached = downloader.localPath(for: "mlx-community/Kokoro-82M-bf16"),
-               let entries = try? FileManager.default.contentsOfDirectory(atPath: cached.path),
-               entries.contains(where: { $0.hasSuffix(".safetensors") }) {
+            let requiredFiles = [
+                "*.safetensors",
+                "voices/*.safetensors",
+                "config.json",
+            ]
+            if let cached = downloader.localPath(
+                for: "mlx-community/Kokoro-82M-bf16",
+                matching: requiredFiles
+            ) {
                 modelPath = cached
             } else {
                 modelPath = try await downloader.downloadAndGetPath(
                     repo: "mlx-community/Kokoro-82M-bf16",
-                    matching: ["*.safetensors", "voices/*.safetensors", "config.json"]
+                    matching: requiredFiles
                 ) { progress in
                     print("Downloading: \(Int(progress.fractionCompleted * 100))%")
                 }

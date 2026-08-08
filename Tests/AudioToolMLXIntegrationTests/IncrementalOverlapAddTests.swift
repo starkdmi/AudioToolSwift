@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import Testing
 import AudioToolTestSupport
 import MLX
 @testable import AudioToolMLX
@@ -140,5 +141,42 @@ final class IncrementalOverlapAddTests: MLXTestCase {
             XCTAssertEqual(value, 1.0, accuracy: 1e-5,
                            "sample \(i) of the first block should be 1.0, not window[\(i)] = \(window[i])")
         }
+    }
+}
+
+@Suite("Incremental overlap-add tail handling")
+struct IncrementalOverlapAddTailTests {
+
+    @Test("A partial final chunk preserves its leading overlap weights")
+    func partialFinalChunkOverlap() {
+        let chunkSamples = 8
+        let stride = 6
+        let totalLength = 17
+        let triangularWindow: [Float] = [0.25, 0.5, 0.75, 1, 1, 0.75, 0.5, 0.25]
+        var assembler = IncrementalOverlapAdd(
+            chunkSamples: chunkSamples,
+            stride: stride,
+            window: triangularWindow,
+            totalLength: totalLength
+        )
+        var output: [Float] = []
+
+        for start in [0, 6] {
+            output.append(contentsOf: assembler.add(
+                [Float](repeating: 0, count: chunkSamples),
+                startIdx: start
+            ))
+        }
+        output.append(contentsOf: assembler.add(
+            [Float](repeating: 1, count: chunkSamples),
+            startIdx: 12
+        ))
+        output.append(contentsOf: assembler.finish())
+
+        #expect(output.count == totalLength)
+        // The final chunk has only five real samples. Its first two are still
+        // covered by the preceding chunk, so output 13 must blend weights 0.25
+        // and 0.5. Treating the whole short chunk as a tail gives 0.8 instead.
+        #expect(abs(output[13] - (0.5 / 0.75)) < 1e-6)
     }
 }

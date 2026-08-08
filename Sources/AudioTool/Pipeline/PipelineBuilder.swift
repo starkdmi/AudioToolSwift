@@ -422,7 +422,7 @@ public struct PipelineBuilder: Sendable {
     /// Execute pipeline with streaming output
     public func stream(source: AudioSource) -> AsyncThrowingStream<PipelineEvent, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     guard let voice = voice else {
                         throw AudioToolError.pipelineConfigurationInvalid("Pipeline not attached to AudioEngine instance")
@@ -438,13 +438,21 @@ public struct PipelineBuilder: Sendable {
                     
                     // Execute with event streaming
                     _ = try await voice.executePipeline(self, audio: audio) { event in
-                        continuation.yield(event)
+                        if case .terminated = continuation.yield(event) {
+                            // This callback runs in the producer task. Mark it
+                            // cancelled immediately so the pipeline's next stage or
+                            // chunk check stops even before onTermination is delivered.
+                            withUnsafeCurrentTask { task in task?.cancel() }
+                        }
                     }
                     
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }

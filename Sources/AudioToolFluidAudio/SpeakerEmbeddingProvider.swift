@@ -322,6 +322,7 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
     /// - Parameter audio: Audio buffer (16kHz mono expected)
     /// - Returns: 256-dimensional L2-normalized embedding vector
     public func extractEmbedding(_ audio: AudioToolCore.AudioBuffer) async throws -> [Float] {
+        try validateInputChannels(audio)
         // Resample to 16kHz if needed
         let samples: [Float]
         if audio.sampleRate != sampleRate {

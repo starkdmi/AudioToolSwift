@@ -42,104 +42,177 @@ import Foundation
 /// samples it did produce.
 enum SuperResolutionResampler {
 
+    /// Incremental mono sample-rate conversion. The source array uses copy-on-write
+    /// storage and only a small AVAudioPCMBuffer is allocated for each converter
+    /// request, so long-form callers never materialize a second full-rate input.
+    final class Stream {
+        let expectedFrameCount: Int
+
+        private let sourceSamples: [Float]
+        private let targetFormat: AVAudioFormat?
+        private let converter: AVAudioConverter?
+        private let feeder: ChunkedConverterInput?
+        private var sourcePosition = 0
+        private var emittedFrameCount = 0
+        private var converterFinished = false
+
+        init(_ samples: [Float], from sourceRate: Int, to targetRate: Int) throws {
+            guard sourceRate > 0, targetRate > 0 else {
+                throw AudioToolError.invalidAudioFormat(
+                    expected: "positive source and target sample rates",
+                    found: "\(sourceRate)Hz -> \(targetRate)Hz"
+                )
+            }
+
+            sourceSamples = samples
+            expectedFrameCount = Int(
+                (Double(samples.count) * Double(targetRate) / Double(sourceRate)).rounded()
+            )
+
+            guard sourceRate != targetRate else {
+                targetFormat = nil
+                converter = nil
+                feeder = nil
+                return
+            }
+
+            guard let inputFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: Double(sourceRate),
+                channels: 1,
+                interleaved: false
+            ), let outputFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: Double(targetRate),
+                channels: 1,
+                interleaved: false
+            ) else {
+                throw AudioToolError.resourceUnavailable("SR resampler: could not create audio formats")
+            }
+            guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
+                throw AudioToolError.resourceUnavailable("SR resampler: could not create converter")
+            }
+            converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Mastering
+            converter.sampleRateConverterQuality = AVAudioQuality.max.rawValue
+
+            targetFormat = outputFormat
+            self.converter = converter
+            feeder = ChunkedConverterInput(samples: samples, format: inputFormat)
+        }
+
+        /// Returns up to `maxFrames`, or nil once the exact mathematical output
+        /// length has been produced.
+        func next(maxFrames: Int) throws -> [Float]? {
+            guard maxFrames > 0, emittedFrameCount < expectedFrameCount else { return nil }
+            let wanted = min(maxFrames, expectedFrameCount - emittedFrameCount)
+
+            // Same-rate streams are a bounded view/copy and need no converter.
+            guard let converter, let targetFormat, let feeder else {
+                let end = min(sourcePosition + wanted, sourceSamples.count)
+                var result = Array(sourceSamples[sourcePosition..<end])
+                sourcePosition = end
+                if result.count < wanted {
+                    result.append(contentsOf: repeatElement(0, count: wanted - result.count))
+                }
+                emittedFrameCount += result.count
+                return result
+            }
+
+            if converterFinished {
+                emittedFrameCount += wanted
+                return [Float](repeating: 0, count: wanted)
+            }
+
+            var attempts = 0
+            while attempts < 8 {
+                attempts += 1
+                guard let sink = AVAudioPCMBuffer(
+                    pcmFormat: targetFormat,
+                    frameCapacity: AVAudioFrameCount(wanted)
+                ) else {
+                    throw AudioToolError.resourceUnavailable("SR resampler: could not allocate output buffer")
+                }
+
+                var failure: NSError?
+                let status = converter.convert(to: sink, error: &failure, withInputFrom: feeder.next)
+                if let failure {
+                    throw AudioToolError.stageFailed(stage: "MossFormer2SR.resample", underlying: failure)
+                }
+                if status == .error {
+                    throw AudioToolError.resourceUnavailable("SR resampler: converter failed without an error")
+                }
+                if status == .endOfStream {
+                    converterFinished = true
+                }
+
+                if let channels = sink.floatChannelData, sink.frameLength > 0 {
+                    let count = min(Int(sink.frameLength), wanted)
+                    let result = Array(UnsafeBufferPointer(start: channels[0], count: count))
+                    emittedFrameCount += result.count
+                    return result
+                }
+
+                if converterFinished {
+                    emittedFrameCount += wanted
+                    return [Float](repeating: 0, count: wanted)
+                }
+            }
+
+            throw AudioToolError.resourceUnavailable("SR resampler made no forward progress")
+        }
+    }
+
     /// Upsample mono float samples, preserving the exact ratio.
     ///
     /// - Returns: exactly `samples.count * to / from` samples.
     static func upsample(_ samples: [Float], from sourceRate: Int, to targetRate: Int) throws -> [Float] {
-        guard sourceRate != targetRate else { return samples }
-        guard !samples.isEmpty else { return [] }
-
-        let source = Double(sourceRate)
-        let target = Double(targetRate)
-
-        guard let inputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: source, channels: 1, interleaved: false
-        ), let outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: target, channels: 1, interleaved: false
-        ) else {
-            throw AudioToolError.resourceUnavailable("SR resampler: could not create audio formats")
-        }
-
-        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-            throw AudioToolError.resourceUnavailable("SR resampler: could not create converter")
-        }
-        converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Mastering
-        converter.sampleRateConverterQuality = AVAudioQuality.max.rawValue
-
-        guard let sourceBuffer = AVAudioPCMBuffer(
-            pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(samples.count)
-        ), let sourceChannel = sourceBuffer.floatChannelData else {
-            throw AudioToolError.resourceUnavailable("SR resampler: could not allocate input buffer")
-        }
-        sourceBuffer.frameLength = AVAudioFrameCount(samples.count)
-        samples.withUnsafeBufferPointer {
-            sourceChannel[0].update(from: $0.baseAddress!, count: samples.count)
-        }
-
-        let expected = Int((Double(samples.count) * target / source).rounded())
+        let stream = try Stream(samples, from: sourceRate, to: targetRate)
         var resampled = [Float]()
-        resampled.reserveCapacity(expected)
-
-        let feed = SingleShotInput(sourceBuffer)
-
-        // Keep pulling until the converter says it has nothing left. One call is
-        // not enough: the tail sits inside the converter until end of stream.
-        while resampled.count < expected {
-            guard let sink = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 16384) else {
-                throw AudioToolError.resourceUnavailable(
-                    "SR resampler: could not allocate output buffer"
-                )
-            }
-
-            var failure: NSError?
-            let status = converter.convert(to: sink, error: &failure, withInputFrom: feed.next)
-            if let failure {
-                throw AudioToolError.stageFailed(stage: "MossFormer2SR.resample", underlying: failure)
-            }
-            if let produced = sink.floatChannelData, sink.frameLength > 0 {
-                resampled.append(contentsOf: UnsafeBufferPointer(
-                    start: produced[0], count: Int(sink.frameLength)
-                ))
-            }
-            // `.haveData` having produced nothing would spin forever.
-            if status == .endOfStream || status == .error || sink.frameLength == 0 { break }
-        }
-
-        // Latency compensation can land a sample or two either side of the exact
-        // ratio. Pin it: an integer-ratio upsample should be exact, and callers
-        // downstream size their buffers from it.
-        if resampled.count > expected {
-            resampled.removeLast(resampled.count - expected)
-        } else if resampled.count < expected {
-            resampled.append(contentsOf: [Float](repeating: 0, count: expected - resampled.count))
+        resampled.reserveCapacity(stream.expectedFrameCount)
+        while let chunk = try stream.next(maxFrames: 16_384) {
+            resampled.append(contentsOf: chunk)
         }
         return resampled
     }
 }
 
-/// Hands the converter the whole input once, then reports end of stream.
-///
-/// A class rather than a captured `var` because `AVAudioConverterInputBlock` is
-/// `@Sendable` under Swift 6 strict concurrency. `@unchecked` is honest here: the
-/// block runs synchronously on the thread that called `convert`, never
-/// concurrently, so the single mutable flag has no second reader.
-private final class SingleShotInput: @unchecked Sendable {
-    private let buffer: AVAudioPCMBuffer
-    private var supplied = false
+/// Bounded source feeder for AVAudioConverter. The callback is invoked
+/// synchronously by `convert`; the unchecked Sendable conformance documents that
+/// confinement and avoids claiming AVAudioPCMBuffer itself is generally Sendable.
+private final class ChunkedConverterInput: @unchecked Sendable {
+    private let samples: [Float]
+    private let format: AVAudioFormat
+    private let maximumFramesPerBuffer = 16_384
+    private var position = 0
 
-    init(_ buffer: AVAudioPCMBuffer) {
-        self.buffer = buffer
+    init(samples: [Float], format: AVAudioFormat) {
+        self.samples = samples
+        self.format = format
     }
 
     func next(
         _ requested: AVAudioPacketCount,
         _ status: UnsafeMutablePointer<AVAudioConverterInputStatus>
     ) -> AVAudioBuffer? {
-        guard !supplied else {
+        guard position < samples.count else {
             status.pointee = .endOfStream
             return nil
         }
-        supplied = true
+
+        let requestedFrames = max(1, Int(requested))
+        let count = min(maximumFramesPerBuffer, requestedFrames, samples.count - position)
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(count)
+        ), let channels = buffer.floatChannelData else {
+            status.pointee = .noDataNow
+            return nil
+        }
+        buffer.frameLength = AVAudioFrameCount(count)
+        samples.withUnsafeBufferPointer { source in
+            channels[0].update(from: source.baseAddress! + position, count: count)
+        }
+        position += count
         status.pointee = .haveData
         return buffer
     }

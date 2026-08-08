@@ -248,7 +248,10 @@ struct ModelResidencyTests {
     /// A failed claim must not leave the model pinned for the process's lifetime.
     @Test("A model too large to fit does not hold a claim")
     func testFailedClaimIsReleased() async throws {
-        let manager = ModelResidency(memoryLimitBytes: 100_000_000)
+        let manager = ModelResidency(
+            memoryLimitBytes: 100_000_000,
+            allowsOversizedSingleton: false
+        )
         let tooBig = MockManagedModel(modelId: "too_big", memoryBytes: 500_000_000)
         let small = MockManagedModel(modelId: "small", memoryBytes: 100_000_000)
 
@@ -263,6 +266,25 @@ struct ModelResidencyTests {
         try await use(manager, second)
 
         #expect(await small.getUnloadCallCount() == 1)
+    }
+
+    @Test("An oversized model can be the sole resident")
+    func testOversizedSingletonAdmission() async throws {
+        let manager = ModelResidency(memoryLimitBytes: 100_000_000)
+        let oversized = MockManagedModel(modelId: "oversized", memoryBytes: 500_000_000)
+
+        try await use(manager, oversized)
+
+        #expect(await oversized.getIsLoaded())
+        #expect(await manager.totalMemoryUsage == 500_000_000)
+
+        // A normal model still enforces the configured budget and evicts the
+        // idle oversized singleton before loading.
+        let ordinary = MockManagedModel(modelId: "ordinary", memoryBytes: 100_000_000)
+        try await use(manager, ordinary)
+        #expect(await oversized.getUnloadCallCount() == 1)
+        #expect(await ordinary.getIsLoaded())
+        #expect(await manager.totalMemoryUsage == 100_000_000)
     }
 
     /// A provider unloaded behind the manager's back must be reloaded, not assumed.

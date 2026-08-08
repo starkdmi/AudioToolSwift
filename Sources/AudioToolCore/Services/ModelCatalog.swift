@@ -348,7 +348,7 @@ public final class ModelCatalog: @unchecked Sendable {
                 description: "Complete toolkit: Enhancement, Separation, TTS, Transcription",
                 variantIds: [
                     "mossformer2_se_int8",
-                    "mossformer2_ss_fp32",
+                    "mossformer2_ss_2spk_16k_fp32",
                     "kokoro_tts_fp16",
                     "whisper_small",
                     "silero_vad_coreml"

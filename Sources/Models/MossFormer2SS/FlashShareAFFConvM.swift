@@ -24,8 +24,9 @@ import MLXFast
 ///     normKlass: Normalization class to use (default: LayerNorm)
 ///     shiftTokens (bool): Whether to shift tokens for attention calculation (default: true)
 public class FLASHShareAFFConvM: Module {
-    // Cache for causal masks
-    private static var causalMaskCache: [Int: MLXArray] = [:]
+    // Models can be loaded by independent provider actors. Keep graph objects
+    // instance-local instead of sharing a mutable global dictionary.
+    private var causalMaskCache: [Int: MLXArray] = [:]
     // Configuration
     public let dim: Int
     public let groupSize: Int
@@ -513,7 +514,7 @@ public class FLASHShareAFFConvM: Module {
         if causal {
             // Get cached causal mask or create new one
             let expandedMask: MLXArray
-            if let cachedMask = Self.causalMaskCache[g] {
+            if let cachedMask = causalMaskCache[g] {
                 expandedMask = cachedMask
             } else {
                 // Create causal mask more efficiently
@@ -521,7 +522,7 @@ public class FLASHShareAFFConvM: Module {
                 // Expand for batch and groups - MLX will broadcast automatically
                 expandedMask = causalMask.expandedDimensions(axis: 0).expandedDimensions(axis: 0)
                 // Cache it
-                Self.causalMaskCache[g] = expandedMask
+                causalMaskCache[g] = expandedMask
             }
             // Apply mask using where for better performance
             attn = MLX.where(expandedMask.asType(attn.dtype) .> 0, attn, MLXArray.zeros(attn.shape, dtype: attn.dtype))
@@ -610,4 +611,3 @@ public class FLASHShareAFFConvM: Module {
         return mult - remainder
     }
 }
-

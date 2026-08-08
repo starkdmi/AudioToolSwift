@@ -54,6 +54,28 @@ struct SampleRateTests {
         #expect(output.sampleRate == 16000)
     }
 
+    @Test("A mono provider rejects matching-rate stereo input")
+    func providerRejectsWrongChannelCount() async throws {
+        let enhancer = MockEnhancer()
+        let stereo = AudioBuffer(
+            samples: [0.25, -0.25, 0.5, -0.5],
+            sampleRate: 16000,
+            channels: 2
+        )
+
+        do {
+            _ = try await enhancer.process(stereo)
+            Issue.record("expected a channelCountMismatch")
+        } catch let error as AudioToolError {
+            guard case .channelCountMismatch(let expected, let found) = error else {
+                Issue.record("wrong error: \(error)")
+                return
+            }
+            #expect(expected == 1)
+            #expect(found == 2)
+        }
+    }
+
     // MARK: - The facade converts, once
 
     @Test("Facade adapts input to the provider and restores the caller's rate")
@@ -85,6 +107,25 @@ struct SampleRateTests {
         #expect(enhancer.receivedSampleRates == [16000])
         // No upsample back to 48 kHz - which is the point when composing by hand.
         #expect(output.sampleRate == 16000)
+    }
+
+    @Test("Facade downmixes channels even when the sample rate already matches")
+    func facadeAdaptsChannelsWithoutRateConversion() async throws {
+        let engine = AudioEngine()
+        let enhancer = MockEnhancer()
+        enhancer.processDelay = .zero
+        enhancer.scaleFactor = 1
+        await engine.register(enhancer: enhancer, for: .mossformerSE16k)
+
+        let input = AudioBuffer(
+            samples: [1, 0, 0.5, -0.5, -1, 1],
+            sampleRate: 16000,
+            channels: 2
+        )
+        let output = try await engine.enhance(input, model: .mossformerSE16k)
+
+        #expect(output.channels == 1)
+        #expect(output.samples == [0.5, 0, 0])
     }
 
     // MARK: - The pipeline converts once, not once per stage
@@ -140,6 +181,65 @@ struct SampleRateTests {
         #expect(result.audio?.sampleRate == 16000)
         #expect(result.audio?.samples.count == input.samples.count,
                 "a no-op conversion should not change the sample count")
+    }
+}
+
+@Suite("Interleaved resampling")
+struct InterleavedResamplingTests {
+    @Test("Stereo channels are resampled independently")
+    func stereoChannelsRemainIndependent() throws {
+        let frames = 64
+        let interleaved = (0..<frames).flatMap { frame -> [Float] in
+            [Float(frame) / Float(frames), -1]
+        }
+        let input = AudioBuffer(samples: interleaved, sampleRate: 16000, channels: 2)
+        let output = try input.resampled(to: 24000, quality: .fast)
+
+        #expect(output.channels == 2)
+        #expect(output.frameCount == 96)
+        for frame in 0..<output.frameCount {
+            #expect(output.samples[frame * 2 + 1] == -1,
+                    "right channel was contaminated at frame \(frame)")
+        }
+    }
+
+    @Test("Every quality returns the exact mathematical frame count")
+    func exactFrameCount() throws {
+        let input = AudioBuffer(
+            samples: [Float](repeating: 0.25, count: 48_001),
+            sampleRate: 48000,
+            channels: 1
+        )
+        let expected = Int((Double(input.frameCount) * 16000 / 48000).rounded())
+
+        for quality in [ResamplingQuality.fast, .balanced, .high, .auto] {
+            let output = try input.resampled(to: 16000, quality: quality)
+            #expect(output.frameCount == expected,
+                    "\(quality) returned \(output.frameCount), expected \(expected)")
+        }
+    }
+
+    @Test("Empty input adopts the requested rate")
+    func emptyInputChangesRate() throws {
+        let input = AudioBuffer(samples: [], sampleRate: 16000, channels: 2)
+        let output = try input.resampled(to: 48000)
+        #expect(output.samples.isEmpty)
+        #expect(output.sampleRate == 48000)
+        #expect(output.channels == 2)
+    }
+
+    @Test("A one-frame interpolation is well-defined")
+    func oneFrameInput() throws {
+        let input = AudioBuffer(samples: [0.75], sampleRate: 16000, channels: 1)
+        let output = try input.resampled(to: 48000, quality: .fast)
+        #expect(output.samples == [0.75, 0.75, 0.75])
+    }
+
+    @Test("Linear interpolation holds the final source frame")
+    func linearInterpolationEndpoint() throws {
+        let input = AudioBuffer(samples: [0, 1], sampleRate: 2, channels: 1)
+        let output = try input.resampled(to: 4, quality: .fast)
+        #expect(output.samples == [0, 0.5, 1, 1])
     }
 }
 

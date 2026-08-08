@@ -79,6 +79,7 @@ public actor FluidAudioTranscriber: Transcriber {
     /// - Parameter audio: Input audio buffer (16kHz mono expected)
     /// - Returns: Transcription with text and word-level segments
     public func transcribe(_ audio: AudioBuffer) async throws -> Transcription {
+        try validateInputFormat(audio)
         let result = try await transcribeBatch(audio.samples)
         let segments = buildSegmentsFromTokenTimings(result.tokenTimings)
         
@@ -121,11 +122,18 @@ public actor FluidAudioTranscriber: Transcriber {
     /// - Returns: Stream of word-level transcription segments
     public nonisolated func streamTranscription(_ audio: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<TranscriptionSegment, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 // Collect audio chunks for batch processing
                 var allSamples = [Float]()
 
                 for await chunk in audio {
+                    if Task.isCancelled { return }
+                    do {
+                        try self.validateInputFormat(chunk)
+                    } catch {
+                        continuation.finish(throwing: error)
+                        return
+                    }
                     allSamples.append(contentsOf: chunk.samples)
                 }
 
@@ -137,6 +145,7 @@ public actor FluidAudioTranscriber: Transcriber {
                     if let tokenTimings = result.tokenTimings, !tokenTimings.isEmpty {
                         let wordTimings = WordTimingMerger.mergeTokensIntoWords(tokenTimings)
                         for word in wordTimings {
+                            try Task.checkCancellation()
                             let segment = TranscriptionSegment(
                                 text: word.word,
                                 timeRange: TimeRange(
@@ -146,7 +155,7 @@ public actor FluidAudioTranscriber: Transcriber {
                                 speakerID: nil,
                                 confidence: word.confidence
                             )
-                            continuation.yield(segment)
+                            if case .terminated = continuation.yield(segment) { return }
                         }
                     } else {
                         // Fallback: emit as single segment
@@ -157,13 +166,14 @@ public actor FluidAudioTranscriber: Transcriber {
                             speakerID: nil,
                             confidence: 1.0
                         )
-                        continuation.yield(segment)
+                        if case .terminated = continuation.yield(segment) { return }
                     }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
         }
     }
     
@@ -174,6 +184,7 @@ public actor FluidAudioTranscriber: Transcriber {
     /// - 0% at start, 90% when processing completes, 100% after segment building
     /// For real per-segment progress, use streaming API or pre-segmented audio
     public func transcribe(_ audio: AudioBuffer, onProgress: ProgressCallback?) async throws -> Transcription {
+        try validateInputFormat(audio)
         // Report initial progress
         await onProgress?(0.0)
 

@@ -1,3 +1,4 @@
+import Foundation
 import MLX
 import MLXNN
 
@@ -6,16 +7,65 @@ import MLXNN
 
 // MARK: - Window Creation Functions
 
+private struct PeriodicHannWindowKey: Hashable {
+    let length: Int
+    let dtype: DType
+}
+
+/// Demucs constructs its Hann window at every spectro/ispectro call. Returning a
+/// stable immutable instance avoids rebuilding the window and lets the iSTFT
+/// normalization cache use object identity without conflating different content.
+private final class PeriodicHannWindowCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximumEntries = 16
+    private var entries: [PeriodicHannWindowKey: MLXArray] = [:]
+    private var insertionOrder: [PeriodicHannWindowKey] = []
+
+    func value(
+        for key: PeriodicHannWindowKey,
+        create: () -> MLXArray
+    ) -> MLXArray {
+        lock.lock()
+        if let cached = entries[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let candidate = create()
+        eval(candidate)
+
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = entries[key] {
+            return cached
+        }
+        if entries.count >= maximumEntries, let oldest = insertionOrder.first {
+            entries.removeValue(forKey: oldest)
+            insertionOrder.removeFirst()
+        }
+        entries[key] = candidate
+        insertionOrder.append(key)
+        return candidate
+    }
+}
+
+private let periodicHannWindowCache = PeriodicHannWindowCache()
+
 public func createPeriodicHannWindow(winLength: Int, dtype: DType = .float32) -> MLXArray {
-    // Creates a periodic Hann window in pure MLX. Mathematically identical to torch.hann_window(periodic=True).
-    let n = MLXArray(0..<winLength).asType(dtype)
-    let pi = dtype == .float16 ? MLXArray(Float.pi).asType(.float16) : MLXArray(Float.pi)
-    let length = dtype == .float16 ? MLXArray(Float(winLength)).asType(.float16) : MLXArray(Float(winLength))
-    let half = dtype == .float16 ? MLXArray(Float(0.5)).asType(.float16) : MLXArray(Float(0.5))
-    let one = dtype == .float16 ? MLXArray(Float(1.0)).asType(.float16) : MLXArray(Float(1.0))
-    let two = dtype == .float16 ? MLXArray(Float(2.0)).asType(.float16) : MLXArray(Float(2.0))
-    
-    return half * (one - MLX.cos(two * pi * n / length))
+    periodicHannWindowCache.value(
+        for: PeriodicHannWindowKey(length: winLength, dtype: dtype)
+    ) {
+        // Mathematically identical to torch.hann_window(periodic=True).
+        let n = MLXArray(0..<winLength).asType(dtype)
+        let pi = dtype == .float16 ? MLXArray(Float.pi).asType(.float16) : MLXArray(Float.pi)
+        let length = dtype == .float16 ? MLXArray(Float(winLength)).asType(.float16) : MLXArray(Float(winLength))
+        let half = dtype == .float16 ? MLXArray(Float(0.5)).asType(.float16) : MLXArray(Float(0.5))
+        let one = dtype == .float16 ? MLXArray(Float(1.0)).asType(.float16) : MLXArray(Float(1.0))
+        let two = dtype == .float16 ? MLXArray(Float(2.0)).asType(.float16) : MLXArray(Float(2.0))
+
+        return half * (one - MLX.cos(two * pi * n / length))
+    }
 }
 
 // MARK: - Fast STFT Implementation (3.71x speedup over previous version)
@@ -667,8 +717,77 @@ public class STFTCache {
 
 // MARK: - MLX-Optimized iSTFT Implementation
 
-/// Cache for normalization buffers
-private var _mlxNormBufferCache: [String: MLXArray] = [:]
+private struct ISTFTNormCacheKey: Hashable, CustomStringConvertible {
+    let numFrames: Int
+    let hopLength: Int
+    let frameLength: Int
+    let windowID: ObjectIdentifier
+
+    var description: String {
+        "\(numFrames)_\(hopLength)_\(frameLength)_\(windowID)"
+    }
+}
+
+private final class ISTFTNormBufferCache: @unchecked Sendable {
+    private struct Entry {
+        let window: MLXArray
+        let buffer: MLXArray
+    }
+
+    private let lock = NSLock()
+    private let maximumEntries = 32
+    private var entries: [ISTFTNormCacheKey: Entry] = [:]
+
+    func value(
+        numFrames: Int,
+        hopLength: Int,
+        frameLength: Int,
+        window: MLXArray,
+        create: () -> MLXArray
+    ) -> MLXArray {
+        let key = ISTFTNormCacheKey(
+            numFrames: numFrames,
+            hopLength: hopLength,
+            frameLength: frameLength,
+            windowID: ObjectIdentifier(window)
+        )
+
+        lock.lock()
+        if let cached = entries[key]?.buffer {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let candidate = create()
+        eval(candidate)
+
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = entries[key]?.buffer {
+            return cached
+        }
+        if entries.count >= maximumEntries, let oldest = entries.keys.first {
+            entries.removeValue(forKey: oldest)
+        }
+        entries[key] = Entry(window: window, buffer: candidate)
+        return candidate
+    }
+
+    func removeAll() {
+        lock.lock()
+        entries.removeAll()
+        lock.unlock()
+    }
+
+    func info() -> (items: Int, keys: [String]) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (entries.count, entries.keys.map(\.description))
+    }
+}
+
+private let _mlxNormBufferCache = ISTFTNormBufferCache()
 
 /// MLX-optimized iSTFT using scatter-add operations like Python
 public func istft(
@@ -692,12 +811,12 @@ public func istft(
     let olaLen = (numFrames - 1) * hopLength + frameLength
     
     // Step 2: Pre-compute normalization buffer (with caching)
-    let cacheKey = "\(numFrames)_\(hopLength)_\(frameLength)"
-    let normBuffer: MLXArray
-    
-    if let cached = _mlxNormBufferCache[cacheKey] {
-        normBuffer = cached
-    } else {
+    let normBuffer = _mlxNormBufferCache.value(
+        numFrames: numFrames,
+        hopLength: hopLength,
+        frameLength: frameLength,
+        window: window
+    ) {
         let windowSquared = window * window
         var buffer = MLXArray.zeros([olaLen], dtype: .float32)
         
@@ -710,9 +829,7 @@ public func istft(
         // Use MLX's at[].add() for efficient scatter-add
         buffer = buffer.at[positionsFlat].add(windowSqTiled)
         
-        buffer = MLX.maximum(buffer, MLXArray(Float(1e-8)))
-        _mlxNormBufferCache[cacheKey] = buffer
-        normBuffer = buffer
+        return MLX.maximum(buffer, MLXArray(Float(1e-8)))
     }
     
     // Step 3: Optimized overlap-add using MLX scatter operations
@@ -847,5 +964,5 @@ public func clearMLXNormBufferCache() {
 
 /// Get MLX cache information
 public func getMLXCacheInfo() -> (items: Int, keys: [String]) {
-    return (items: _mlxNormBufferCache.count, keys: Array(_mlxNormBufferCache.keys))
+    _mlxNormBufferCache.info()
 }

@@ -123,6 +123,16 @@ struct AudioBufferTests {
         #expect(result.samples[1] == 1.5)
         #expect(result.samples[2] == 1.0)
     }
+
+    @Test("Mix with a negative offset preserves both timelines")
+    func testMixAtNegativeOffset() {
+        let a = AudioBuffer(samples: [1, 1, 1], sampleRate: 1)
+        let b = AudioBuffer(samples: [2, 2], sampleRate: 1)
+
+        let result = a.mixing(with: b, at: -1)
+
+        #expect(result.samples == [2, 3, 1, 1])
+    }
     
     @Test("Append buffers")
     func testAppend() {

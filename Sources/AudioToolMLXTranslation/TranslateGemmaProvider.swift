@@ -25,12 +25,12 @@ import AudioToolCore
 ///
 /// > Note: Requires macOS 14+ for MLX Metal support.
 /// > Model (~4GB) is downloaded automatically on first use.
-public actor TranslateGemmaProvider: TextTranslator {
+public actor TranslateGemmaProvider: TextTranslator, ManagedModel {
     
     // MARK: - Properties
     
     /// Model ID on HuggingFace
-    private let modelId: String
+    private nonisolated let repositoryId: String
     
     /// Maximum tokens to generate
     private let maxTokens: Int
@@ -136,7 +136,7 @@ public actor TranslateGemmaProvider: TextTranslator {
         temperature: Float = 0.0,
         progressHandler: (@Sendable (Progress) -> Void)? = nil
     ) {
-        self.modelId = modelId
+        self.repositoryId = modelId
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.progressHandler = progressHandler
@@ -169,6 +169,7 @@ public actor TranslateGemmaProvider: TextTranslator {
         let stream = try await container.generate(input: input, parameters: params)
         
         for await generation in stream {
+            try Task.checkCancellation()
             switch generation {
             case .chunk(let text):
                 output += text
@@ -230,7 +231,7 @@ public actor TranslateGemmaProvider: TextTranslator {
         
         // Configure with extra EOS tokens for proper stopping
         let configuration = ModelConfiguration(
-            id: modelId,
+            id: repositoryId,
             extraEOSTokens: ["<end_of_turn>"]
         )
         
@@ -242,6 +243,28 @@ public actor TranslateGemmaProvider: TextTranslator {
         
         self.modelContainer = container
         return container
+    }
+
+    // MARK: - ManagedModel
+
+    public nonisolated var modelId: String {
+        "translate_gemma_\(repositoryId.replacingOccurrences(of: "/", with: "_"))"
+    }
+
+    /// Includes model weights plus generation working memory.
+    public nonisolated var estimatedMemoryBytes: Int { 4_000_000_000 }
+
+    public func load() async throws {
+        _ = try await getOrLoadModel()
+    }
+
+    public func unload() async {
+        modelContainer = nil
+        GPU.clearCache()
+    }
+
+    public func checkIfLoaded() async -> Bool {
+        modelContainer != nil
     }
     
     /// Build a translation prompt matching TranslateGemma's expected format

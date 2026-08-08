@@ -14,8 +14,28 @@ public actor BoundedChannel<T: Sendable> {
     private let capacity: Int
     private var isClosed = false
     
-    private var sendWaiters: [CheckedContinuation<Void, Never>] = []
-    private var receiveWaiters: [CheckedContinuation<T?, Never>] = []
+    private struct SendWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
+    private struct ReceiveWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<T?, Never>
+    }
+
+    private var sendWaiters: [SendWaiter] = []
+    private var receiveWaiters: [ReceiveWaiter] = []
+
+    /// Sender continuations that have been resumed for a specific free slot but
+    /// have not yet re-entered the actor to publish their value. Counting these
+    /// reservations prevents a newly arriving sender from stealing a granted
+    /// slot and lets cancellation transfer the grant to the next waiter.
+    private var reservedSenderIDs: Set<UUID> = []
+
+    private var occupiedSendSlots: Int {
+        buffer.count + reservedSenderIDs.count
+    }
     
     public init(capacity: Int = 16) {
         precondition(capacity > 0, "Capacity must be positive")
@@ -24,33 +44,55 @@ public actor BoundedChannel<T: Sendable> {
     
     /// Send value (blocks if at capacity)
     public func send(_ value: T) async {
-        guard !isClosed else { return }
-        
+        guard !isClosed, !Task.isCancelled else { return }
+
+        var ownsReservedSlot = false
+
         // Wait if buffer is full - re-check after each wake
-        while buffer.count >= capacity && !isClosed {
-            // Use a flag to track if we actually need to wait
-            // This prevents the race where space frees up before continuation is stored
-            let shouldWait = buffer.count >= capacity && !isClosed
-            if shouldWait {
+        while !ownsReservedSlot && occupiedSendSlots >= capacity && !isClosed {
+            let waiterID = UUID()
+            let mayContinue = await withTaskCancellationHandler {
                 await withCheckedContinuation { continuation in
-                    // Double-check after entering continuation - if space freed, resume immediately
-                    if buffer.count < capacity || isClosed {
-                        continuation.resume()
+                    if Task.isCancelled || isClosed {
+                        continuation.resume(returning: false)
+                    } else if occupiedSendSlots < capacity {
+                        continuation.resume(returning: true)
                     } else {
-                        sendWaiters.append(continuation)
+                        sendWaiters.append(SendWaiter(
+                            id: waiterID,
+                            continuation: continuation
+                        ))
                     }
                 }
+            } onCancel: {
+                Task { await self.cancelSendWaiter(waiterID) }
+            }
+
+            ownsReservedSlot = reservedSenderIDs.remove(waiterID) != nil
+            guard mayContinue else { return }
+            guard !Task.isCancelled else {
+                // A receive granted this sender a slot, but cancellation won the
+                // race before the sender could use it. Pass that capacity to the
+                // next queued sender instead of leaving it suspended forever.
+                wakeWaitingSendersForAvailableCapacity()
+                return
             }
         }
-        
+
         guard !isClosed else { return }
-        
-        buffer.append(value)
-        
-        // Wake up a waiting receiver
-        if let waiter = receiveWaiters.first {
-            receiveWaiters.removeFirst()
-            waiter.resume(returning: buffer.removeFirst())
+        guard !Task.isCancelled else {
+            wakeWaitingSendersForAvailableCapacity()
+            return
+        }
+
+        // Hand off directly when a receiver is already suspended. This avoids an
+        // unnecessary buffer insertion/removal and keeps capacity available.
+        if !receiveWaiters.isEmpty {
+            let waiter = receiveWaiters.removeFirst()
+            waiter.continuation.resume(returning: value)
+            wakeWaitingSendersForAvailableCapacity()
+        } else {
+            buffer.append(value)
         }
     }
     
@@ -58,7 +100,9 @@ public actor BoundedChannel<T: Sendable> {
     public func send(_ value: T, timeout: Duration) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
+                try Task.checkCancellation()
                 await self.send(value)
+                try Task.checkCancellation()
             }
             
             group.addTask {
@@ -67,7 +111,7 @@ public actor BoundedChannel<T: Sendable> {
             }
             
             // First to complete wins
-            try await group.next()
+            _ = try await group.next()
             group.cancelAll()
         }
     }
@@ -77,12 +121,8 @@ public actor BoundedChannel<T: Sendable> {
         // Return buffered value if available
         if !buffer.isEmpty {
             let value = buffer.removeFirst()
-            
-            // Wake up a waiting sender
-            if let waiter = sendWaiters.first {
-                sendWaiters.removeFirst()
-                waiter.resume()
-            }
+
+            wakeWaitingSendersForAvailableCapacity()
             
             return value
         }
@@ -93,8 +133,24 @@ public actor BoundedChannel<T: Sendable> {
         }
         
         // Wait for value
-        return await withCheckedContinuation { continuation in
-            receiveWaiters.append(continuation)
+        let waiterID = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled || isClosed {
+                    continuation.resume(returning: nil)
+                } else if !buffer.isEmpty {
+                    let value = buffer.removeFirst()
+                    wakeWaitingSendersForAvailableCapacity()
+                    continuation.resume(returning: value)
+                } else {
+                    receiveWaiters.append(ReceiveWaiter(
+                        id: waiterID,
+                        continuation: continuation
+                    ))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelReceiveWaiter(waiterID) }
         }
     }
     
@@ -104,13 +160,14 @@ public actor BoundedChannel<T: Sendable> {
         
         // Resume all waiting senders
         for waiter in sendWaiters {
-            waiter.resume()
+            waiter.continuation.resume(returning: false)
         }
         sendWaiters.removeAll()
+        reservedSenderIDs.removeAll()
         
         // Resume all waiting receivers with nil
         for waiter in receiveWaiters {
-            waiter.resume(returning: nil)
+            waiter.continuation.resume(returning: nil)
         }
         receiveWaiters.removeAll()
     }
@@ -118,11 +175,17 @@ public actor BoundedChannel<T: Sendable> {
     /// Async sequence of values
     public var values: AsyncStream<T> {
         AsyncStream { continuation in
-            Task {
+            let producer = Task {
                 while let value = await self.receive() {
-                    continuation.yield(value)
+                    guard case .terminated = continuation.yield(value) else {
+                        continue
+                    }
+                    return
                 }
                 continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }
@@ -135,5 +198,36 @@ public actor BoundedChannel<T: Sendable> {
     /// Check if channel is closed
     public var closed: Bool {
         isClosed
+    }
+
+    private func cancelSendWaiter(_ id: UUID) {
+        if let index = sendWaiters.firstIndex(where: { $0.id == id }) {
+            let waiter = sendWaiters.remove(at: index)
+            waiter.continuation.resume(returning: false)
+            return
+        }
+
+        // Cancellation can arrive after receive() has removed and resumed the
+        // waiter but before send() re-enters the actor. Release and transfer the
+        // reserved slot in that case.
+        if reservedSenderIDs.remove(id) != nil {
+            wakeWaitingSendersForAvailableCapacity()
+        }
+    }
+
+    private func cancelReceiveWaiter(_ id: UUID) {
+        guard let index = receiveWaiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = receiveWaiters.remove(at: index)
+        waiter.continuation.resume(returning: nil)
+    }
+
+    private func wakeWaitingSendersForAvailableCapacity() {
+        guard !isClosed else { return }
+
+        while occupiedSendSlots < capacity, !sendWaiters.isEmpty {
+            let waiter = sendWaiters.removeFirst()
+            reservedSenderIDs.insert(waiter.id)
+            waiter.continuation.resume(returning: true)
+        }
     }
 }

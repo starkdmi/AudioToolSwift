@@ -79,21 +79,20 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
             resolvedWeightsPath = wPath
             resolvedConfigPath = cPath
         } else {
+            let requiredFiles = ModelFiles.standard(precision)
             // Check if already downloaded
-            if let cached = ModelDownloader.shared.localPath(for: Self.repo) {
-                let modelPath = cached.appendingPathComponent(precision.weightsFilename).path
-                let configPathLocal = cached.appendingPathComponent("config.json").path
-                if FileManager.default.fileExists(atPath: modelPath) && FileManager.default.fileExists(atPath: configPathLocal) {
-                    resolvedWeightsPath = modelPath
-                    resolvedConfigPath = configPathLocal
-                } else {
-                    throw AudioToolError.modelNotFound("Precision \(precision.rawValue) weights or config not found for MossFormer2SR48K")
-                }
+            if let cached = ModelDownloader.shared.localPath(
+                for: Self.repo,
+                matching: requiredFiles
+            ) {
+                resolvedWeightsPath = cached
+                    .appendingPathComponent(precision.weightsFilename).path
+                resolvedConfigPath = cached.appendingPathComponent("config.json").path
             } else {
                 // Auto-download from HuggingFace
                 let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
                     repo: Self.repo,
-                    matching: [precision.weightsFilename, "config.json"]
+                    matching: requiredFiles
                 )
                 resolvedWeightsPath = modelDir.appendingPathComponent(precision.weightsFilename).path
                 resolvedConfigPath = modelDir.appendingPathComponent("config.json").path
@@ -127,60 +126,51 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         
         try validateSampleRate(input)
         
-        // Interpolate up to the output rate. This is not a format conversion the
-        // caller could have done instead - the model operates at 48 kHz and
-        // reconstructs the band that 16 kHz input cannot carry, so the upsample is
-        // the first step of inference rather than plumbing.
-        let audio48k = try await resampleTo48k(input)
-        
-        let durationSeconds = Float(audio48k.count) / Float(outputSampleRate)
-        
-        // Use chunking for longer audio
+        // Duration is invariant under resampling. Decide before allocating the
+        // 48 kHz representation so long-form inference can convert incrementally.
+        let durationSeconds = Float(input.frameCount) / Float(input.sampleRate)
         if durationSeconds > maxDirectDuration {
-            return try await processWithChunking(audio48k, model: model)
+            return try await processWithChunking(input, model: model)
         }
-        
+
+        // Short inputs can be converted in one allocation.
+        let audio48k = try await resampleTo48k(input)
         return try await processChunk(audio48k, model: model)
     }
     
     /// Process with chunking using MLXOverlap
     /// Uses Hann weighted overlap-add for smooth blending
-    private func processWithChunking(_ samples: [Float], model: MossFormer2_SR_48K) async throws -> AudioBuffer {
+    private func processWithChunking(_ input: AudioBuffer, model: MossFormer2_SR_48K) async throws -> AudioBuffer {
         let chunkingConfig = ChunkingConfig.mossformer2SR48K(sampleRate: outputSampleRate)
-        let inputMLX = MLXArray(samples)
-        
-        // Split into chunks using MLXOverlap
-        let chunks = MLXOverlap.split(
-            audio: inputMLX,
-            chunkSamples: chunkingConfig.chunkSamples,
-            stride: chunkingConfig.strideSamples
+        let chunkSamples = chunkingConfig.chunkSamples
+        let stride = chunkingConfig.strideSamples
+        var source = try SuperResolutionChunkSource(
+            input: input,
+            targetRate: outputSampleRate
         )
-        
-        // Process each chunk through model
-        var processedChunks: [(chunk: MLXArray, startIdx: Int)] = []
-        
-        for (chunk, startIdx) in chunks {
-            eval(chunk)
-            let chunkSamples = chunk.asArray(Float.self)
-            let processed = try await processChunk(chunkSamples, model: model)
-            processedChunks.append((MLXArray(processed.samples), startIdx))
-            
-            // Clear GPU cache between chunks to reduce peak memory
+        let totalLength = source.totalLength
+        let window = MLXOverlap.hannWindow(length: chunkSamples).asArray(Float.self)
+        var assembler = IncrementalOverlapAdd(
+            chunkSamples: chunkSamples,
+            stride: stride,
+            window: window,
+            totalLength: totalLength
+        )
+        var output: [Float] = []
+        output.reserveCapacity(totalLength)
+
+        while let chunk = try source.nextChunk(chunkSamples: chunkSamples, stride: stride) {
+            try Task.checkCancellation()
+            let processed = try await processChunk(chunk.samples, model: model)
+            output.append(contentsOf: assembler.add(processed.samples, startIdx: chunk.startIdx))
             GPU.clearCache()
         }
-        
-        // Reassemble using Hann window for smooth blending
-        let window = MLXOverlap.hannWindow(length: chunkingConfig.chunkSamples)
-        let reassembled = MLXOverlap.reassembleOverlapAdd(
-            processedChunks: processedChunks,
-            chunkSamples: chunkingConfig.chunkSamples,
-            stride: chunkingConfig.strideSamples,
-            window: window,
-            originalLength: samples.count
+        output.append(contentsOf: assembler.finish())
+        return AudioBuffer(
+            samples: Array(output.prefix(totalLength)),
+            sampleRate: outputSampleRate,
+            channels: 1
         )
-        eval(reassembled)
-        
-        return AudioBuffer(samples: reassembled.asArray(Float.self), sampleRate: outputSampleRate, channels: 1)
     }
     
     /// Process a single chunk
@@ -246,12 +236,15 @@ extension MossFormer2SR48KProvider: StreamableOutput {
     /// Uses Hann-window overlap-add with buffered blending.
     public nonisolated func processStream(_ input: AudioBuffer) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     try await self.processStreamImpl(input, continuation: continuation)
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }
@@ -266,15 +259,15 @@ extension MossFormer2SR48KProvider: StreamableOutput {
         // input went straight through 48 -> 48 instead of being super-resolved from 16.
         try validateSampleRate(input)
         
-        // Resample to 48kHz first
-        let samples = try await resampleTo48k(input)
-        let totalLength = samples.count
-        let durationSeconds = Float(totalLength) / Float(outputSampleRate)
+        let durationSeconds = Float(input.frameCount) / Float(input.sampleRate)
         
         // For short audio, just yield single result
         if durationSeconds <= maxDirectDuration {
+            let samples = try await resampleTo48k(input)
             let result = try await processChunk(samples, model: model)
-            continuation.yield(result)
+            if case .terminated = continuation.yield(result) {
+                throw CancellationError()
+            }
             continuation.finish()
             return
         }
@@ -284,13 +277,8 @@ extension MossFormer2SR48KProvider: StreamableOutput {
         let chunkSamples = chunkingConfig.chunkSamples
         let stride = chunkingConfig.strideSamples
         let window = MLXOverlap.hannWindow(length: chunkSamples).asArray(Float.self)
-        
-        let inputMLX = MLXArray(samples)
-        let chunks = MLXOverlap.split(
-            audio: inputMLX,
-            chunkSamples: chunkSamples,
-            stride: stride
-        )
+        var source = try SuperResolutionChunkSource(input: input, targetRate: outputSampleRate)
+        let totalLength = source.totalLength
         
         // Streaming must produce the samples batch would. `IncrementalOverlapAdd`
         // is the same weighted overlap-add as `MLXOverlap.reassembleOverlapAdd`,
@@ -309,14 +297,19 @@ extension MossFormer2SR48KProvider: StreamableOutput {
             totalLength: totalLength
         )
 
-        for (chunk, startIdx) in chunks {
-            eval(chunk)
-            let chunkSamplesArray = chunk.asArray(Float.self)
-            let processed = try await processChunk(chunkSamplesArray, model: model)
+        while let chunk = try source.nextChunk(chunkSamples: chunkSamples, stride: stride) {
+            try Task.checkCancellation()
+            let processed = try await processChunk(chunk.samples, model: model)
 
-            let ready = assembler.add(processed.samples, startIdx: startIdx)
+            let ready = assembler.add(processed.samples, startIdx: chunk.startIdx)
             if !ready.isEmpty {
-                continuation.yield(AudioBuffer(samples: ready, sampleRate: outputSampleRate, channels: 1))
+                if case .terminated = continuation.yield(AudioBuffer(
+                    samples: ready,
+                    sampleRate: outputSampleRate,
+                    channels: 1
+                )) {
+                    throw CancellationError()
+                }
             }
 
             GPU.clearCache()
@@ -324,10 +317,71 @@ extension MossFormer2SR48KProvider: StreamableOutput {
 
         let tail = assembler.finish()
         if !tail.isEmpty {
-            continuation.yield(AudioBuffer(samples: tail, sampleRate: outputSampleRate, channels: 1))
+            if case .terminated = continuation.yield(AudioBuffer(
+                samples: tail,
+                sampleRate: outputSampleRate,
+                channels: 1
+            )) {
+                throw CancellationError()
+            }
         }
 
         continuation.finish()
+    }
+}
+
+/// Generates overlapping 48 kHz chunks while retaining only the previous chunk
+/// and the converter's bounded input/output buffers.
+private struct SuperResolutionChunkSource {
+    let totalLength: Int
+
+    private let converter: SuperResolutionResampler.Stream
+    private var previousChunk: [Float]?
+    private var nextStart = 0
+
+    init(input: AudioBuffer, targetRate: Int) throws {
+        converter = try SuperResolutionResampler.Stream(
+            input.samples,
+            from: input.sampleRate,
+            to: targetRate
+        )
+        totalLength = converter.expectedFrameCount
+    }
+
+    mutating func nextChunk(
+        chunkSamples: Int,
+        stride: Int
+    ) throws -> (samples: [Float], startIdx: Int)? {
+        guard nextStart < totalLength else { return nil }
+        let overlap = max(0, chunkSamples - stride)
+        var chunk: [Float]
+        if let previousChunk, overlap > 0 {
+            chunk = Array(previousChunk.suffix(overlap))
+        } else {
+            chunk = []
+        }
+
+        let needed = max(0, chunkSamples - chunk.count)
+        chunk.append(contentsOf: try read(upTo: needed))
+        if chunk.count < chunkSamples {
+            chunk.append(contentsOf: repeatElement(0, count: chunkSamples - chunk.count))
+        }
+
+        let start = nextStart
+        nextStart += max(1, stride)
+        previousChunk = chunk
+        return (chunk, start)
+    }
+
+    private func read(upTo count: Int) throws -> [Float] {
+        guard count > 0 else { return [] }
+        var result: [Float] = []
+        result.reserveCapacity(count)
+        while result.count < count,
+              let part = try converter.next(maxFrames: count - result.count) {
+            result.append(contentsOf: part)
+        }
+        return result
     }
 }
 

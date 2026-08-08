@@ -70,7 +70,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         guard let model = model else {
             throw AudioToolError.modelNotLoaded("MossFormerGAN_CoreML")
         }
-        try validateSampleRate(input)
+        try validateInputFormat(input)
         
         // Process in segments for long audio
         if input.samples.count <= segmentSamples {
@@ -95,6 +95,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         guard let model = model else {
             throw AudioToolError.modelNotLoaded("MossFormerGAN_CoreML")
         }
+        try validateInputFormat(input)
         
         // Process in segments for long audio
         if input.samples.count <= segmentSamples {
@@ -148,7 +149,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         let prediction = try await model.prediction(from: coremlInput)
         
         // Parse output -> [batch, freq, time]
-        let (enhancedReal, enhancedImag) = parseModelOutputToMLX(prediction)
+        let (enhancedReal, enhancedImag) = try parseModelOutputToMLX(prediction)
         
         // Power uncompress for enhanced
         let (realUC, imagUC) = mlxPowerUncompress(real: enhancedReal, imag: enhancedImag)
@@ -229,6 +230,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         var backgroundSegments: [Float] = []
         
         for idx in 0..<numSegments {
+            try Task.checkCancellation()
             let start = idx * segmentSamples
             let end = min(start + segmentSamples, samples.count)
             let actualLen = end - start
@@ -315,7 +317,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         let prediction = try await model.prediction(from: coremlInput)
         
         // Parse output -> [batch, freq, time]
-        let (enhancedReal, enhancedImag) = parseModelOutputToMLX(prediction)
+        let (enhancedReal, enhancedImag) = try parseModelOutputToMLX(prediction)
         
         // Power uncompress using MLX
         let (realUC, imagUC) = mlxPowerUncompress(real: enhancedReal, imag: enhancedImag)
@@ -349,6 +351,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         var enhancedSegments: [Float] = []
         
         for idx in 0..<numSegments {
+            try Task.checkCancellation()
             let start = idx * segmentSamples
             let end = min(start + segmentSamples, samples.count)
             let actualLen = end - start
@@ -438,15 +441,43 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     }
     
     /// Parse CoreML output to MLXArray [batch, freq, time]
-    private func parseModelOutputToMLX(_ output: MLFeatureProvider) -> (MLXArray, MLXArray) {
-        guard let multiArray = output.featureValue(for: "enhanced_spectrogram")?.multiArrayValue ??
-                              output.featureValue(for: output.featureNames.first ?? "")?.multiArrayValue else {
-            return (MLXArray.zeros([1, nFFT / 2 + 1, 1]), MLXArray.zeros([1, nFFT / 2 + 1, 1]))
+    private func parseModelOutputToMLX(
+        _ output: MLFeatureProvider
+    ) throws -> (MLXArray, MLXArray) {
+        guard let feature = output.featureValue(for: "enhanced_spectrogram") else {
+            throw AudioToolError.incompatibleModelVersion(
+                expected: "CoreML output named enhanced_spectrogram",
+                found: output.featureNames.sorted().joined(separator: ", ")
+            )
+        }
+        guard let multiArray = feature.multiArrayValue else {
+            throw AudioToolError.incompatibleModelVersion(
+                expected: "enhanced_spectrogram as MLMultiArray",
+                found: "feature type \(feature.type.rawValue)"
+            )
+        }
+        guard multiArray.dataType == .float32 else {
+            throw AudioToolError.incompatibleModelVersion(
+                expected: "float32 enhanced_spectrogram",
+                found: "MLMultiArray data type \(multiArray.dataType.rawValue)"
+            )
+        }
+
+        let shape = multiArray.shape.map(\.intValue)
+        guard shape.count == 4,
+              shape[0] == 1,
+              shape[1] == 2,
+              shape[2] > 0,
+              shape[3] == nFFT / 2 + 1 else {
+            throw AudioToolError.incompatibleModelVersion(
+                expected: "enhanced_spectrogram shape [1, 2, T, \(nFFT / 2 + 1)] with T > 0",
+                found: "shape \(shape)"
+            )
         }
         
         // Output is [1, 2, T, F]
-        let T = multiArray.shape[2].intValue
-        let F = multiArray.shape[3].intValue
+        let T = shape[2]
+        let F = shape[3]
 
         // Read through the array's own strides rather than assuming the backing
         // buffer is packed.
@@ -470,6 +501,12 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         // The fast path is kept for the case where CoreML does hand back packed
         // data, which is what the shape implies and what a smaller F would give.
         let strides = multiArray.strides.map(\.intValue)
+        guard strides.count == 4, strides.allSatisfy({ $0 > 0 }) else {
+            throw AudioToolError.incompatibleModelVersion(
+                expected: "four positive enhanced_spectrogram strides",
+                found: "strides \(strides)"
+            )
+        }
         let totalCount = 2 * T * F
         var flatData = [Float](repeating: 0, count: totalCount)
         let srcPointer = multiArray.dataPointer.assumingMemoryBound(to: Float.self)
@@ -517,11 +554,12 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     
     public nonisolated func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 for await chunk in input {
                     do {
+                        try Task.checkCancellation()
                         let processed = try await process(chunk)
-                        continuation.yield(processed)
+                        if case .terminated = continuation.yield(processed) { return }
                     } catch {
                         continuation.finish(throwing: error)
                         return
@@ -529,6 +567,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
                 }
                 continuation.finish()
             }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
         }
     }
     
@@ -540,13 +579,14 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     /// Uses no overlap - each segment is processed independently.
     public nonisolated func processStream(_ input: AudioBuffer) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     try await self.processStreamImpl(input, continuation: continuation)
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
         }
     }
     
@@ -555,6 +595,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         guard let model = model else {
             throw AudioToolError.modelNotLoaded("MossFormerGAN_CoreML")
         }
+        try validateInputFormat(input)
         
         let samples = input.samples
         let totalLength = samples.count
@@ -562,7 +603,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         // For short audio, just yield single result
         if totalLength <= segmentSamples {
             let result = try await processSegment(samples, model: model)
-            continuation.yield(result)
+            if case .terminated = continuation.yield(result) { throw CancellationError() }
             continuation.finish()
             return
         }
@@ -571,6 +612,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         let numSegments = Int(ceil(Double(totalLength) / Double(segmentSamples)))
         
         for idx in 0..<numSegments {
+            try Task.checkCancellation()
             let start = idx * segmentSamples
             let end = min(start + segmentSamples, totalLength)
             let actualLen = end - start
@@ -611,7 +653,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
                 sampleRate: sampleRate,
                 channels: 1
             )
-            continuation.yield(chunkBuffer)
+            if case .terminated = continuation.yield(chunkBuffer) { throw CancellationError() }
         }
         
         continuation.finish()

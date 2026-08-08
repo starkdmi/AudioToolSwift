@@ -284,7 +284,8 @@ public final class T3: Module {
         repetition_penalty: Float = 1.2,
         cfg_weight: Float = 0.5,
         language_id: String? = nil
-    ) -> MLXArray {
+    ) throws -> MLXArray {
+        try Task.checkCancellation()
         var textTokens = text_tokens
         if textTokens.ndim == 1 {
             textTokens = expandDims(textTokens, axis: 0)
@@ -353,6 +354,7 @@ public final class T3: Module {
             var currentLen = prefixLen
 
             for step in 0..<maxNewTokens {
+                try Task.checkCancellation()
                 let lastIndex = hidden.dim(1) - 1
                 var logits = speech_head(hidden[0..., lastIndex..<lastIndex + 1, 0...]).squeezed(axis: 1)
 

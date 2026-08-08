@@ -24,38 +24,52 @@ extension CVAudioBuffer {
     ///   - quality: Resampling quality (default: .balanced)
     /// - Returns: New AudioBuffer at target sample rate
     public func resampled(to targetSampleRate: Int, quality: ResamplingQuality = .balanced) throws -> CVAudioBuffer {
-        guard sampleRate != targetSampleRate else { return self }
-        guard !samples.isEmpty else { return self }
         guard targetSampleRate > 0 else {
             throw ResamplingError.invalidParameters("Target sample rate must be positive")
         }
-        
-        let resampled: [Float]
-        switch quality {
-        case .fast:
-            resampled = resampleLinear(samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate))
-        case .balanced:
-            resampled = resampleCubic(samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate))
-        case .high:
-            resampled = try resampleAVAudioConverter(
-                samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate),
-                algorithm: AVSampleRateConverterAlgorithm_Mastering,
-                quality: AVAudioQuality.max)
-        case .auto:
-            // Mirrors AudioLoader's `.auto` exactly - see ResamplingQuality.auto.
-            // Upsampling cannot alias, so cubic; downsampling gets AVAudioConverter's
-            // ordinary settings, which is what the models were trained against.
-            if targetSampleRate > sampleRate {
-                resampled = resampleCubic(samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate))
-            } else {
-                resampled = try resampleAVAudioConverter(
-                    samples, fromRate: Float(sampleRate), toRate: Float(targetSampleRate),
-                    algorithm: AVSampleRateConverterAlgorithm_Normal,
-                    quality: AVAudioQuality.high)
+        guard sampleRate != targetSampleRate else { return self }
+        guard samples.count.isMultiple(of: channels) else {
+            throw ResamplingError.invalidParameters(
+                "Interleaved sample count must be divisible by the channel count"
+            )
+        }
+        guard !samples.isEmpty else {
+            return CVAudioBuffer(samples: [], sampleRate: targetSampleRate, channels: channels)
+        }
+
+        let expectedFrames = expectedOutputFrames(
+            inputFrames: frameCount,
+            fromRate: sampleRate,
+            toRate: targetSampleRate
+        )
+        var resampledChannels = [[Float]]()
+        resampledChannels.reserveCapacity(channels)
+
+        // `samples` is frame-interleaved. Resampling the flattened storage treats
+        // every channel boundary as a point in one mono waveform, interpolating
+        // L -> R -> L. Deinterleave first and give each channel its own converter.
+        for channel in 0..<channels {
+            var planar = [Float](repeating: 0, count: frameCount)
+            for frame in 0..<frameCount {
+                planar[frame] = samples[frame * channels + channel]
+            }
+            resampledChannels.append(try resampleChannel(
+                planar,
+                fromRate: sampleRate,
+                toRate: targetSampleRate,
+                quality: quality,
+                expectedLength: expectedFrames
+            ))
+        }
+
+        var interleaved = [Float](repeating: 0, count: expectedFrames * channels)
+        for frame in 0..<expectedFrames {
+            for channel in 0..<channels {
+                interleaved[frame * channels + channel] = resampledChannels[channel][frame]
             }
         }
-        
-        return CVAudioBuffer(samples: resampled, sampleRate: targetSampleRate, channels: channels)
+
+        return CVAudioBuffer(samples: interleaved, sampleRate: targetSampleRate, channels: channels)
     }
     
     /// Resample asynchronously (for large files)
@@ -66,25 +80,81 @@ extension CVAudioBuffer {
     }
 }
 
+private func expectedOutputFrames(inputFrames: Int, fromRate: Int, toRate: Int) -> Int {
+    Int((Double(inputFrames) * Double(toRate) / Double(fromRate)).rounded())
+}
+
+private func resampleChannel(
+    _ samples: [Float],
+    fromRate: Int,
+    toRate: Int,
+    quality: ResamplingQuality,
+    expectedLength: Int
+) throws -> [Float] {
+    let output: [Float]
+    switch quality {
+    case .fast:
+        output = resampleLinear(samples, fromRate: Float(fromRate),
+                                toRate: Float(toRate), outputLength: expectedLength)
+    case .balanced:
+        output = resampleCubic(samples, fromRate: Float(fromRate),
+                               toRate: Float(toRate), outputLength: expectedLength)
+    case .high:
+        output = try resampleAVAudioConverter(
+            samples,
+            fromRate: Float(fromRate),
+            toRate: Float(toRate),
+            algorithm: AVSampleRateConverterAlgorithm_Mastering,
+            quality: AVAudioQuality.max,
+            expectedLength: expectedLength
+        )
+    case .auto:
+        if toRate > fromRate {
+            output = resampleCubic(samples, fromRate: Float(fromRate),
+                                   toRate: Float(toRate), outputLength: expectedLength)
+        } else {
+            output = try resampleAVAudioConverter(
+                samples,
+                fromRate: Float(fromRate),
+                toRate: Float(toRate),
+                algorithm: AVSampleRateConverterAlgorithm_Normal,
+                quality: AVAudioQuality.high,
+                expectedLength: expectedLength
+            )
+        }
+    }
+    return output
+}
+
 // MARK: - Linear Resampling
 
 /// Simple linear interpolation resampling (fastest but lowest quality)
-private func resampleLinear(_ samples: [Float], fromRate: Float, toRate: Float) -> [Float] {
+private func resampleLinear(
+    _ samples: [Float],
+    fromRate: Float,
+    toRate: Float,
+    outputLength: Int
+) -> [Float] {
     let ratio = toRate / fromRate
     let inputLength = samples.count
-    let outputLength = Int(Float(inputLength) * ratio)
-    
+
     guard outputLength > 0 else { return [] }
+    guard inputLength > 1 else {
+        return [Float](repeating: samples.first ?? 0, count: outputLength)
+    }
     
     var result = [Float](repeating: 0, count: outputLength)
     
     for i in 0..<outputLength {
         let inputPosition = Float(i) / ratio
-        let index = Int(inputPosition)
-        let fraction = inputPosition - Float(index)
-        
-        let idx0 = min(max(index, 0), inputLength - 2)
-        let idx1 = min(idx0 + 1, inputLength - 1)
+        let index = min(max(Int(inputPosition), 0), inputLength - 1)
+        let idx0 = index
+        let idx1 = min(index + 1, inputLength - 1)
+        // Once the sampling position reaches the last source frame there is no
+        // right-hand neighbour to interpolate toward. Hold that endpoint instead
+        // of clamping the index back by one while retaining the old fraction,
+        // which made an upsampled signal jump backwards at its tail.
+        let fraction = idx0 == idx1 ? 0 : inputPosition - Float(index)
         
         result[i] = samples[idx0] * (1 - fraction) + samples[idx1] * fraction
     }
@@ -106,15 +176,24 @@ private func resampleLinear(_ samples: [Float], fromRate: Float, toRate: Float) 
 /// - Note: The figure "~84.3 dB SNR with 0.01% THD" was carried over from AudioUtils
 ///   and has not been verified here; it cannot hold for downsampling without a
 ///   low-pass stage.
-private func resampleCubic(_ samples: [Float], fromRate: Float, toRate: Float) -> [Float] {
+private func resampleCubic(
+    _ samples: [Float],
+    fromRate: Float,
+    toRate: Float,
+    outputLength: Int
+) -> [Float] {
     let ratio = toRate / fromRate
     let inputLength = samples.count
-    let outputLength = Int(Float(inputLength) * ratio)
-    
+
     guard outputLength > 0 else { return [] }
     guard inputLength >= 4 else {
         // Fall back to linear for very short samples
-        return resampleLinear(samples, fromRate: fromRate, toRate: toRate)
+        return resampleLinear(
+            samples,
+            fromRate: fromRate,
+            toRate: toRate,
+            outputLength: outputLength
+        )
     }
     
     var result = [Float](repeating: 0, count: outputLength)
@@ -166,7 +245,8 @@ private func resampleAVAudioConverter(
     fromRate: Float,
     toRate: Float,
     algorithm: String,
-    quality: AVAudioQuality
+    quality: AVAudioQuality,
+    expectedLength: Int
 ) throws -> [Float] {
     guard let inputFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
@@ -214,18 +294,6 @@ private func resampleAVAudioConverter(
         }
     }
     
-    // Calculate output size
-    let outputFrames = AVAudioFrameCount(Float(samples.count) * toRate / fromRate)
-    guard let outputBuffer = AVAudioPCMBuffer(
-        pcmFormat: outputFormat,
-        frameCapacity: outputFrames + 1024  // Extra capacity for rounding
-    ) else {
-        throw ResamplingError.invalidFormat
-    }
-    
-    // Perform conversion using class to avoid Swift 6 Sendable issues with captured vars
-    var error: NSError?
-    
     // Use a class to wrap mutable state for the converter callback
     final class InputProvider: @unchecked Sendable {
         var consumed = false
@@ -233,37 +301,95 @@ private func resampleAVAudioConverter(
         init(buffer: AVAudioPCMBuffer) { self.buffer = buffer }
     }
     let provider = InputProvider(buffer: inputBuffer)
-    
-    let status = converter.convert(to: outputBuffer, error: &error) { inNumPackets, outStatus in
+
+    var output = [Float]()
+    output.reserveCapacity(expectedLength)
+    var reachedEnd = false
+    var emptyPasses = 0
+
+    // AVAudioConverter is stateful and withholds its latency tail. Keep pulling,
+    // and report end-of-stream after the single input buffer, until it is drained.
+    while !reachedEnd && output.count < expectedLength {
+        guard let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: outputFormat,
+            frameCapacity: AVAudioFrameCount(min(16_384, max(1, expectedLength - output.count)))
+        ) else {
+            throw ResamplingError.invalidFormat
+        }
+
+        var error: NSError?
+        let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
         if provider.consumed {
-            outStatus.pointee = .noDataNow
+            outStatus.pointee = .endOfStream
             return nil
         }
         outStatus.pointee = .haveData
         provider.consumed = true
         return provider.buffer
-    }
-    
-    guard status != .error, error == nil else {
-        throw ResamplingError.conversionFailed
-    }
-    
-    // Extract output data efficiently
-    let outputCount = Int(outputBuffer.frameLength)
-    var output = [Float](repeating: 0, count: outputCount)
-    
-    if let channelData = outputBuffer.floatChannelData?[0] {
-        output.withUnsafeMutableBufferPointer { ptr in
-            ptr.baseAddress!.update(from: channelData, count: outputCount)
         }
+
+        guard status != .error, error == nil else {
+            throw ResamplingError.conversionFailed
+        }
+
+        let produced = min(Int(outputBuffer.frameLength), expectedLength - output.count)
+        if produced > 0, let channelData = outputBuffer.floatChannelData?[0] {
+            output.append(contentsOf: UnsafeBufferPointer(start: channelData, count: produced))
+            emptyPasses = 0
+        } else {
+            emptyPasses += 1
+        }
+        reachedEnd = status == .endOfStream
+        if emptyPasses > 2 { break }
     }
-    
+
+    if output.count > expectedLength {
+        output.removeLast(output.count - expectedLength)
+    } else if output.count < expectedLength {
+        output.append(contentsOf: [Float](repeating: 0, count: expectedLength - output.count))
+    }
     return output
 }
 
 // MARK: - vDSP Optimized Mixing (Bonus)
 
 extension CVAudioBuffer {
+
+    /// Convert interleaved channel layout explicitly.
+    ///
+    /// Model inputs in this package are mono or stereo. Mono conversion averages
+    /// channels; mono-to-stereo duplicates the signal; inputs wider than stereo are
+    /// downmixed before duplication so a two-channel model never receives arbitrary
+    /// channel truncation.
+    public func converted(toChannels targetChannels: Int) throws -> CVAudioBuffer {
+        guard targetChannels > 0 else {
+            throw AudioToolError.invalidAudioFormat(
+                expected: "a positive channel count",
+                found: "\(targetChannels) channels"
+            )
+        }
+        guard samples.count.isMultiple(of: channels) else {
+            throw AudioToolError.invalidAudioFormat(
+                expected: "complete interleaved frames",
+                found: "\(samples.count) samples for \(channels) channels"
+            )
+        }
+        guard targetChannels != channels else { return self }
+        if targetChannels == 1 { return mixedToMono() }
+
+        let mono = channels == 1 ? samples : mixedToMono().samples
+        var converted = [Float](repeating: 0, count: mono.count * targetChannels)
+        for frame in mono.indices {
+            for channel in 0..<targetChannels {
+                converted[frame * targetChannels + channel] = mono[frame]
+            }
+        }
+        return CVAudioBuffer(
+            samples: converted,
+            sampleRate: sampleRate,
+            channels: targetChannels
+        )
+    }
     
     /// Mix down to mono using vDSP (optimized for multi-channel)
     public func mixedToMono() -> CVAudioBuffer {

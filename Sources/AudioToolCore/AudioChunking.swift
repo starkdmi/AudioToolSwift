@@ -41,6 +41,13 @@ public struct ChunkingConfig: Sendable {
         blendingStrategy: ChunkBlendingStrategy = .triangular,
         sampleRate: Int
     ) {
+        precondition(chunkDuration > 0, "Chunk duration must be positive")
+        precondition(overlapRatio >= 0 && overlapRatio < 1, "Overlap ratio must be in [0, 1)")
+        precondition(sampleRate > 0, "Sample rate must be positive")
+        precondition(
+            Int(chunkDuration * Float(sampleRate)) > 0,
+            "Chunk duration must contain at least one sample"
+        )
         self.chunkDuration = chunkDuration
         self.overlapRatio = overlapRatio
         self.blendingStrategy = blendingStrategy
@@ -91,25 +98,16 @@ public struct AudioChunker: Sendable {
             let endPosition = min(position + config.chunkSamples, totalLength)
             let chunkLength = endPosition - position
             
-            // Handle last chunk - may need padding
-            var chunkSamples: [Float]
+            // A chunk's first sample always corresponds to `startIndex`. The old
+            // tail path prepended earlier context but kept the later start index,
+            // shifting that context forward during reconstruction and duplicating
+            // the end of the recording.
+            var chunkSamples = Array(samples[position..<endPosition])
             if chunkLength < config.chunkSamples {
-                // Pad with zeros or use context from before
-                let needPadding = config.chunkSamples - chunkLength
-                let contextStart = max(0, position - needPadding)
-                if contextStart < position {
-                    // Use audio context from before
-                    chunkSamples = Array(samples[contextStart..<endPosition])
-                    if chunkSamples.count < config.chunkSamples {
-                        // Still short, pad with zeros
-                        chunkSamples = [Float](repeating: 0, count: config.chunkSamples - chunkSamples.count) + chunkSamples
-                    }
-                } else {
-                    chunkSamples = Array(samples[position..<endPosition])
-                    chunkSamples.append(contentsOf: [Float](repeating: 0, count: needPadding))
-                }
-            } else {
-                chunkSamples = Array(samples[position..<endPosition])
+                chunkSamples.append(contentsOf: [Float](
+                    repeating: 0,
+                    count: config.chunkSamples - chunkLength
+                ))
             }
             
             let chunk = AudioChunk(
@@ -187,13 +185,23 @@ public struct AudioChunker: Sendable {
         // Create Hann window
         let window = hannWindow(config.chunkSamples)
         
-        for (idx, chunk) in chunks.enumerated() {
-            let start = idx * config.strideSamples
+        for chunk in chunks {
+            let start = chunk.startIndex
             
             for i in 0..<chunk.samples.count {
                 if start + i < outputLength {
-                    output[start + i] += chunk.samples[i] * window[i]
-                    windowSum[start + i] += window[i] * window[i]
+                    var weight = window[i]
+                    // A Hann window is zero at both ends. At the outer recording
+                    // boundaries there is no neighbouring chunk to supply those
+                    // samples, so use a flat edge there. Interior endpoints are
+                    // covered by the adjacent chunk and retain the Hann blend.
+                    if chunk.isFirst && i < config.strideSamples {
+                        weight = 1
+                    } else if chunk.isLast && i >= config.overlapSamples {
+                        weight = 1
+                    }
+                    output[start + i] += chunk.samples[i] * weight
+                    windowSum[start + i] += weight
                 }
             }
         }
@@ -218,8 +226,8 @@ public struct AudioChunker: Sendable {
         var output = [Float](repeating: 0, count: outputLength)
         var weightSum = [Float](repeating: 0, count: outputLength)
         
-        for (idx, chunk) in chunks.enumerated() {
-            let start = idx * config.strideSamples
+        for chunk in chunks {
+            let start = chunk.startIndex
             
             for i in 0..<chunk.samples.count {
                 let pos = start + i
@@ -227,7 +235,9 @@ public struct AudioChunker: Sendable {
                     // Triangular weight: ramps up in first half, down in second half
                     let halfLen = chunk.samples.count / 2
                     let weight: Float
-                    if i < halfLen {
+                    if chunk.samples.count <= 1 {
+                        weight = 1
+                    } else if i < halfLen {
                         weight = Float(i + 1) / Float(halfLen)
                     } else {
                         weight = Float(chunk.samples.count - i) / Float(halfLen)
@@ -292,6 +302,9 @@ public struct AudioChunker: Sendable {
     /// so the subtraction cancels to zero over the opening samples of a long
     /// window. See ``MLXOverlap/hannWindow(length:)``.
     private func hannWindow(_ length: Int) -> [Float] {
+        guard length > 1 else {
+            return [Float](repeating: 1, count: max(0, length))
+        }
         var window = [Float](repeating: 0, count: length)
         for i in 0..<length {
             let s = sin(Float.pi * Float(i) / Float(length - 1))

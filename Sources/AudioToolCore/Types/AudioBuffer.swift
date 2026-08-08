@@ -128,19 +128,28 @@ public struct AudioBuffer: Sendable, Hashable {
         precondition(other.channels == channels, "Channel counts must match")
         
         let offsetSamples = Int(offset * Double(sampleRate)) * channels
-        let totalLength = max(samples.count, offsetSamples + other.samples.count)
+
+        // The returned buffer represents the union of both timelines. For a
+        // negative offset, shift `self` to the right instead of indexing the result
+        // with a negative value (which used to trap) or throwing away the leading
+        // part of `other`.
+        let timelineStart = min(0, offsetSamples)
+        let timelineEnd = max(samples.count, offsetSamples + other.samples.count)
+        let totalLength = max(0, timelineEnd - timelineStart)
+        let selfStart = -timelineStart
+        let otherStart = offsetSamples - timelineStart
         
         var result = [Float](repeating: 0, count: totalLength)
         
         // Copy original
         for i in 0..<samples.count {
-            result[i] = samples[i]
+            result[selfStart + i] = samples[i]
         }
         
         // Mix in other
         for i in 0..<other.samples.count {
-            let idx = offsetSamples + i
-            if idx < totalLength {
+            let idx = otherStart + i
+            if idx >= 0 && idx < totalLength {
                 result[idx] += other.samples[i]
             }
         }

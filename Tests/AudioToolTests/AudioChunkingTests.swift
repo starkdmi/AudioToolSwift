@@ -114,6 +114,29 @@ struct AudioChunkingTests {
         
         #expect(maxError < 1e-6, "Perfect reconstruction expected for no overlap")
     }
+
+    @Test("Every blending strategy identity-reassembles a constant tail")
+    func testEveryStrategyIdentityRoundtrip() {
+        let strategies: [ChunkBlendingStrategy] = [.none, .hann, .triangular, .discardEdges]
+        let samples = [Float](repeating: 0.5, count: 2_350)
+
+        for strategy in strategies {
+            let overlap: Float = strategy == .none ? 0 : 0.5
+            let config = ChunkingConfig(
+                chunkDuration: 1,
+                overlapRatio: overlap,
+                blendingStrategy: strategy,
+                sampleRate: 1_000
+            )
+            let chunker = AudioChunker(config: config)
+            let chunks = chunker.split(samples)
+            let output = chunker.reassemble(chunks, originalLength: samples.count)
+
+            #expect(output == samples, "\(strategy) did not reconstruct its own chunks")
+            #expect(chunks.last?.startIndex == 2_000,
+                    "tail metadata should identify the first sample stored in the chunk")
+        }
+    }
     
     // MARK: - Preset Config Tests
     

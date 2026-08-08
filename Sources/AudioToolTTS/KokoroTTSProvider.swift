@@ -82,13 +82,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     
     /// Observable state stream for UI
     public nonisolated var stateStream: AsyncStream<ModelState> {
-        AsyncStream { continuation in
-            Task { await addStateContinuation(continuation) }
-        }
-    }
-    
-    private func addStateContinuation(_ continuation: AsyncStream<ModelState>.Continuation) {
-        stateContinuations.append(continuation)
+        stateBroadcaster.makeStream()
     }
     
     // MARK: - SpeechSynthesizer Conformance
@@ -107,12 +101,21 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     private nonisolated let language: KokoroLanguage
     private nonisolated let repo: String
     private nonisolated let precision: ModelPrecision
+    private nonisolated let modelIdentity: String
     
     /// Voice embeddings cache (voice name -> MLXArray)
     private var voiceEmbeddings: [String: MLXArray] = [:]
+
+    /// External voice files are configuration, not resident model state. Keep
+    /// their paths across eviction so their MLX embeddings can be reconstructed
+    /// after the model is loaded again.
+    private var customVoiceSources: [String: URL] = [:]
     
-    /// State stream continuations
-    private var stateContinuations: [AsyncStream<ModelState>.Continuation] = []
+    /// Kept outside actor isolation so subscription and cancellation registration
+    /// are synchronous and cannot overtake each other.
+    private nonisolated let stateBroadcaster = AsyncStateBroadcaster(
+        initialState: ModelState.notLoaded
+    )
     
     // MARK: - Initialization
     
@@ -124,8 +127,10 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
         precision: ModelPrecision = KokoroTTSProvider.defaultPrecision,
         language: KokoroLanguage = .americanEnglish
     ) {
+        let repo = precision.repo(base: KokoroTTSProvider.baseRepo)
         self.precision = precision
-        self.repo = precision.repo(base: KokoroTTSProvider.baseRepo)
+        self.repo = repo
+        self.modelIdentity = repo
         self.language = language
     }
     
@@ -139,6 +144,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     ) {
         self.precision = .bf16
         self.repo = repo
+        self.modelIdentity = repo
         self.language = language
     }
     
@@ -150,6 +156,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
         self.modelPath = modelPath
         self.precision = .bf16
         self.repo = KokoroTTSProvider.baseRepo
+        self.modelIdentity = modelPath.standardizedFileURL.path
         self.language = language
     }
     
@@ -162,9 +169,14 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
             try await loadFromPath(path)
             return
         }
+
+        let requiredFiles = ["*.safetensors", "voices/*.npy", "config.json"]
         
         // Check if already downloaded
-        if let cached = ModelDownloader.shared.localPath(for: repo) {
+        if let cached = ModelDownloader.shared.localPath(
+            for: repo,
+            matching: requiredFiles
+        ) {
             try await loadFromPath(cached)
             return
         }
@@ -175,7 +187,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
         do {
             let path = try await ModelDownloader.shared.downloadAndGetPath(
                 repo: repo,
-                matching: ["*.safetensors", "voices/*.npy", "config.json"]
+                matching: requiredFiles
             ) { [weak self] progress in
                 Task { @MainActor in
                     await self?.updateState(.downloading(progress: progress.fractionCompleted))
@@ -184,6 +196,9 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
             
             try await loadFromPath(path)
         } catch {
+            tts = nil
+            voiceEmbeddings.removeAll()
+            GPU.clearCache()
             updateState(.failed(error.localizedDescription))
             throw error
         }
@@ -215,15 +230,26 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
             // KokoroSwift uses .misaki G2P by default (MIT license, no ESpeakNG)
             tts = KokoroTTS(modelPath: weightsPath, g2p: .misaki)
             modelPath = path
+            voiceEmbeddings.removeAll(keepingCapacity: true)
             
             // Try to auto-load voices from voices subdirectory (use original path, not weightsPath)
             let voicesDir = path.appendingPathComponent("voices")
             if FileManager.default.fileExists(atPath: voicesDir.path) {
-                try? loadVoices(from: voicesDir)
+                try? loadVoices(from: voicesDir, retainForReload: false)
+            }
+
+            // Custom voices override bundled voices with the same name. A missing
+            // or invalid configured file makes reload fail explicitly instead of
+            // leaving a provider that reports ready but cannot synthesize that voice.
+            for (_, source) in customVoiceSources.sorted(by: { $0.key < $1.key }) {
+                _ = try loadVoice(from: source, retainForReload: false)
             }
             
             updateState(.ready)
         } catch {
+            tts = nil
+            voiceEmbeddings.removeAll()
+            GPU.clearCache()
             updateState(.failed(error.localizedDescription))
             throw error
         }
@@ -233,9 +259,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     
     private func updateState(_ newState: ModelState) {
         state = newState
-        for continuation in stateContinuations {
-            continuation.yield(newState)
-        }
+        stateBroadcaster.send(newState)
     }
     
     // MARK: - Voice Loading
@@ -245,6 +269,14 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     /// - Returns: Voice name (filename without extension)
     @discardableResult
     public func loadVoice(from voicePath: URL) throws -> String {
+        try loadVoice(from: voicePath, retainForReload: true)
+    }
+
+    @discardableResult
+    private func loadVoice(
+        from voicePath: URL,
+        retainForReload: Bool
+    ) throws -> String {
         let voiceName = voicePath.deletingPathExtension().lastPathComponent
         
         // Load voice embedding based on file extension
@@ -261,15 +293,25 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
         }
         
         voiceEmbeddings[voiceName] = embedding
+        if retainForReload {
+            customVoiceSources[voiceName] = voicePath.standardizedFileURL
+        }
         return voiceName
     }
     
     /// Load all voice embeddings from a directory
     /// - Parameter directory: Directory containing .npy or .safetensors voice files
     public func loadVoices(from directory: URL) throws {
+        try loadVoices(from: directory, retainForReload: true)
+    }
+
+    private func loadVoices(
+        from directory: URL,
+        retainForReload: Bool
+    ) throws {
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
         for file in files where file.pathExtension == "npy" || file.pathExtension == "safetensors" {
-            _ = try loadVoice(from: file)
+            _ = try loadVoice(from: file, retainForReload: retainForReload)
         }
     }
     
@@ -395,16 +437,22 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     /// - Returns: Async stream of audio chunks
     public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     // TODO: Implement sentence-level streaming for lower latency
                     // For now, generate full audio and yield as single chunk
                     let audio = try await synthesize(text, voice: voice)
-                    continuation.yield(audio)
+                    try Task.checkCancellation()
+                    if case .terminated = continuation.yield(audio) {
+                        throw CancellationError()
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }
@@ -416,6 +464,35 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     
     public func process(_ input: AudioToolCore.AudioBuffer) async throws -> AudioToolCore.AudioBuffer {
         throw AudioToolError.pipelineConfigurationInvalid("KokoroTTS is a synthesizer, use synthesize() instead of process()")
+    }
+}
+
+// MARK: - ManagedModel
+
+extension KokoroTTSProvider: ManagedModel {
+    public nonisolated var modelId: String {
+        "kokoro:\(modelIdentity):\(precision.rawValue):\(language.rawValue)"
+    }
+
+    public nonisolated var estimatedMemoryBytes: Int {
+        switch precision {
+        case .fp32: 360_000_000
+        case .fp16, .bf16: 220_000_000
+        case .int8, .bit8: 150_000_000
+        case .bit6: 130_000_000
+        case .int4, .bit4: 110_000_000
+        }
+    }
+
+    public func checkIfLoaded() async -> Bool { tts != nil }
+
+    public func unload() async {
+        tts = nil
+        voiceEmbeddings.removeAll()
+        // `customVoiceSources` is durable configuration and is intentionally
+        // retained so loadFromPath(_:) can reconstruct these embeddings.
+        updateState(.notLoaded)
+        GPU.clearCache()
     }
 }
 

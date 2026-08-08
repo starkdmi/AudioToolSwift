@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import AudioToolCore
 import MLX
 
 // MARK: - Overlap Strategy
@@ -28,6 +29,9 @@ public struct MLXOverlap {
     /// Create triangular window (linear fade in/out)
     /// Python: up = arange(1, half+1); down = arange(length-half, 0, -1); window = concat([up, down]) / max
     public static func triangularWindow(length: Int) -> MLXArray {
+        guard length > 1 else {
+            return MLXArray([Float](repeating: 1, count: max(0, length)))
+        }
         let half = length / 2
         
         // Up ramp: 1, 2, ..., half
@@ -56,6 +60,9 @@ public struct MLXOverlap {
     /// overlap-add divide-by-weight then left those output samples at silence.
     /// NumPy does not show it because `np.hanning` evaluates in Float64.
     public static func hannWindow(length: Int) -> MLXArray {
+        guard length > 1 else {
+            return MLXArray([Float](repeating: 1, count: max(0, length)))
+        }
         var window = [Float](repeating: 0, count: length)
         for i in 0..<length {
             let s = sin(Float.pi * Float(i) / Float(length - 1))
@@ -147,7 +154,9 @@ public struct MLXOverlap {
         // Get window as Float array
         let windowArray = window.asArray(Float.self)
         
-        for (chunk, startIdx) in processedChunks {
+        for (chunkIndex, chunkData) in processedChunks.enumerated() {
+            let (chunk, startIdx) = chunkData
+            let isFinalChunk = chunkIndex == processedChunks.index(before: processedChunks.endIndex)
             eval(chunk)
             let chunkArray = chunk.asArray(Float.self)
             let endIdx = min(startIdx + chunkSamples, originalLength)
@@ -155,7 +164,14 @@ public struct MLXOverlap {
             
             // Weighted overlap-add
             for i in 0..<chunkLength {
-                let w = i < windowArray.count ? windowArray[i] : 1.0
+                var w = i < windowArray.count ? windowArray[i] : 1.0
+                if startIdx == 0 && i < stride {
+                    w = 1
+                }
+                if isFinalChunk,
+                   i >= max(0, chunkSamples - stride) {
+                    w = 1
+                }
                 let sample = i < chunkArray.count ? chunkArray[i] : 0.0
                 resultArray[startIdx + i] += w * sample
                 weightArray[startIdx + i] += w
@@ -229,75 +245,68 @@ public struct MLXOverlap {
         strategy: OverlapStrategy,
         processChunk: (MLXArray) async throws -> MLXArray
     ) async throws -> MLXArray {
+        guard chunkSamples > 0, overlapRatio >= 0, overlapRatio < 1 else {
+            throw AudioToolError.pipelineConfigurationInvalid(
+                "Chunk size must be positive and overlap must be in [0, 1)"
+            )
+        }
         eval(audio)
         let totalLength = audio.shape[0]
-        let overlapSamples = Int(Float(chunkSamples) * overlapRatio)
+        guard totalLength > 0 else { return MLXArray.zeros([0]) }
+        let overlapSamples = strategy == .noOverlap ? 0 : Int(Float(chunkSamples) * overlapRatio)
         let stride = chunkSamples - overlapSamples
-        
-        // Split into chunks - use different loop condition for discard-edges
-        let inputChunks = split(
-            audio: audio,
+        let window = windowArray(for: strategy, length: chunkSamples)
+        var incremental = window.map {
+            IncrementalOverlapAdd(
+                chunkSamples: chunkSamples,
+                stride: stride,
+                window: $0,
+                totalLength: totalLength
+            )
+        }
+        var output = window == nil ? [Float](repeating: 0, count: totalLength) : []
+        var streamedOutput: [Float] = []
+        if window != nil { streamedOutput.reserveCapacity(totalLength) }
+
+        var startIdx = 0
+        var chunkIndex = 0
+        while shouldProcessChunk(
+            startIdx: startIdx,
+            totalLength: totalLength,
             chunkSamples: chunkSamples,
             stride: stride,
-            forDiscardEdges: strategy == .discardEdges
-        )
-        
-        // Process each chunk with memory management
-        var processedChunks: [(chunk: MLXArray, startIdx: Int)] = []
-        for (chunk, startIdx) in inputChunks {
+            strategy: strategy
+        ) {
+            try Task.checkCancellation()
+            let chunk = paddedChunk(audio, startIdx: startIdx, length: chunkSamples)
             let processed = try await processChunk(chunk)
             eval(processed)
-            processedChunks.append((processed, startIdx))
-            
-            // Clear GPU cache between chunks to reduce peak memory
+            let samples = processed.asArray(Float.self)
+            consume(
+                samples,
+                startIdx: startIdx,
+                chunkIndex: chunkIndex,
+                strategy: strategy,
+                chunkSamples: chunkSamples,
+                stride: stride,
+                totalLength: totalLength,
+                incremental: &incremental,
+                output: &output,
+                streamedOutput: &streamedOutput
+            )
             GPU.clearCache()
+            startIdx += stride
+            chunkIndex += 1
         }
-        
-        // Reassemble based on strategy
-        switch strategy {
-        case .noOverlap:
-            return reassembleNoOverlap(processedChunks: processedChunks, originalLength: totalLength)
-            
-        case .overlapAdd:
-            let window = MLXArray([Float](repeating: 1.0, count: chunkSamples))
-            return reassembleOverlapAdd(
-                processedChunks: processedChunks,
-                chunkSamples: chunkSamples,
-                stride: stride,
-                window: window,
-                originalLength: totalLength
-            )
-            
-        case .triangular:
-            let window = triangularWindow(length: chunkSamples)
-            return reassembleOverlapAdd(
-                processedChunks: processedChunks,
-                chunkSamples: chunkSamples,
-                stride: stride,
-                window: window,
-                originalLength: totalLength
-            )
-            
-        case .hann:
-            let window = hannWindow(length: chunkSamples)
-            return reassembleOverlapAdd(
-                processedChunks: processedChunks,
-                chunkSamples: chunkSamples,
-                stride: stride,
-                window: window,
-                originalLength: totalLength
-            )
-            
-        case .discardEdges:
-            let giveUp = overlapSamples / 2
-            return reassembleDiscardEdges(
-                processedChunks: processedChunks,
-                chunkSamples: chunkSamples,
-                stride: stride,
-                giveUp: giveUp,
-                originalLength: totalLength
-            )
+
+        if var incremental {
+            streamedOutput.append(contentsOf: incremental.finish())
+            if streamedOutput.count < totalLength {
+                streamedOutput.append(contentsOf: repeatElement(0, count: totalLength - streamedOutput.count))
+            }
+            return MLXArray(Array(streamedOutput.prefix(totalLength)))
         }
+        return MLXArray(output)
     }
     
     // MARK: - Dual Output Processing (for background extraction)
@@ -317,78 +326,161 @@ public struct MLXOverlap {
         strategy: OverlapStrategy,
         processChunk: (MLXArray) async throws -> (MLXArray, MLXArray)
     ) async throws -> (MLXArray, MLXArray) {
+        guard chunkSamples > 0, overlapRatio >= 0, overlapRatio < 1 else {
+            throw AudioToolError.pipelineConfigurationInvalid(
+                "Chunk size must be positive and overlap must be in [0, 1)"
+            )
+        }
         eval(audio)
         let totalLength = audio.shape[0]
-        let overlapSamples = Int(Float(chunkSamples) * overlapRatio)
+        guard totalLength > 0 else { return (MLXArray.zeros([0]), MLXArray.zeros([0])) }
+        let overlapSamples = strategy == .noOverlap ? 0 : Int(Float(chunkSamples) * overlapRatio)
         let stride = chunkSamples - overlapSamples
-        
-        // Split into chunks
-        let inputChunks = split(
-            audio: audio,
+        let window = windowArray(for: strategy, length: chunkSamples)
+        var enhancedIncremental = window.map {
+            IncrementalOverlapAdd(chunkSamples: chunkSamples, stride: stride, window: $0, totalLength: totalLength)
+        }
+        var backgroundIncremental = window.map {
+            IncrementalOverlapAdd(chunkSamples: chunkSamples, stride: stride, window: $0, totalLength: totalLength)
+        }
+        var enhancedOutput = window == nil ? [Float](repeating: 0, count: totalLength) : []
+        var backgroundOutput = window == nil ? [Float](repeating: 0, count: totalLength) : []
+        var enhancedStreamed: [Float] = []
+        var backgroundStreamed: [Float] = []
+        if window != nil {
+            enhancedStreamed.reserveCapacity(totalLength)
+            backgroundStreamed.reserveCapacity(totalLength)
+        }
+
+        var startIdx = 0
+        var chunkIndex = 0
+        while shouldProcessChunk(
+            startIdx: startIdx,
+            totalLength: totalLength,
             chunkSamples: chunkSamples,
             stride: stride,
-            forDiscardEdges: strategy == .discardEdges
-        )
-        
-        // Process each chunk - collect both outputs
-        var enhancedChunks: [(chunk: MLXArray, startIdx: Int)] = []
-        var backgroundChunks: [(chunk: MLXArray, startIdx: Int)] = []
-        
-        for (chunk, startIdx) in inputChunks {
+            strategy: strategy
+        ) {
+            try Task.checkCancellation()
+            let chunk = paddedChunk(audio, startIdx: startIdx, length: chunkSamples)
             let (enhanced, background) = try await processChunk(chunk)
             eval(enhanced, background)
-            enhancedChunks.append((enhanced, startIdx))
-            backgroundChunks.append((background, startIdx))
-            
-            // Clear GPU cache between chunks to reduce peak memory
+            consume(
+                enhanced.asArray(Float.self),
+                startIdx: startIdx,
+                chunkIndex: chunkIndex,
+                strategy: strategy,
+                chunkSamples: chunkSamples,
+                stride: stride,
+                totalLength: totalLength,
+                incremental: &enhancedIncremental,
+                output: &enhancedOutput,
+                streamedOutput: &enhancedStreamed
+            )
+            consume(
+                background.asArray(Float.self),
+                startIdx: startIdx,
+                chunkIndex: chunkIndex,
+                strategy: strategy,
+                chunkSamples: chunkSamples,
+                stride: stride,
+                totalLength: totalLength,
+                incremental: &backgroundIncremental,
+                output: &backgroundOutput,
+                streamedOutput: &backgroundStreamed
+            )
             GPU.clearCache()
+            startIdx += stride
+            chunkIndex += 1
         }
-        
-        // Reassemble both using the same strategy
-        let reassembledEnhanced: MLXArray
-        let reassembledBackground: MLXArray
-        
+
+        if var enhancedIncremental, var backgroundIncremental {
+            enhancedStreamed.append(contentsOf: enhancedIncremental.finish())
+            backgroundStreamed.append(contentsOf: backgroundIncremental.finish())
+            return (
+                MLXArray(Array(enhancedStreamed.prefix(totalLength))),
+                MLXArray(Array(backgroundStreamed.prefix(totalLength)))
+            )
+        }
+        return (MLXArray(enhancedOutput), MLXArray(backgroundOutput))
+    }
+
+    private static func windowArray(for strategy: OverlapStrategy, length: Int) -> [Float]? {
         switch strategy {
-        case .discardEdges:
-            let giveUp = overlapSamples / 2
-            reassembledEnhanced = reassembleDiscardEdges(
-                processedChunks: enhancedChunks,
-                chunkSamples: chunkSamples,
-                stride: stride,
-                giveUp: giveUp,
-                originalLength: totalLength
-            )
-            reassembledBackground = reassembleDiscardEdges(
-                processedChunks: backgroundChunks,
-                chunkSamples: chunkSamples,
-                stride: stride,
-                giveUp: giveUp,
-                originalLength: totalLength
-            )
-            
+        case .noOverlap, .discardEdges:
+            return nil
+        case .overlapAdd:
+            return [Float](repeating: 1, count: length)
         case .triangular:
-            let window = triangularWindow(length: chunkSamples)
-            reassembledEnhanced = reassembleOverlapAdd(
-                processedChunks: enhancedChunks,
-                chunkSamples: chunkSamples,
-                stride: stride,
-                window: window,
-                originalLength: totalLength
-            )
-            reassembledBackground = reassembleOverlapAdd(
-                processedChunks: backgroundChunks,
-                chunkSamples: chunkSamples,
-                stride: stride,
-                window: window,
-                originalLength: totalLength
-            )
-            
-        default:  // noOverlap, overlapAdd, hann
-            reassembledEnhanced = reassembleNoOverlap(processedChunks: enhancedChunks, originalLength: totalLength)
-            reassembledBackground = reassembleNoOverlap(processedChunks: backgroundChunks, originalLength: totalLength)
+            return triangularWindow(length: length).asArray(Float.self)
+        case .hann:
+            return hannWindow(length: length).asArray(Float.self)
         }
-        
-        return (reassembledEnhanced, reassembledBackground)
+    }
+
+    private static func shouldProcessChunk(
+        startIdx: Int,
+        totalLength: Int,
+        chunkSamples: Int,
+        stride: Int,
+        strategy: OverlapStrategy
+    ) -> Bool {
+        guard startIdx > 0 else { return totalLength > 0 }
+        if strategy == .discardEdges {
+            return startIdx + chunkSamples <= totalLength + stride
+        }
+        return startIdx < totalLength
+    }
+
+    private static func paddedChunk(_ audio: MLXArray, startIdx: Int, length: Int) -> MLXArray {
+        let endIdx = min(startIdx + length, audio.shape[0])
+        var chunk = audio[startIdx..<endIdx]
+        if endIdx - startIdx < length {
+            chunk = concatenated([chunk, MLXArray.zeros([length - (endIdx - startIdx)])], axis: 0)
+        }
+        eval(chunk)
+        return chunk
+    }
+
+    private static func consume(
+        _ samples: [Float],
+        startIdx: Int,
+        chunkIndex: Int,
+        strategy: OverlapStrategy,
+        chunkSamples: Int,
+        stride: Int,
+        totalLength: Int,
+        incremental: inout IncrementalOverlapAdd?,
+        output: inout [Float],
+        streamedOutput: inout [Float]
+    ) {
+        if var assembler = incremental {
+            streamedOutput.append(contentsOf: assembler.add(samples, startIdx: startIdx))
+            incremental = assembler
+            return
+        }
+
+        switch strategy {
+        case .noOverlap:
+            let count = min(samples.count, max(0, totalLength - startIdx))
+            guard count > 0 else { return }
+            output.replaceSubrange(startIdx..<(startIdx + count), with: samples.prefix(count))
+        case .discardEdges:
+            let giveUp = (chunkSamples - stride) / 2
+            let keepStart = chunkIndex == 0 ? 0 : giveUp
+            let outputStart = chunkIndex == 0 ? 0 : startIdx + giveUp
+            let nominalEnd = startIdx + chunkSamples - giveUp
+            let outputEnd = min(nominalEnd, totalLength)
+            guard outputEnd > outputStart else { return }
+            let count = min(outputEnd - outputStart, max(0, samples.count - keepStart))
+            guard count > 0 else { return }
+            output.replaceSubrange(
+                outputStart..<(outputStart + count),
+                with: samples[keepStart..<(keepStart + count)]
+            )
+        case .overlapAdd, .triangular, .hann:
+            break
+        }
     }
 }
 
@@ -463,10 +555,22 @@ public struct IncrementalOverlapAdd: Sendable {
         let contributionCount = min(min(chunk.count, chunkSamples),
                                     max(0, totalLength - startIdx))
         let offset = startIdx - emittedCount
+        // All incremental producers advance by `stride` while their start is
+        // below `totalLength`; this is the actual final produced start, unlike
+        // `startIdx + chunkSamples >= totalLength`, which can be true for several
+        // overlapping chunks.
+        let isFinalChunk = startIdx + stride >= totalLength
         for i in 0..<contributionCount {
             let position = offset + i
             guard position >= 0, position < accumulator.count else { continue }
-            let weight = i < window.count ? window[i] : 1.0
+            var weight = i < window.count ? window[i] : 1.0
+            if startIdx == 0 && i < stride {
+                weight = 1
+            }
+            if isFinalChunk,
+               i >= max(0, chunkSamples - stride) {
+                weight = 1
+            }
             accumulator[position] += weight * chunk[i]
             weights[position] += weight
         }

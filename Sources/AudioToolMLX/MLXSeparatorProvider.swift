@@ -124,19 +124,18 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         if let path = weightsPath {
             resolvedPath = path
         } else {
+            let requiredFiles = ModelFiles.standard(precision)
             // Check if already downloaded
-            if let cached = ModelDownloader.shared.localPath(for: modelType.huggingFaceRepo) {
-                let modelPath = cached.appendingPathComponent(precision.weightsFilename).path
-                if FileManager.default.fileExists(atPath: modelPath) {
-                    resolvedPath = modelPath
-                } else {
-                    throw AudioToolError.modelNotFound("Precision \(precision.rawValue) not available for \(modelType.rawValue)")
-                }
+            if let cached = ModelDownloader.shared.localPath(
+                for: modelType.huggingFaceRepo,
+                matching: requiredFiles
+            ) {
+                resolvedPath = cached.appendingPathComponent(precision.weightsFilename).path
             } else {
                 // Auto-download from HuggingFace
                 let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
                     repo: modelType.huggingFaceRepo,
-                    matching: [precision.weightsFilename, "config.json"]
+                    matching: requiredFiles
                 )
                 resolvedPath = modelDir.appendingPathComponent(precision.weightsFilename).path
             }
@@ -147,8 +146,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         try model?.update(parameters: nestedWeights, verify: .all)
     }
     
-    /// Separate mixed audio into speaker streams
-    /// Output is RMS-normalized to match input energy (AudioTool PyTorch behavior)
+    /// Separate mixed audio into speaker streams.
     public func separate(_ audio: AudioBuffer) async throws -> [AudioBuffer] {
         try await separate(audio, onProgress: nil)
     }
@@ -175,33 +173,46 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
             results = try await processChunk(audio.samples)
         }
         
-        // RMS normalization: match output energy to input energy (AudioTool PyTorch behavior)
-        // This preserves the relative loudness of each separated source
-        let inputRMS = sqrt(audio.samples.map { $0 * $0 }.reduce(0, +) / Float(audio.samples.count))
-        
-        let normalized = results.map { buffer in
-            let samples = buffer.samples
-            let outputRMS = sqrt(samples.map { $0 * $0 }.reduce(0, +) / Float(samples.count))
-            
-            // Scale output to match input RMS (energy preservation)
-            let scale = outputRMS > 1e-8 ? inputRMS / outputRMS : 1.0
-            var scaled = samples.map { $0 * scale }
-            
-            // Clip if needed to prevent overflow
-            let maxVal = scaled.map { abs($0) }.max() ?? 0.0
-            if maxVal > 1.0 {
-                scaled = scaled.map { $0 / maxVal }
-            }
-            
-            return AudioBuffer(
-                samples: scaled,
-                sampleRate: buffer.sampleRate,
-                channels: buffer.channels
-            )
+        // Project the estimates back onto the mixture. Applying an independent
+        // RMS gain to every source makes a quiet speaker as loud as a dominant
+        // one and destroys the model's relative gains. Mixture consistency shares
+        // only the residual equally and guarantees sum(sources) == input.
+        let consistent = Self.enforceMixtureConsistency(
+            mixture: audio.samples,
+            sources: results.map(\.samples)
+        )
+        let corrected = zip(results, consistent).map { buffer, samples in
+            AudioBuffer(samples: samples, sampleRate: buffer.sampleRate, channels: buffer.channels)
         }
         
         await onProgress?(100.0)
-        return normalized
+        return corrected
+    }
+
+    internal static func enforceMixtureConsistency(
+        mixture: [Float],
+        sources: [[Float]]
+    ) -> [[Float]] {
+        guard !sources.isEmpty else { return [] }
+        var corrected = sources.map { source -> [Float] in
+            if source.count == mixture.count { return source }
+            if source.count > mixture.count { return Array(source.prefix(mixture.count)) }
+            return source + [Float](repeating: 0, count: mixture.count - source.count)
+        }
+        guard !mixture.isEmpty else { return corrected }
+
+        let sourceCount = Float(corrected.count)
+        for index in mixture.indices {
+            var estimate: Float = 0
+            for source in corrected {
+                estimate += source[index]
+            }
+            let correction = (mixture[index] - estimate) / sourceCount
+            for sourceIndex in corrected.indices {
+                corrected[sourceIndex][index] += correction
+            }
+        }
+        return corrected
     }
     
     
@@ -213,34 +224,47 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         }
         
         let chunkingConfig = ChunkingConfig.mossformer2SS(sampleRate: sampleRate)
-        let inputMLX = MLXArray(input.samples)
-        
-        // Split into chunks using MLXOverlap
-        let chunks = MLXOverlap.split(
-            audio: inputMLX,
-            chunkSamples: chunkingConfig.chunkSamples,
-            stride: chunkingConfig.strideSamples
-        )
-        
-        let totalChunks = chunks.count
-        
-        // Process each chunk through model - collect all speaker outputs
-        // Each chunk produces [numSpeakers] outputs
-        var speakerChunks: [[(chunk: MLXArray, startIdx: Int)]] = Array(
-            repeating: [],
+        let chunkSamples = chunkingConfig.chunkSamples
+        let stride = chunkingConfig.strideSamples
+        let totalLength = input.samples.count
+        let totalChunks = max(1, (totalLength + stride - 1) / stride)
+        let window = MLXOverlap.triangularWindow(length: chunkSamples).asArray(Float.self)
+        var assemblers = (0..<modelType.numSpeakers).map { _ in
+            IncrementalOverlapAdd(
+                chunkSamples: chunkSamples,
+                stride: stride,
+                window: window,
+                totalLength: totalLength
+            )
+        }
+        var speakerOutputs = Array(
+            repeating: [Float](),
             count: modelType.numSpeakers
         )
-        
-        for (chunkIdx, (chunk, startIdx)) in chunks.enumerated() {
+        for index in speakerOutputs.indices {
+            speakerOutputs[index].reserveCapacity(totalLength)
+        }
+
+        var chunkIdx = 0
+        var startIdx = 0
+        while startIdx < totalLength {
+            try Task.checkCancellation()
+            let endIdx = min(startIdx + chunkSamples, totalLength)
+            var chunkArray = Array(input.samples[startIdx..<endIdx])
+            if chunkArray.count < chunkSamples {
+                chunkArray.append(contentsOf: repeatElement(0, count: chunkSamples - chunkArray.count))
+            }
+            let chunk = MLXArray(chunkArray)
             // Run model: input [1, T] -> outputs [numSpeakers x [1, T]]
             let batchedChunk = chunk.expandedDimensions(axis: 0)
             let separatedSources = model(batchedChunk)
             eval(separatedSources)
             
-            // Distribute outputs to per-speaker chunk arrays
             for (spkIdx, source) in separatedSources.enumerated() {
-                let squeezed = source.squeezed(axis: 0)
-                speakerChunks[spkIdx].append((squeezed, startIdx))
+                guard spkIdx < assemblers.count else { break }
+                let samples = source.squeezed(axis: 0).asArray(Float.self)
+                let ready = assemblers[spkIdx].add(samples, startIdx: startIdx)
+                speakerOutputs[spkIdx].append(contentsOf: ready)
             }
             
             // Clear GPU cache between chunks to reduce peak memory
@@ -249,22 +273,21 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
             // Report progress (0-90% for chunking, 90-100% for reassembly)
             let percent = Double(chunkIdx + 1) / Double(totalChunks) * 90.0
             await onProgress?(percent)
+            startIdx += stride
+            chunkIdx += 1
         }
         
-        // Reassemble each speaker's audio using triangular blending
-        let window = MLXOverlap.triangularWindow(length: chunkingConfig.chunkSamples)
         var results: [AudioBuffer] = []
         for spkIdx in 0..<modelType.numSpeakers {
-            let reassembled = MLXOverlap.reassembleOverlapAdd(
-                processedChunks: speakerChunks[spkIdx],
-                chunkSamples: chunkingConfig.chunkSamples,
-                stride: chunkingConfig.strideSamples,
-                window: window,
-                originalLength: input.samples.count
-            )
-            eval(reassembled)
+            speakerOutputs[spkIdx].append(contentsOf: assemblers[spkIdx].finish())
+            if speakerOutputs[spkIdx].count < totalLength {
+                speakerOutputs[spkIdx].append(contentsOf: repeatElement(
+                    0,
+                    count: totalLength - speakerOutputs[spkIdx].count
+                ))
+            }
             results.append(AudioBuffer(
-                samples: reassembled.asArray(Float.self),
+                samples: Array(speakerOutputs[spkIdx].prefix(totalLength)),
                 sampleRate: sampleRate,
                 channels: 1
             ))
@@ -378,8 +401,10 @@ public actor DemucsProvider: MusicSeparator {
         if let directory = weightsDirectory { return directory }
 
         let wanted = stems.map { ModelFiles.demucsStem($0.rawValue) }
-        if let cached = ModelDownloader.shared.localPath(for: Self.repo),
-           wanted.allSatisfy({ FileManager.default.fileExists(atPath: cached.appendingPathComponent($0).path) }) {
+        if let cached = ModelDownloader.shared.localPath(
+            for: Self.repo,
+            matching: wanted
+        ) {
             return cached.path
         }
         let modelDir = try await ModelDownloader.shared.downloadAndGetPath(

@@ -73,6 +73,12 @@ public actor ModelResidency {
     
     /// Memory limit in bytes
     public let memoryLimitBytes: Int
+
+    /// Whether one model may exceed the normal combined residency budget. Some
+    /// providers (notably translation LLMs) are individually larger than the
+    /// default budget; admitting one as the sole idle resident keeps the budget
+    /// useful for eviction without making those providers impossible to use.
+    public let allowsOversizedSingleton: Bool
     
     /// Loaded models keyed by modelId
     private var loadedModels: [String: LoadedModelEntry] = [:]
@@ -90,10 +96,17 @@ public actor ModelResidency {
     
     // MARK: - Initialization
     
-    /// Create a manager with specified memory limit
-    /// - Parameter memoryLimitBytes: Maximum combined memory for all loaded models (default: 2GB)
-    public init(memoryLimitBytes: Int = 2_000_000_000) {
+    /// Create a manager with a specified normal residency budget.
+    /// - Parameters:
+    ///   - memoryLimitBytes: Maximum combined memory for ordinary loaded models (default: 2GB).
+    ///   - allowsOversizedSingleton: Permit a single model larger than the budget,
+    ///     evicting other idle models to make it the sole resident (default: true).
+    public init(
+        memoryLimitBytes: Int = 2_000_000_000,
+        allowsOversizedSingleton: Bool = true
+    ) {
         self.memoryLimitBytes = memoryLimitBytes
+        self.allowsOversizedSingleton = allowsOversizedSingleton
     }
     
     // MARK: - Core Operations
@@ -139,9 +152,11 @@ public actor ModelResidency {
             loadedModels.removeValue(forKey: modelId)
         }
 
-        // Preflight check: reject models that exceed memory limit entirely
+        // Strict managers reject a model that can never fit. The default policy
+        // instead admits it as an oversized singleton; TranslateGemma is larger
+        // than AudioEngine's normal 2 GB residency budget.
         let requiredMemory = model.estimatedMemoryBytes
-        if requiredMemory > memoryLimitBytes {
+        if requiredMemory > memoryLimitBytes, !allowsOversizedSingleton {
             throw AudioToolError.memoryExhausted(
                 required: requiredMemory,
                 available: memoryLimitBytes
@@ -183,7 +198,7 @@ public actor ModelResidency {
     public func endUse(_ modelId: String) async {
         releaseUse(modelId)
         guard activeUseCounts[modelId] == nil else { return }  // still claimed elsewhere
-        await evict(downTo: memoryLimitBytes)
+        await evict(downTo: idleResidencyLimit)
     }
 
     private func releaseUse(_ modelId: String) {
@@ -292,7 +307,19 @@ public actor ModelResidency {
     
     /// Evict least-recently-used models to make room for a model about to load.
     private func evictIfNeeded(forNewMemory requiredBytes: Int) async {
-        await evict(downTo: memoryLimitBytes - requiredBytes)
+        let admissionLimit = allowsOversizedSingleton
+            ? max(memoryLimitBytes, requiredBytes)
+            : memoryLimitBytes
+        await evict(downTo: max(0, admissionLimit - requiredBytes))
+    }
+
+    /// Preserve at most one over-budget idle model. If multiple models are
+    /// resident, LRU eviction brings their combined footprint down to the larger
+    /// of the configured budget and the largest single model.
+    private var idleResidencyLimit: Int {
+        guard allowsOversizedSingleton else { return memoryLimitBytes }
+        let largestModel = loadedModels.values.map(\.memoryBytes).max() ?? 0
+        return max(memoryLimitBytes, largestModel)
     }
 
     /// Evict least-recently-used models until usage is at or below `targetUsage`.

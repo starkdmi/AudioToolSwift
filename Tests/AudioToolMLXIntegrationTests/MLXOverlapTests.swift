@@ -187,7 +187,8 @@ final class MLXOverlapTests: MLXTestCase {
     }
     
     func testProcessWithChunkingAllStrategies() async throws {
-        // Test all strategies don't crash and produce correct length output
+        // Identity processing must preserve every sample, including window edges
+        // and the padded tail.
         let audio = MLXArray([Float](repeating: 1.0, count: 1000))
         
         for strategy in [OverlapStrategy.noOverlap, .overlapAdd, .triangular, .hann, .discardEdges] {
@@ -203,7 +204,68 @@ final class MLXOverlapTests: MLXTestCase {
             
             let resultArray = result.asArray(Float.self)
             XCTAssertEqual(resultArray.count, 1000, "Strategy \(strategy) produced wrong length")
+            for (index, value) in resultArray.enumerated() {
+                XCTAssertEqual(value, 1, accuracy: 1e-6,
+                               "Strategy \(strategy) changed identity sample \(index)")
+            }
         }
+    }
+
+    func testDiscardEdgesProcessesAudioShorterThanItsDiscardMargin() async throws {
+        let audio = MLXArray(Array(0..<10).map(Float.init))
+        let result = try await MLXOverlap.processWithChunking(
+            audio: audio,
+            chunkSamples: 300,
+            overlapRatio: 0.25,
+            strategy: .discardEdges
+        ) { $0 }
+        eval(result)
+        XCTAssertEqual(result.asArray(Float.self), audio.asArray(Float.self))
+    }
+
+    func testDualOutputHonorsEveryStrategy() async throws {
+        let audio = MLXArray([Float](repeating: 1, count: 1000))
+        for strategy in [OverlapStrategy.noOverlap, .overlapAdd, .triangular, .hann, .discardEdges] {
+            let (first, second) = try await MLXOverlap.processWithChunkingDual(
+                audio: audio,
+                chunkSamples: 300,
+                overlapRatio: strategy == .noOverlap ? 0 : 0.25,
+                strategy: strategy
+            ) { chunk in
+                (chunk, chunk * 2)
+            }
+            eval(first, second)
+            let firstSamples = first.asArray(Float.self)
+            let secondSamples = second.asArray(Float.self)
+            XCTAssertEqual(firstSamples.count, 1000)
+            XCTAssertEqual(secondSamples.count, 1000)
+            for index in 0..<1000 {
+                XCTAssertEqual(firstSamples[index], 1, accuracy: 1e-6,
+                               "First output failed for \(strategy) at \(index)")
+                XCTAssertEqual(secondSamples[index], 2, accuracy: 1e-6,
+                               "Second output failed for \(strategy) at \(index)")
+            }
+        }
+    }
+
+    func testMixtureConsistencyPreservesRelativeSourceGain() {
+        let mixture: [Float] = [0.6, -0.3, 0.9]
+        let sources: [[Float]] = [
+            [0.1, -0.05, 0.15],
+            [0.4, -0.2, 0.6],
+        ]
+        let corrected = MossFormer2SSProvider.enforceMixtureConsistency(
+            mixture: mixture,
+            sources: sources
+        )
+
+        XCTAssertEqual(corrected.count, 2)
+        for index in mixture.indices {
+            XCTAssertEqual(corrected[0][index] + corrected[1][index], mixture[index], accuracy: 1e-6)
+        }
+        // A quiet estimate stays quieter; it is not independently raised to the
+        // mixture RMS.
+        XCTAssertLessThan(abs(corrected[0][0]), abs(corrected[1][0]))
     }
     
     // MARK: - Edge Cases

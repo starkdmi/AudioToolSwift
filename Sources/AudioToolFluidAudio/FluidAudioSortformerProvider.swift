@@ -182,6 +182,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         guard let diarizer = diarizer, diarizer.isAvailable else {
             throw AudioToolError.modelNotLoaded("FluidAudio Sortformer")
         }
+        try validateInputFormat(audio)
         
         return try diarizeInternal(samples: audio.samples)
     }
@@ -356,6 +357,7 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         guard let diarizer = diarizer, diarizer.isAvailable else {
             throw AudioToolError.modelNotLoaded("FluidAudio Sortformer")
         }
+        try validateInputChannels(audio)
         
         // Resample to 16kHz if needed (e.g., from 8kHz WHAMR output)
         let inputSamples: [Float]

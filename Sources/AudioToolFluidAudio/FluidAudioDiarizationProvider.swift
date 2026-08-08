@@ -87,6 +87,7 @@ public actor FluidAudioDiarizationProvider: DiarizationProvider {
         guard let manager = manager else {
             throw AudioToolError.modelNotLoaded("FluidAudio Diarization")
         }
+        try validateInputFormat(audio)
         
         let result = try await manager.process(audio: audio.samples)
         

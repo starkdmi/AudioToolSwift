@@ -31,6 +31,9 @@ public enum AudioToolError: Error, Sendable {
     
     /// Sample rate mismatch
     case sampleRateMismatch(expected: Int, found: Int)
+
+    /// Channel count mismatch
+    case channelCountMismatch(expected: Int, found: Int)
     
     /// Empty audio buffer
     case emptyAudioBuffer
@@ -86,6 +89,8 @@ extension AudioToolError: LocalizedError {
             return "Invalid audio format. Expected: \(expected), Found: \(found)"
         case .sampleRateMismatch(let expected, let found):
             return "Sample rate mismatch. Expected: \(expected)Hz, Found: \(found)Hz"
+        case .channelCountMismatch(let expected, let found):
+            return "Channel count mismatch. Expected: \(expected), Found: \(found)"
         case .emptyAudioBuffer:
             return "Audio buffer is empty"
         case .audioFileNotFound(let url):

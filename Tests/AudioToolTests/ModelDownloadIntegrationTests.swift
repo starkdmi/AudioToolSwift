@@ -68,7 +68,7 @@ struct ModelDownloadIntegrationTests {
         }
         
         // Model should now be marked as downloaded
-        let isDownloaded = ModelDownloader.shared.isDownloaded(repo: variant.repo)
+        let isDownloaded = ModelDownloader.shared.isDownloaded(variant: variant)
         #expect(isDownloaded == true)
         
         print("✓ Download completed successfully")
@@ -96,7 +96,7 @@ struct ModelDownloadIntegrationTests {
         _ = try await DownloadCoordinator.shared.downloadAndGetPath(variant: variant)
         
         // Check local path
-        let localPath = ModelDownloader.shared.localPath(for: variant.repo)
+        let localPath = ModelDownloader.shared.localPath(for: variant)
         #expect(localPath != nil)
         
         if let path = localPath {
@@ -128,14 +128,14 @@ struct ModelDownloadIntegrationTests {
         print("1. Downloading \(variant.name)...")
         _ = try await DownloadCoordinator.shared.downloadAndGetPath(variant: variant)
         
-        #expect(ModelDownloader.shared.isDownloaded(repo: variant.repo) == true)
+        #expect(ModelDownloader.shared.isDownloaded(variant: variant) == true)
         print("   ✓ Downloaded")
         
         print("2. Deleting...")
         try await DownloadCoordinator.shared.delete(variant: variant)
         
         // Verify deleted
-        let stillExists = ModelDownloader.shared.isDownloaded(repo: variant.repo)
+        let stillExists = ModelDownloader.shared.isDownloaded(variant: variant)
         #expect(stillExists == false)
         print("   ✓ Deleted")
     }
@@ -223,7 +223,7 @@ struct ModelDownloadIntegrationTests {
             
             _ = try await DownloadCoordinator.shared.downloadAndGetPath(variant: variant)
             
-            #expect(ModelDownloader.shared.isDownloaded(repo: variant.repo))
+            #expect(ModelDownloader.shared.isDownloaded(variant: variant))
         }
         
         print("✓ All \(variants.count) models downloaded")

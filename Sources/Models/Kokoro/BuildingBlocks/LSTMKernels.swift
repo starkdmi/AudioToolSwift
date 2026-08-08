@@ -9,16 +9,10 @@ import MLX
 
 /// Provides optimized Metal kernels for LSTM operations
 public enum LSTMKernels {
-  
-  /// Cached kernel for fused LSTM gate computation
-  nonisolated(unsafe) private static var fusedGatesKernel: MLXFast.MLXFastKernel?
-  
-  /// Creates the fused LSTM gates kernel if not already cached
-  private static func getFusedGatesKernel() -> MLXFast.MLXFastKernel {
-    if let kernel = fusedGatesKernel {
-      return kernel
-    }
-    
+
+  /// Static initialization is synchronized by the Swift runtime. The kernel is
+  /// immutable after construction and therefore needs no unsafe shared state.
+  private static let fusedGatesKernel: MLXFast.MLXFastKernel = {
     // Create kernel that computes:
     // i = sigmoid(gates[0:H])
     // f = sigmoid(gates[H:2H])
@@ -61,17 +55,14 @@ public enum LSTMKernels {
       }
     """
     
-    let kernel = MLXFast.metalKernel(
+    return MLXFast.metalKernel(
       name: "fused_lstm_step",
       inputNames: ["ifgo", "cell"],
       outputNames: ["new_cell", "new_hidden"],
       source: source,
       ensureRowContiguous: true
     )
-    
-    fusedGatesKernel = kernel
-    return kernel
-  }
+  }()
   
   /// Computes a single LSTM step with fused gate operations
   /// - Parameters:
@@ -79,7 +70,7 @@ public enum LSTMKernels {
   ///   - cell: Current cell state [batch, hidden_size]
   /// - Returns: Tuple of (new_cell, new_hidden)
   public static func fusedLSTMStep(ifgo: MLXArray, cell: MLXArray) -> (MLXArray, MLXArray)? {
-    let kernel = getFusedGatesKernel()
+    let kernel = fusedGatesKernel
     
     let batchSize = cell.shape[0]
     let hiddenSize = cell.shape[1]
