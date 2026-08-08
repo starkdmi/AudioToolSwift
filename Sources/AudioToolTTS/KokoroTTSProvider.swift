@@ -72,7 +72,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     // MARK: - Public Properties
     
     /// Base HuggingFace repository (without precision suffix)
-    public static let baseRepo = "mlx-community/Kokoro-82M"
+    public static let baseRepo = ModelRepository.kokoroBase
     
     /// Default precision
     public static let defaultPrecision: ModelPrecision = .bf16
@@ -98,6 +98,7 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     
     private var tts: KokoroTTS?
     private var modelPath: URL?
+    private var loadGeneration: UInt64 = 0
     private nonisolated let language: KokoroLanguage
     private nonisolated let repo: String
     private nonisolated let precision: ModelPrecision
@@ -164,20 +165,23 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     
     /// Load model, downloading if necessary
     public func load() async throws {
+        loadGeneration &+= 1
+        let generation = loadGeneration
+
         // Check for explicit path first
         if let path = modelPath {
-            try await loadFromPath(path)
+            try await loadFromPath(path, generation: generation)
             return
         }
 
-        let requiredFiles = ["*.safetensors", "voices/*.npy", "config.json"]
+        let requiredFiles = ModelFiles.kokoro
         
         // Check if already downloaded
         if let cached = ModelDownloader.shared.localPath(
             for: repo,
             matching: requiredFiles
         ) {
-            try await loadFromPath(cached)
+            try await loadFromPath(cached, generation: generation)
             return
         }
         
@@ -189,23 +193,29 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
                 repo: repo,
                 matching: requiredFiles
             ) { [weak self] progress in
-                Task { @MainActor in
-                    await self?.updateState(.downloading(progress: progress.fractionCompleted))
+                Task {
+                    await self?.updateDownloadProgress(
+                        progress.fractionCompleted,
+                        generation: generation
+                    )
                 }
             }
             
-            try await loadFromPath(path)
+            try await loadFromPath(path, generation: generation)
         } catch {
-            tts = nil
-            voiceEmbeddings.removeAll()
-            GPU.clearCache()
-            updateState(.failed(error.localizedDescription))
+            if generation == loadGeneration {
+                tts = nil
+                voiceEmbeddings.removeAll()
+                GPU.clearCache()
+                updateState(.failed(error.localizedDescription))
+            }
             throw error
         }
     }
     
     /// Load from a specific path (can be file or directory)
-    private func loadFromPath(_ path: URL) async throws {
+    private func loadFromPath(_ path: URL, generation: UInt64) async throws {
+        guard generation == loadGeneration else { throw CancellationError() }
         updateState(.loading)
         
         do {
@@ -228,7 +238,9 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
             }
             
             // KokoroSwift uses .misaki G2P by default (MIT license, no ESpeakNG)
-            tts = KokoroTTS(modelPath: weightsPath, g2p: .misaki)
+            let candidate = try KokoroTTS(modelPath: weightsPath, g2p: .misaki)
+            guard generation == loadGeneration else { throw CancellationError() }
+            tts = candidate
             modelPath = path
             voiceEmbeddings.removeAll(keepingCapacity: true)
             
@@ -245,12 +257,15 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
                 _ = try loadVoice(from: source, retainForReload: false)
             }
             
+            guard generation == loadGeneration else { throw CancellationError() }
             updateState(.ready)
         } catch {
-            tts = nil
-            voiceEmbeddings.removeAll()
-            GPU.clearCache()
-            updateState(.failed(error.localizedDescription))
+            if generation == loadGeneration {
+                tts = nil
+                voiceEmbeddings.removeAll()
+                GPU.clearCache()
+                updateState(.failed(error.localizedDescription))
+            }
             throw error
         }
     }
@@ -260,6 +275,18 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     private func updateState(_ newState: ModelState) {
         state = newState
         stateBroadcaster.send(newState)
+    }
+
+    private func updateDownloadProgress(_ progress: Double, generation: UInt64) {
+        guard progress.isFinite else { return }
+        let clampedProgress = min(1, max(0, progress))
+        guard ModelLoadStateGate.acceptsProgress(
+            clampedProgress,
+            generation: generation,
+            currentGeneration: loadGeneration,
+            state: state
+        ) else { return }
+        updateState(.downloading(progress: clampedProgress))
     }
     
     // MARK: - Voice Loading
@@ -487,6 +514,7 @@ extension KokoroTTSProvider: ManagedModel {
     public func checkIfLoaded() async -> Bool { tts != nil }
 
     public func unload() async {
+        loadGeneration &+= 1
         tts = nil
         voiceEmbeddings.removeAll()
         // `customVoiceSources` is durable configuration and is intentionally

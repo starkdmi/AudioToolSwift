@@ -116,7 +116,12 @@ public actor ModelDownloader {
         matching globs: [String] = ["*.safetensors", "config.json"],
         progress: @escaping @Sendable (DownloadProgress) -> Void = { _ in }
     ) async throws -> URL {
-        try await RepositoryCacheAccess.shared.withExclusiveAccess(to: repo) {
+        guard Self.repositoryComponents(for: repo) != nil else {
+            throw AudioToolError.modelNotFound(
+                "Invalid HuggingFace repository identifier '\(repo)'. Expected 'owner/name'."
+            )
+        }
+        return try await RepositoryCacheAccess.shared.withExclusiveAccess(to: repo) {
             try Task.checkCancellation()
             return try await HubApi.shared.snapshot(
                 from: Hub.Repo(id: repo),
@@ -153,9 +158,11 @@ public actor ModelDownloader {
         localPath(for: repo, matching: globs) != nil
     }
 
-    /// Return a repository snapshot only when it contains this variant's files.
+    /// Return a repository snapshot only when it contains every file required to
+    /// load this variant. Optional owned/download files do not determine whether
+    /// an otherwise usable snapshot is installed.
     public nonisolated func localPath(for variant: ModelVariant) -> URL? {
-        localPath(for: variant.repo, matching: variant.files)
+        localPath(for: variant.repo, matching: variant.requiredFiles)
     }
 
     /// Return the highest-priority cache location containing every requested pattern.
@@ -193,32 +200,30 @@ public actor ModelDownloader {
     }
 
     private nonisolated func candidatePaths(for repo: String) -> [URL] {
+        guard let roots = Self.repositoryCacheRoots(
+            for: repo,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+        ) else { return [] }
+
         var candidates: [URL] = []
+        let containers = Self.cacheContainerRoots(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
         // Swift Hub library uses ~/Documents/huggingface/models/{owner}/{repo}
-        let repoComponents = repo.split(separator: "/")
-        if repoComponents.count == 2 {
-            let swiftHubPath = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Documents/huggingface/models")
-                .appendingPathComponent(String(repoComponents[0]))
-                .appendingPathComponent(String(repoComponents[1]))
-            if FileManager.default.fileExists(atPath: swiftHubPath.path) {
-                candidates.append(swiftHubPath)
-            }
+        if FileManager.default.fileExists(atPath: roots.swiftHub.path),
+           Self.isStrictDescendant(roots.swiftHub, of: containers[0]) {
+            candidates.append(roots.swiftHub)
         }
         
         // Python hf CLI uses ~/.cache/huggingface/hub/models--{owner}--{repo}/snapshots/{hash}
-        let repoName = repo.replacingOccurrences(of: "/", with: "--")
-        let hfCache = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub/models--\(repoName)")
-        
-        if FileManager.default.fileExists(atPath: hfCache.path) {
-            let snapshotsDir = hfCache.appendingPathComponent("snapshots")
+        if FileManager.default.fileExists(atPath: roots.pythonHub.path) {
+            let snapshotsDir = roots.pythonHub.appendingPathComponent("snapshots")
             if let snapshots = try? FileManager.default.contentsOfDirectory(
                 at: snapshotsDir,
                 includingPropertiesForKeys: [.contentModificationDateKey],
                 options: [.skipsHiddenFiles]
             ) {
-                candidates.append(contentsOf: snapshots.sorted { lhs, rhs in
+                candidates.append(contentsOf: snapshots.filter {
+                    Self.isStrictDescendant($0, of: containers[1])
+                }.sorted { lhs, rhs in
                     let left = (try? lhs.resourceValues(
                         forKeys: [.contentModificationDateKey]
                     ).contentModificationDate) ?? .distantPast
@@ -230,6 +235,66 @@ public actor ModelDownloader {
             }
         }
         return candidates
+    }
+
+    /// Parse a HuggingFace repository identifier without allowing path
+    /// components to escape either cache root. Repository IDs accepted by this
+    /// package are deliberately limited to the canonical `owner/name` form.
+    nonisolated static func repositoryComponents(
+        for repository: String
+    ) -> (owner: String, name: String)? {
+        let components = repository.split(
+            separator: "/",
+            omittingEmptySubsequences: false
+        )
+        guard components.count == 2 else { return nil }
+
+        let owner = String(components[0])
+        let name = String(components[1])
+        let invalidComponents = CharacterSet(charactersIn: "\\/")
+            .union(.controlCharacters)
+        guard !owner.isEmpty,
+              !name.isEmpty,
+              owner != ".",
+              owner != "..",
+              name != ".",
+              name != "..",
+              owner.rangeOfCharacter(from: invalidComponents) == nil,
+              name.rangeOfCharacter(from: invalidComponents) == nil
+        else { return nil }
+
+        return (owner, name)
+    }
+
+    /// Resolve the two cache locations from validated components. Keeping this
+    /// helper injectable makes the containment guarantee independently testable.
+    nonisolated static func repositoryCacheRoots(
+        for repository: String,
+        homeDirectory: URL
+    ) -> (swiftHub: URL, pythonHub: URL)? {
+        guard let components = repositoryComponents(for: repository) else {
+            return nil
+        }
+        let standardizedHome = homeDirectory.standardizedFileURL
+        let swiftModels = standardizedHome
+            .appendingPathComponent("Documents/huggingface/models", isDirectory: true)
+        let pythonModels = standardizedHome
+            .appendingPathComponent(".cache/huggingface/hub", isDirectory: true)
+        let swiftHub = swiftModels
+            .appendingPathComponent(components.owner, isDirectory: true)
+            .appendingPathComponent(components.name, isDirectory: true)
+            .standardizedFileURL
+        let pythonHub = pythonModels
+            .appendingPathComponent(
+                "models--\(components.owner)--\(components.name)",
+                isDirectory: true
+            )
+            .standardizedFileURL
+
+        guard swiftHub.path.hasPrefix(swiftModels.standardizedFileURL.path + "/"),
+              pythonHub.path.hasPrefix(pythonModels.standardizedFileURL.path + "/")
+        else { return nil }
+        return (swiftHub, pythonHub)
     }
 
     /// Test whether every requested file pattern exists below a snapshot root.
@@ -334,13 +399,18 @@ public actor ModelDownloader {
     /// - Parameter repo: Repository ID to delete
     /// - Throws: FileManager errors if deletion fails
     public func delete(repo: String) async throws {
-        try await RepositoryCacheAccess.shared.withExclusiveAccess(to: repo) { [self] in
-            guard let localPath = localPath(for: repo) else {
-                return // Not downloaded
-            }
-
-            try FileManager.default.removeItem(at: localPath)
+        guard Self.repositoryComponents(for: repo) != nil else {
+            throw AudioToolError.modelNotFound(
+                "Invalid HuggingFace repository identifier '\(repo)'. Expected 'owner/name'."
+            )
+        }
+        try await RepositoryCacheAccess.shared.withExclusiveAccess(to: repo) {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            try Self.removeRepositoryCacheEntries(for: repo, homeDirectory: home)
+            guard let roots = Self.repositoryCacheRoots(for: repo, homeDirectory: home)
+            else { return }
             Self.cleanupEmptyHuggingFaceCache(for: repo)
+            Self.cleanupEmptySwiftHubCache(for: roots.swiftHub)
         }
     }
 
@@ -350,6 +420,11 @@ public actor ModelDownloader {
         variant: ModelVariant,
         preserving siblings: [ModelVariant]
     ) async throws {
+        guard Self.repositoryComponents(for: variant.repo) != nil else {
+            throw AudioToolError.modelNotFound(
+                "Invalid HuggingFace repository identifier '\(variant.repo)'. Expected 'owner/name'."
+            )
+        }
         try await RepositoryCacheAccess.shared.withExclusiveAccess(
             to: variant.repo
         ) { [self] in
@@ -376,9 +451,10 @@ public actor ModelDownloader {
     }
 
     private nonisolated static func cleanupEmptyHuggingFaceCache(for repo: String) {
-        let repoName = repo.replacingOccurrences(of: "/", with: "--")
-        let cache = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub/models--\(repoName)")
+        guard let cache = repositoryCacheRoots(
+            for: repo,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+        )?.pythonHub else { return }
         let snapshots = cache.appendingPathComponent("snapshots")
         guard let contents = try? FileManager.default.contentsOfDirectory(
             atPath: snapshots.path
@@ -386,6 +462,13 @@ public actor ModelDownloader {
         if contents.allSatisfy({ $0.hasPrefix(".") }) {
             try? FileManager.default.removeItem(at: cache)
         }
+    }
+
+    private nonisolated static func cleanupEmptySwiftHubCache(for repository: URL) {
+        let owner = repository.deletingLastPathComponent()
+        guard (try? FileManager.default.contentsOfDirectory(atPath: owner.path).isEmpty) == true
+        else { return }
+        try? FileManager.default.removeItem(at: owner)
     }
 
     nonisolated static func deleteVariantFiles(
@@ -530,56 +613,167 @@ public actor ModelDownloader {
     /// - Parameter repo: Repository ID
     /// - Returns: Size in bytes, or 0 if not cached
     public nonisolated func cacheSize(for repo: String) -> Int64 {
-        guard let localPath = localPath(for: repo) else {
-            return 0
+        guard let roots = Self.repositoryCacheRoots(
+            for: repo,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+        ) else { return 0 }
+        return [roots.swiftHub, roots.pythonHub].reduce(0) {
+            $0 + FileManager.default.directorySize(at: $1)
         }
-        return FileManager.default.directorySize(at: localPath)
     }
     
     /// Get total size of all cached models
     /// - Returns: Total size in bytes
     public nonisolated func totalCacheSize() -> Int64 {
-        let hfCache = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub")
-        
-        guard FileManager.default.fileExists(atPath: hfCache.path) else {
-            return 0
-        }
-        
-        return FileManager.default.directorySize(at: hfCache)
+        Self.totalCacheSize(
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+        )
     }
     
     /// Clear all cached models
     /// - Throws: FileManager errors if deletion fails
     public func clearCache() throws {
-        let hfCache = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub")
-        
-        guard FileManager.default.fileExists(atPath: hfCache.path) else {
-            return
-        }
-        
-        // List all model directories
-        let contents = try FileManager.default.contentsOfDirectory(atPath: hfCache.path)
-        for item in contents where item.hasPrefix("models--") {
-            let itemPath = hfCache.appendingPathComponent(item)
-            try FileManager.default.removeItem(at: itemPath)
-        }
+        try Self.clearCache(
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+        )
     }
     
     /// List all cached repository IDs
     /// - Returns: Array of repository IDs
     public nonisolated func cachedRepositories() -> [String] {
-        let hfCache = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".cache/huggingface/hub")
-        
-        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: hfCache.path) else {
-            return []
+        Self.cachedRepositories(
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+        )
+    }
+
+
+    // MARK: - Cache Root Operations
+
+    nonisolated static func totalCacheSize(homeDirectory: URL) -> Int64 {
+        cacheContainerRoots(homeDirectory: homeDirectory).reduce(0) {
+            $0 + FileManager.default.directorySize(at: $1)
         }
-        
-        return contents
-            .filter { $0.hasPrefix("models--") }
-            .map { $0.replacingOccurrences(of: "models--", with: "")
-                     .replacingOccurrences(of: "--", with: "/") }
+    }
+
+    nonisolated static func clearCache(homeDirectory: URL) throws {
+        let roots = cacheContainerRoots(homeDirectory: homeDirectory)
+        let swiftModels = roots[0]
+        if let owners = try? FileManager.default.contentsOfDirectory(
+            at: swiftModels,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for owner in owners {
+                try FileManager.default.removeItem(at: owner)
+            }
+        }
+
+        let pythonHub = roots[1]
+        if let entries = try? FileManager.default.contentsOfDirectory(
+            at: pythonHub,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for entry in entries where entry.lastPathComponent.hasPrefix("models--") {
+                try FileManager.default.removeItem(at: entry)
+            }
+        }
+    }
+
+    /// Delete a repository from both cache layouts after resolving symlinks and
+    /// proving each existing target remains within its approved cache container.
+    nonisolated static func removeRepositoryCacheEntries(
+        for repository: String,
+        homeDirectory: URL
+    ) throws {
+        guard let roots = repositoryCacheRoots(
+            for: repository,
+            homeDirectory: homeDirectory
+        ) else {
+            throw AudioToolError.modelNotFound(
+                "Invalid HuggingFace repository identifier '\(repository)'. Expected 'owner/name'."
+            )
+        }
+        let containers = cacheContainerRoots(homeDirectory: homeDirectory)
+        for (target, container) in [
+            (roots.swiftHub, containers[0]),
+            (roots.pythonHub, containers[1]),
+        ] where FileManager.default.fileExists(atPath: target.path) {
+            guard isStrictDescendant(target, of: container) else {
+                throw AudioToolError.resourceUnavailable(
+                    "Refusing to delete cache entry outside its approved root: \(target.path)"
+                )
+            }
+            try FileManager.default.removeItem(at: target)
+        }
+    }
+
+    private nonisolated static func isStrictDescendant(
+        _ candidate: URL,
+        of container: URL
+    ) -> Bool {
+        let resolvedContainer = container.standardizedFileURL
+            .resolvingSymlinksInPath().path
+        let resolvedCandidate = candidate.standardizedFileURL
+            .resolvingSymlinksInPath().path
+        return resolvedCandidate.hasPrefix(resolvedContainer + "/")
+    }
+
+    nonisolated static func cachedRepositories(homeDirectory: URL) -> [String] {
+        let roots = cacheContainerRoots(homeDirectory: homeDirectory)
+        var repositories: Set<String> = []
+
+        if let owners = try? FileManager.default.contentsOfDirectory(
+            at: roots[0],
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for owner in owners {
+                guard (try? owner.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
+                      let models = try? FileManager.default.contentsOfDirectory(
+                        at: owner,
+                        includingPropertiesForKeys: [.isDirectoryKey],
+                        options: [.skipsHiddenFiles]
+                      )
+                else { continue }
+                for model in models
+                where (try? model.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                    repositories.insert("\(owner.lastPathComponent)/\(model.lastPathComponent)")
+                }
+            }
+        }
+
+        if let entries = try? FileManager.default.contentsOfDirectory(
+            at: roots[1],
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for entry in entries {
+                let name = entry.lastPathComponent
+                guard name.hasPrefix("models--") else { continue }
+                let components = name.dropFirst("models--".count)
+                    .components(separatedBy: "--")
+                guard components.count == 2 else { continue }
+                repositories.insert("\(components[0])/\(components[1])")
+            }
+        }
+
+        return repositories.sorted()
+    }
+
+    private nonisolated static func cacheContainerRoots(
+        homeDirectory: URL
+    ) -> [URL] {
+        let home = homeDirectory.standardizedFileURL
+        return [
+            home.appendingPathComponent(
+                "Documents/huggingface/models",
+                isDirectory: true
+            ),
+            home.appendingPathComponent(
+                ".cache/huggingface/hub",
+                isDirectory: true
+            ),
+        ]
     }
 }

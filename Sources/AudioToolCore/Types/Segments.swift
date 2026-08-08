@@ -17,13 +17,17 @@ public struct TimeRange: Sendable, Hashable, Comparable {
     public var duration: Double { end - start }
     
     public init(start: Double, end: Double) {
+        precondition(start.isFinite && end.isFinite, "Time range bounds must be finite")
         precondition(end >= start, "End must be >= start")
         self.start = start
         self.end = end
     }
     
     public static func < (lhs: TimeRange, rhs: TimeRange) -> Bool {
-        lhs.start < rhs.start
+        if lhs.start != rhs.start {
+            return lhs.start < rhs.start
+        }
+        return lhs.end < rhs.end
     }
     
     /// Check if this range overlaps with another
@@ -110,23 +114,12 @@ public struct SpeakerTimeline: Sendable {
     public let maxOverlappingSpeakers: Int
     
     public init(segments: [DiarizedSegment]) {
-        self.segments = segments.sorted { $0.timeRange.start < $1.timeRange.start }
+        self.segments = segments.sorted { $0.timeRange < $1.timeRange }
         
         let uniqueSpeakers = Set(segments.map(\.speakerID))
         self.speakerCount = uniqueSpeakers.count
         
-        // Calculate max overlapping speakers
-        var maxOverlap = 0
-        for i in 0..<segments.count {
-            var overlapCount = 1
-            for j in (i + 1)..<segments.count {
-                if segments[i].timeRange.overlaps(with: segments[j].timeRange) {
-                    overlapCount += 1
-                }
-            }
-            maxOverlap = max(maxOverlap, overlapCount)
-        }
-        self.maxOverlappingSpeakers = maxOverlap
+        self.maxOverlappingSpeakers = Self.overlapAnalysis(segments).maximum
     }
     
     /// Get segments for a specific speaker
@@ -139,37 +132,78 @@ public struct SpeakerTimeline: Sendable {
     /// Returns merged, non-overlapping time ranges where 2+ speakers are active.
     /// Adjacent or overlapping ranges are merged to prevent duplicate processing.
     public func overlappingRanges() -> [TimeRange] {
-        var overlaps: [TimeRange] = []
-        
-        // Find all pairwise intersections
-        for i in 0..<segments.count {
-            for j in (i + 1)..<segments.count {
-                if let intersection = segments[i].timeRange.intersection(with: segments[j].timeRange) {
-                    overlaps.append(intersection)
+        Self.overlapAnalysis(segments).ranges
+    }
+
+    private struct SpeakerEvent {
+        let time: Double
+        let speaker: SpeakerID
+        let delta: Int
+    }
+
+    /// Sweep distinct speaker activity, retaining per-speaker reference counts so
+    /// duplicate/overlapping segments for one speaker never masquerade as overlap.
+    private static func overlapAnalysis(
+        _ segments: [DiarizedSegment]
+    ) -> (maximum: Int, ranges: [TimeRange]) {
+        let events = segments.flatMap { segment in
+            [
+                SpeakerEvent(
+                    time: segment.timeRange.start,
+                    speaker: segment.speakerID,
+                    delta: 1
+                ),
+                SpeakerEvent(
+                    time: segment.timeRange.end,
+                    speaker: segment.speakerID,
+                    delta: -1
+                ),
+            ]
+        }.sorted { lhs, rhs in
+            if lhs.time != rhs.time { return lhs.time < rhs.time }
+            return lhs.delta < rhs.delta
+        }
+
+        guard !events.isEmpty else { return (0, []) }
+        var activeCounts: [SpeakerID: Int] = [:]
+        var maximum = 0
+        var ranges: [TimeRange] = []
+        var previousTime = events[0].time
+        var index = 0
+
+        while index < events.count {
+            let time = events[index].time
+            if previousTime < time, activeCounts.count >= 2 {
+                let range = TimeRange(start: previousTime, end: time)
+                if let last = ranges.last, last.end == range.start {
+                    ranges[ranges.count - 1] = TimeRange(
+                        start: last.start,
+                        end: range.end
+                    )
+                } else {
+                    ranges.append(range)
                 }
             }
-        }
-        
-        // Merge overlapping/adjacent ranges to avoid duplicates
-        guard !overlaps.isEmpty else { return [] }
-        
-        let sorted = overlaps.sorted()
-        var merged: [TimeRange] = [sorted[0]]
-        
-        for range in sorted.dropFirst() {
-            let last = merged[merged.count - 1]
-            // Merge if ranges overlap or are adjacent (within 0.01s tolerance)
-            if range.start <= last.end + 0.01 {
-                merged[merged.count - 1] = TimeRange(
-                    start: last.start,
-                    end: max(last.end, range.end)
-                )
-            } else {
-                merged.append(range)
+
+            var changes: [SpeakerID: Int] = [:]
+            while index < events.count, events[index].time == time {
+                let event = events[index]
+                changes[event.speaker, default: 0] += event.delta
+                index += 1
             }
+            for (speaker, delta) in changes {
+                let newCount = (activeCounts[speaker] ?? 0) + delta
+                if newCount > 0 {
+                    activeCounts[speaker] = newCount
+                } else {
+                    activeCounts.removeValue(forKey: speaker)
+                }
+            }
+            maximum = max(maximum, activeCounts.count)
+            previousTime = time
         }
-        
-        return merged
+
+        return (maximum, ranges)
     }
 }
 

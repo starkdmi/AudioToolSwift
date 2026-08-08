@@ -294,7 +294,7 @@ public struct MLXOverlap {
                 output: &output,
                 streamedOutput: &streamedOutput
             )
-            GPU.clearCache()
+            MLXCachePolicy.trimIfNeeded(afterChunk: chunkIndex + 1)
             startIdx += stride
             chunkIndex += 1
         }
@@ -389,7 +389,7 @@ public struct MLXOverlap {
                 output: &backgroundOutput,
                 streamedOutput: &backgroundStreamed
             )
-            GPU.clearCache()
+            MLXCachePolicy.trimIfNeeded(afterChunk: chunkIndex + 1)
             startIdx += stride
             chunkIndex += 1
         }
@@ -522,10 +522,12 @@ public struct IncrementalOverlapAdd: Sendable {
     private let window: [Float]
     private let totalLength: Int
 
-    /// Weighted sums for the live window, aligned so index 0 is `emittedCount`.
+    /// Weighted sums for the live window in circular storage. `head` is the
+    /// physical slot corresponding to `emittedCount`.
     private var accumulator: [Float]
     /// Accumulated window weight for the same positions, the divisor on the way out.
     private var weights: [Float]
+    private var head = 0
     private var emittedCount = 0
 
     /// Samples emitted so far. Equals `totalLength` once ``finish()`` has run.
@@ -537,6 +539,8 @@ public struct IncrementalOverlapAdd: Sendable {
     ///   - window: Per-sample weight, `chunkSamples` long.
     ///   - totalLength: Length of the finished output, used to trim padding.
     public init(chunkSamples: Int, stride: Int, window: [Float], totalLength: Int) {
+        precondition(chunkSamples > 0, "Chunk length must be positive")
+        precondition(totalLength >= 0, "Total length must not be negative")
         self.chunkSamples = chunkSamples
         self.stride = max(1, stride)
         self.window = window
@@ -563,6 +567,7 @@ public struct IncrementalOverlapAdd: Sendable {
         for i in 0..<contributionCount {
             let position = offset + i
             guard position >= 0, position < accumulator.count else { continue }
+            let storageIndex = (head + position) % accumulator.count
             var weight = i < window.count ? window[i] : 1.0
             if startIdx == 0 && i < stride {
                 weight = 1
@@ -571,8 +576,8 @@ public struct IncrementalOverlapAdd: Sendable {
                i >= max(0, chunkSamples - stride) {
                 weight = 1
             }
-            accumulator[position] += weight * chunk[i]
-            weights[position] += weight
+            accumulator[storageIndex] += weight * chunk[i]
+            weights[storageIndex] += weight
         }
 
         // Everything below the next chunk's start is complete.
@@ -589,16 +594,18 @@ public struct IncrementalOverlapAdd: Sendable {
         guard readyCount > 0 else { return [] }
 
         var ready = [Float](repeating: 0, count: readyCount)
-        for i in 0..<min(readyCount, accumulator.count) where weights[i] > 0 {
-            ready[i] = accumulator[i] / weights[i]
+        let shift = min(readyCount, accumulator.count)
+        for i in 0..<shift {
+            let storageIndex = (head + i) % accumulator.count
+            if weights[storageIndex] > 0 {
+                ready[i] = accumulator[storageIndex] / weights[storageIndex]
+            }
+            accumulator[storageIndex] = 0
+            weights[storageIndex] = 0
         }
 
         emittedCount = endIndex
-        let shift = min(readyCount, accumulator.count)
-        accumulator.removeFirst(shift)
-        weights.removeFirst(shift)
-        accumulator.append(contentsOf: [Float](repeating: 0, count: shift))
-        weights.append(contentsOf: [Float](repeating: 0, count: shift))
+        head = (head + shift) % accumulator.count
         return ready
     }
 }

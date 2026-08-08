@@ -273,6 +273,37 @@ struct PipelineTests {
         #expect(result.metrics.stageDurations["vad"] != nil)
     }
 
+    @Test("Parallel branches merge in declaration order and retain metrics")
+    func testParallelMergeIsDeterministic() async throws {
+        let enhancer = MockEnhancer()
+        enhancer.scaleFactor = 0.25
+        enhancer.processDelay = .milliseconds(75)
+        let upscaler = MockUpscaler()
+        upscaler.processDelay = .milliseconds(1)
+        let engine = AudioEngine(
+            configuration: .default,
+            enhancer: (.mossformerSE16k, enhancer),
+            upscaler: upscaler
+        )
+        let input = AudioBuffer(samples: [1, 2, 3, 4], sampleRate: 16_000)
+        let pipeline = engine.pipeline().parallel {
+            [
+                PipelineBuilder().enhance(.mossformerSE16k),
+                PipelineBuilder().upscale(),
+            ]
+        }
+
+        let result = try await engine.executePipeline(
+            pipeline,
+            audio: input,
+            outputSampleRate: 48_000
+        )
+
+        #expect(result.audio?.samples == [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4])
+        #expect(result.metrics.stageDurations["parallel[0].enhancement"] != nil)
+        #expect(result.metrics.stageDurations["parallel[1].upscaling"] != nil)
+    }
+
     @Test("Stopping pipeline event consumption cancels in-flight inference")
     func testPipelineStreamCancellation() async throws {
         let vad = CancellationAwareVAD()

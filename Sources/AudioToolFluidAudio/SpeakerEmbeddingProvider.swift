@@ -6,9 +6,9 @@
 //
 
 import Foundation
-@preconcurrency import FluidAudio
+import AudioTool
 import AudioToolCore
-import AVFoundation
+@preconcurrency import FluidAudio
 
 // MARK: - Speaker Embedding Provider
 
@@ -127,13 +127,19 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
         let models = try await DiarizerModels.downloadIfNeeded()
         
         // Create direct embedding extractor
-        embeddingExtractor = EmbeddingExtractor(embeddingModel: models.embeddingModel)
+        let candidateExtractor = EmbeddingExtractor(embeddingModel: models.embeddingModel)
         
         // Initialize VAD if enabled
+        let candidateVAD: VadManager?
         if config.useVAD {
             let vadConfig = VadConfig(defaultThreshold: config.vadThreshold)
-            vadManager = try await VadManager(config: vadConfig)
+            candidateVAD = try await VadManager(config: vadConfig)
+        } else {
+            candidateVAD = nil
         }
+        try Task.checkCancellation()
+        embeddingExtractor = candidateExtractor
+        vadManager = candidateVAD
     }
     
     // MARK: - Embedding Extraction
@@ -323,38 +329,15 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
     /// - Returns: 256-dimensional L2-normalized embedding vector
     public func extractEmbedding(_ audio: AudioToolCore.AudioBuffer) async throws -> [Float] {
         try validateInputChannels(audio)
-        // Resample to 16kHz if needed
-        let samples: [Float]
-        if audio.sampleRate != sampleRate {
-            samples = resampleAudioSamples(audio.samples, from: audio.sampleRate, to: sampleRate)
-        } else {
-            samples = audio.samples
-        }
+        // Fluid models are trained behind an ordinary band-limited resampler.
+        // Linear interpolation aliases frequencies above the target Nyquist into
+        // the speaker band and can materially change an embedding.
+        let samples = try audio.resampled(
+            to: sampleRate,
+            quality: .auto
+        ).samples
         
         return try await extractEmbedding(samples)
-    }
-    
-    /// Resample audio samples from source rate to target rate
-    private func resampleAudioSamples(_ samples: [Float], from sourceSampleRate: Int, to targetSampleRate: Int) -> [Float] {
-        guard sourceSampleRate != targetSampleRate else { return samples }
-        
-        let resampleRatio = Double(targetSampleRate) / Double(sourceSampleRate)
-        let newLength = Int(Double(samples.count) * resampleRatio)
-        var resampled = [Float](repeating: 0, count: newLength)
-        
-        for i in 0..<newLength {
-            let sourceIndex = Double(i) / resampleRatio
-            let index = Int(sourceIndex)
-            let fraction = Float(sourceIndex - Double(index))
-            
-            if index < samples.count - 1 {
-                resampled[i] = samples[index] * (1 - fraction) + samples[index + 1] * fraction
-            } else if index < samples.count {
-                resampled[i] = samples[index]
-            }
-        }
-        
-        return resampled
     }
     
     /// Process audio buffer (AudioProcessor protocol requirement)
@@ -500,45 +483,8 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
     
     /// Load and resample audio from file to 16kHz mono
     private func loadAndResampleAudio(from url: URL) throws -> [Float] {
-        let file = try AVAudioFile(forReading: url)
-        let format = file.processingFormat
-        let frameCount = AVAudioFrameCount(file.length)
-        
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            throw AudioToolError.resourceUnavailable("Failed to create audio buffer")
-        }
-        
-        try file.read(into: buffer)
-        
-        guard let channelData = buffer.floatChannelData else {
-            throw AudioToolError.resourceUnavailable("No audio data in buffer")
-        }
-        
-        let samples = Array(UnsafeBufferPointer(start: channelData[0], count: Int(frameCount)))
-        let sourceSampleRate = format.sampleRate
-        
-        // Resample to 16kHz if needed
-        if abs(sourceSampleRate - Double(sampleRate)) > 0.01 {
-            let resampleRatio = Double(sampleRate) / sourceSampleRate
-            let newLength = Int(Double(samples.count) * resampleRatio)
-            var resampled = [Float](repeating: 0, count: newLength)
-            
-            for i in 0..<newLength {
-                let sourceIndex = Double(i) / resampleRatio
-                let index = Int(sourceIndex)
-                let fraction = Float(sourceIndex - Double(index))
-                
-                if index < samples.count - 1 {
-                    resampled[i] = samples[index] * (1 - fraction) + samples[index + 1] * fraction
-                } else if index < samples.count {
-                    resampled[i] = samples[index]
-                }
-            }
-            
-            return resampled
-        }
-        
-        return samples
+        let converter = AudioConverter()
+        return try converter.resampleAudioFile(path: url.path)
     }
 }
 

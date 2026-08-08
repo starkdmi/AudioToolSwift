@@ -53,9 +53,10 @@ public actor FluidAudioTranscriber: Transcriber {
     /// Load the ASR model (downloads if needed)
     public func load() async throws {
         let loaded = try await AsrModels.downloadAndLoad(version: version.asrVersion)
-        models = loaded
         let manager = AsrManager(config: .default)
         try await manager.loadModels(loaded)
+        try Task.checkCancellation()
+        models = loaded
         asrManager = manager
     }
 

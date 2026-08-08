@@ -114,7 +114,11 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
         // Segmentation phase - report 80-100%
         await onProgress?(85.0)
         
-        let segments = try await manager.segmentSpeech(samples, config: segmentConfig)
+        let segments = await manager.segmentSpeech(
+            from: results,
+            totalSamples: samples.count,
+            config: segmentConfig
+        )
         
         await onProgress?(95.0)
         

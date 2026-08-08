@@ -13,6 +13,7 @@ import Foundation
 public enum Quantization: String, Codable, CaseIterable, Sendable, Hashable {
     case fp32
     case fp16
+    case bf16
     case int8
     case int4
     
@@ -21,6 +22,7 @@ public enum Quantization: String, Codable, CaseIterable, Sendable, Hashable {
         switch self {
         case .fp32: return "Full Precision (FP32)"
         case .fp16: return "Half Precision (FP16)"
+        case .bf16: return "Brain Float 16 (BF16)"
         case .int8: return "8-bit Quantized"
         case .int4: return "4-bit Quantized"
         }
@@ -35,7 +37,7 @@ public enum Quantization: String, Codable, CaseIterable, Sendable, Hashable {
     public var memoryMultiplier: Double {
         switch self {
         case .fp32: return 1.0
-        case .fp16: return 0.5
+        case .fp16, .bf16: return 0.5
         case .int8: return 0.25
         case .int4: return 0.125
         }
@@ -99,7 +101,8 @@ public enum ModelCategory: String, Codable, CaseIterable, Sendable, Hashable {
 ///     quantization: .int8,
 ///     sizeBytes: 45_000_000,
 ///     repo: "starkdmi/MossFormer2_SE_48K_MLX",
-///     files: ["model_int8.safetensors", "config.json"]
+///     files: ["model_int8.safetensors", "config.json"],
+///     requiredFiles: ["model_int8.safetensors"]
 /// )
 /// ```
 public struct ModelVariant: Identifiable, Codable, Hashable, Sendable {
@@ -118,8 +121,19 @@ public struct ModelVariant: Identifiable, Codable, Hashable, Sendable {
     /// HuggingFace repository ID
     public let repo: String
     
-    /// Files to download (glob patterns or exact filenames)
+    /// Files owned by this variant and requested from the repository.
+    ///
+    /// These may include optional runtime assets and alternative layouts. A Hub
+    /// download treats the patterns as a selection list, so a pattern does not
+    /// need to match for the download itself to succeed.
     public let files: [String]
+
+    /// Files that must all exist before this variant is considered installed.
+    ///
+    /// This defaults to ``files``. Keeping it separate lets a variant fetch
+    /// optional or alternative runtime assets without treating every download
+    /// pattern as mandatory proof that the resulting snapshot is loadable.
+    public let requiredFiles: [String]
     
     public init(
         id: String,
@@ -127,7 +141,8 @@ public struct ModelVariant: Identifiable, Codable, Hashable, Sendable {
         quantization: Quantization,
         sizeBytes: Int64,
         repo: String,
-        files: [String]
+        files: [String],
+        requiredFiles: [String]? = nil
     ) {
         self.id = id
         self.name = name
@@ -135,6 +150,45 @@ public struct ModelVariant: Identifiable, Codable, Hashable, Sendable {
         self.sizeBytes = sizeBytes
         self.repo = repo
         self.files = files
+        self.requiredFiles = requiredFiles ?? files
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case quantization
+        case sizeBytes
+        case repo
+        case files
+        case requiredFiles
+    }
+
+    /// Decode older persisted variants by treating their download manifest as
+    /// the verification manifest, matching the behavior before the two concepts
+    /// were represented separately.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        quantization = try container.decode(Quantization.self, forKey: .quantization)
+        sizeBytes = try container.decode(Int64.self, forKey: .sizeBytes)
+        repo = try container.decode(String.self, forKey: .repo)
+        files = try container.decode([String].self, forKey: .files)
+        requiredFiles = try container.decodeIfPresent(
+            [String].self,
+            forKey: .requiredFiles
+        ) ?? files
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(quantization, forKey: .quantization)
+        try container.encode(sizeBytes, forKey: .sizeBytes)
+        try container.encode(repo, forKey: .repo)
+        try container.encode(files, forKey: .files)
+        try container.encode(requiredFiles, forKey: .requiredFiles)
     }
     
     /// Human-readable size string
@@ -213,7 +267,7 @@ public struct ModelDefinition: Identifiable, Codable, Hashable, Sendable {
 ///     id: "speech_studio_pro",
 ///     name: "Speech Studio Pro",
 ///     description: "Complete toolkit: Enhancement, Separation, TTS",
-///     variantIds: ["mossformer2_se_int8", "mossformer2_ss_int8", "kokoro_tts_fp16"],
+///     variantIds: ["mossformer2_se_fp16", "mossformer2_ss_2spk_16k_fp32", "kokoro_tts_bf16"],
 ///     totalSizeBytes: 250_000_000
 /// )
 /// ```

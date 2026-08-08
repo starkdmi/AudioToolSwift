@@ -402,6 +402,7 @@ let package = Package(
                 "AudioToolTTS",
                 "AudioToolUSS",
                 "AudioToolFluidAudio",
+                "KokoroSwift",
                 "USSMLXSwift",
                 "DemucsMLXSwift",
                 "ChatterboxMLXSwift",

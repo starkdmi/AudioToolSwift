@@ -19,7 +19,7 @@ import Foundation
 /// }
 ///
 /// // Cancel a download
-/// await DownloadCoordinator.shared.cancel(variantId: "mossformer2_se_int8")
+/// await DownloadCoordinator.shared.cancel(variantId: "mossformer2_se_fp16")
 ///
 /// // Delete an installed model
 /// try await DownloadCoordinator.shared.delete(variant: variant)
@@ -272,7 +272,7 @@ public actor DownloadCoordinator {
 
                     // Join an operation that won the ownership race. A package
                     // may report the variant complete only after that operation
-                    // finishes and the exact variant files verify successfully.
+                    // finishes and its required files verify successfully.
                     if let operation = activeTasks[variant.id] {
                         do {
                             await operation.waitForCompletion()
@@ -414,7 +414,10 @@ public actor DownloadCoordinator {
     }
     
     private func verifyDownload(at url: URL, for variant: ModelVariant) async throws {
-        guard ModelDownloader.hasRequiredFiles(at: url, patterns: variant.files) else {
+        guard ModelDownloader.hasRequiredFiles(
+            at: url,
+            patterns: variant.requiredFiles
+        ) else {
             throw DownloadError.fileVerificationFailed
         }
     }

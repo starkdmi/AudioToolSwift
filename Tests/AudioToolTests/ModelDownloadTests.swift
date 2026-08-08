@@ -57,6 +57,47 @@ struct ModelDownloadTypeTests {
         ))
     }
 
+    @Test("Chatterbox manifest requires the model and canonical tokenizer")
+    func testChatterboxManifestRejectsUnrelatedFiles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data([1]).write(to: root.appendingPathComponent("conds.safetensors"))
+        try Data([2]).write(to: root.appendingPathComponent("unrelated.json"))
+        try Data([3]).write(to: root.appendingPathComponent("config.json"))
+
+        #expect(!ModelDownloader.hasRequiredFiles(
+            at: root,
+            patterns: ModelFiles.chatterbox
+        ))
+
+        try Data([4]).write(to: root.appendingPathComponent("model.safetensors"))
+        #expect(!ModelDownloader.hasRequiredFiles(
+            at: root,
+            patterns: ModelFiles.chatterbox
+        ))
+
+        try Data([5]).write(
+            to: root.appendingPathComponent("grapheme_mtl_merged_expanded_v1.json")
+        )
+        #expect(ModelDownloader.hasRequiredFiles(
+            at: root,
+            patterns: ModelFiles.chatterbox
+        ))
+
+        let catalogVariant = try #require(
+            ModelCatalog.shared.variant(id: "chatterbox_tts_fp32")
+        )
+        #expect(catalogVariant.files == ModelFiles.chatterboxDownload(for: .fp32))
+        #expect(catalogVariant.requiredFiles == ModelFiles.chatterboxRequired(for: .fp32))
+        #expect(catalogVariant.files.contains("conds.safetensors"))
+        #expect(catalogVariant.files.contains("s3tokenizer.safetensors"))
+        #expect(!catalogVariant.requiredFiles.contains("conds.safetensors"))
+        #expect(ModelFiles.chatterboxRequired(for: .bit4).contains("config.json"))
+    }
+
     @Test("Verified lookup skips a newer incomplete snapshot")
     func testVerifiedLookupFallsBackToCompleteSnapshot() throws {
         let root = FileManager.default.temporaryDirectory
@@ -333,6 +374,7 @@ struct ModelDownloadTypeTests {
         #expect(variant.sizeString.contains("100") || variant.sizeString.contains("MB"))
         #expect(variant.id == "test_variant")
         #expect(variant.quantization == .fp16)
+        #expect(variant.requiredFiles == variant.files)
     }
     
     @Test("ModelVariant is hashable")
@@ -342,6 +384,30 @@ struct ModelDownloadTypeTests {
         
         #expect(v1 == v2)
         #expect(v1.hashValue == v2.hashValue)
+    }
+
+    @Test("ModelVariant separates downloads from verification compatibly")
+    func testVariantRequiredFilesCoding() throws {
+        let variant = ModelVariant(
+            id: "assets",
+            name: "Assets",
+            quantization: .fp32,
+            sizeBytes: 100,
+            repo: "owner/repo",
+            files: ["model.safetensors", "optional.safetensors"],
+            requiredFiles: ["model.safetensors"]
+        )
+        let roundTrip = try JSONDecoder().decode(
+            ModelVariant.self,
+            from: JSONEncoder().encode(variant)
+        )
+        #expect(roundTrip == variant)
+
+        let legacyJSON = Data(
+            #"{"id":"legacy","name":"Legacy","quantization":"fp32","sizeBytes":100,"repo":"owner/repo","files":["model.safetensors"]}"#.utf8
+        )
+        let legacy = try JSONDecoder().decode(ModelVariant.self, from: legacyJSON)
+        #expect(legacy.requiredFiles == legacy.files)
     }
     
     // MARK: - ModelDefinition
@@ -460,6 +526,21 @@ struct ModelCatalogTests {
             }
         }
     }
+
+    @Test("Package sizes equal the advertised variants")
+    func testPackageSizesMatchVariants() {
+        let registry = ModelCatalog.shared
+
+        for package in registry.packages {
+            let expectedSize = package.variantIds.compactMap {
+                registry.variant(id: $0)?.sizeBytes
+            }.reduce(0, +)
+            #expect(
+                package.totalSizeBytes == expectedSize,
+                "Package \(package.id) advertises \(package.totalSizeBytes) bytes; its variants total \(expectedSize)"
+            )
+        }
+    }
     
     @Test("Registry lookup by ID")
     func testRegistryLookup() {
@@ -501,6 +582,89 @@ struct ModelCatalogTests {
 
 @Suite("Model Downloader Cache")
 struct ModelDownloaderCacheTests {
+
+    @Test("Repository identifiers cannot escape cache roots")
+    func testRepositoryPathValidation() {
+        let home = URL(fileURLWithPath: "/tmp/audio-tool-model-home", isDirectory: true)
+        let valid = ModelDownloader.repositoryCacheRoots(
+            for: "owner/model",
+            homeDirectory: home
+        )
+
+        #expect(valid?.swiftHub.path == "/tmp/audio-tool-model-home/Documents/huggingface/models/owner/model")
+        #expect(valid?.pythonHub.path == "/tmp/audio-tool-model-home/.cache/huggingface/hub/models--owner--model")
+
+        for invalid in ["../..", "owner/..", "./model", "/model", "owner/", "owner//model", "a/b/c", "owner\\escape/model"] {
+            #expect(ModelDownloader.repositoryCacheRoots(
+                for: invalid,
+                homeDirectory: home
+            ) == nil, "accepted unsafe repository id: \(invalid)")
+            #expect(ModelDownloader.shared.localPath(for: invalid) == nil)
+        }
+    }
+
+    @Test("Cache inventory, size, and clearing cover both Hub layouts")
+    func testBothCacheLayouts() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let roots = try #require(ModelDownloader.repositoryCacheRoots(
+            for: "swift-owner/swift-model",
+            homeDirectory: home
+        ))
+        let python = try #require(ModelDownloader.repositoryCacheRoots(
+            for: "python-owner/python-model",
+            homeDirectory: home
+        ))
+        try FileManager.default.createDirectory(at: roots.swiftHub, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: python.pythonHub, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 7).write(to: roots.swiftHub.appendingPathComponent("model.bin"))
+        try Data(repeating: 2, count: 11).write(to: python.pythonHub.appendingPathComponent("model.bin"))
+
+        #expect(ModelDownloader.cachedRepositories(homeDirectory: home) == [
+            "python-owner/python-model",
+            "swift-owner/swift-model",
+        ])
+        #expect(ModelDownloader.totalCacheSize(homeDirectory: home) == 18)
+
+        try ModelDownloader.clearCache(homeDirectory: home)
+        #expect(ModelDownloader.cachedRepositories(homeDirectory: home).isEmpty)
+        #expect(ModelDownloader.totalCacheSize(homeDirectory: home) == 0)
+    }
+
+    @Test("Repository deletion refuses an intermediate symlink escape")
+    func testDeletionRejectsSymlinkEscape() throws {
+        let temporary = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let home = temporary.appendingPathComponent("home", isDirectory: true)
+        let external = temporary.appendingPathComponent("external", isDirectory: true)
+        let swiftModels = home.appendingPathComponent(
+            "Documents/huggingface/models",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: swiftModels, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: external.appendingPathComponent("model", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let protectedFile = external
+            .appendingPathComponent("model", isDirectory: true)
+            .appendingPathComponent("keep.txt")
+        try Data([1]).write(to: protectedFile)
+        try FileManager.default.createSymbolicLink(
+            at: swiftModels.appendingPathComponent("owner", isDirectory: true),
+            withDestinationURL: external
+        )
+        defer { try? FileManager.default.removeItem(at: temporary) }
+
+        #expect(throws: AudioToolError.self) {
+            try ModelDownloader.removeRepositoryCacheEntries(
+                for: "owner/model",
+                homeDirectory: home
+            )
+        }
+        #expect(FileManager.default.fileExists(atPath: protectedFile.path))
+    }
     
     @Test("Check cache path format")
     func testCachePathFormat() {

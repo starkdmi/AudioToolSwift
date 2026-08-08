@@ -52,10 +52,12 @@ public actor FluidAudioDiarizationProvider: DiarizationProvider {
         let config = OfflineDiarizerConfig(
             clusteringThreshold: Double(threshold)
         )
-        manager = OfflineDiarizerManager(config: config)
+        let candidate = OfflineDiarizerManager(config: config)
         
         // Use prepareModels() which includes prewarming (same as CLI path)
-        try await manager?.prepareModels()
+        try await candidate.prepareModels()
+        try Task.checkCancellation()
+        manager = candidate
     }
     
     // MARK: - DiarizationProvider Conformance

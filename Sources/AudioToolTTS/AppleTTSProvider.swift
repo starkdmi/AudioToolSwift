@@ -10,6 +10,110 @@ import Foundation
 import AVFoundation
 import AudioToolCore
 
+final class AppleTTSBatchOperation: @unchecked Sendable {
+    typealias Output = AudioToolCore.AudioBuffer
+
+    private let lock = NSLock()
+    private var result: Result<Output, Error>?
+    private var continuation: CheckedContinuation<Output, Error>?
+    private var synthesizer: AVSpeechSynthesizer?
+
+    var isFinished: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return result != nil
+    }
+
+    func install(_ continuation: CheckedContinuation<Output, Error>) {
+        lock.lock()
+        if let result {
+            lock.unlock()
+            continuation.resume(with: result)
+        } else {
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+
+    /// Retain the synthesizer for cancellation. Returns false if cancellation
+    /// already won the race and the caller should stop starting work.
+    func install(_ synthesizer: AVSpeechSynthesizer) -> Bool {
+        lock.lock()
+        guard result == nil else {
+            lock.unlock()
+            synthesizer.stopSpeaking(at: .immediate)
+            return false
+        }
+        self.synthesizer = synthesizer
+        lock.unlock()
+        return true
+    }
+
+    func complete(with result: Result<Output, Error>) {
+        lock.lock()
+        guard self.result == nil else {
+            lock.unlock()
+            return
+        }
+        self.result = result
+        let continuation = continuation
+        self.continuation = nil
+        synthesizer = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+
+    func cancel() {
+        lock.lock()
+        guard result == nil else {
+            lock.unlock()
+            return
+        }
+        let cancellation = Result<Output, Error>.failure(CancellationError())
+        result = cancellation
+        let continuation = continuation
+        self.continuation = nil
+        let synthesizer = synthesizer
+        self.synthesizer = nil
+        lock.unlock()
+
+        synthesizer?.stopSpeaking(at: .immediate)
+        continuation?.resume(with: cancellation)
+    }
+}
+
+private final class AppleTTSAudioCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples: [Float] = []
+    private var sampleRate: Double = 22_050
+    private var complete = false
+
+    var isComplete: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return complete
+    }
+
+    func append(_ newSamples: [Float], sampleRate: Double) {
+        lock.lock()
+        self.sampleRate = sampleRate
+        samples.append(contentsOf: newSamples)
+        lock.unlock()
+    }
+
+    func finish() {
+        lock.lock()
+        complete = true
+        lock.unlock()
+    }
+
+    func snapshot() -> (samples: [Float], sampleRate: Double, isComplete: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (samples, sampleRate, complete)
+    }
+}
+
 private final class AppleTTSStreamCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var complete = false
@@ -35,7 +139,9 @@ private final class AppleTTSStreamCompletion: @unchecked Sendable {
 
     func cancel() {
         lock.lock()
-        cancelled = true
+        if !complete {
+            cancelled = true
+        }
         lock.unlock()
     }
 }
@@ -88,63 +194,78 @@ public actor AppleTTSProvider: SpeechSynthesizer {
     ///   - voice: Voice identifier or name (e.g., "Thomas") - empty for default
     /// - Returns: Audio buffer with synthesized speech
     public func synthesize(_ text: String, voice: String) async throws -> AudioToolCore.AudioBuffer {
-        try await withCheckedThrowingContinuation { continuation in
-            // Run on a background thread with its own run loop
-            DispatchQueue.global(qos: .userInitiated).async {
-                let synthesizer = AVSpeechSynthesizer()
-                
-                let utterance = AVSpeechUtterance(string: text)
-                
-                // Set voice
-                if let selectedVoice = self.findVoice(voice) {
-                    utterance.voice = selectedVoice
-                } else {
-                    utterance.voice = AVSpeechSynthesisVoice(language: self.language)
-                }
-                
-                var allSamples: [Float] = []
-                var outputSampleRate: Double = 22050
-                var outputChannels: UInt32 = 1
-                var isComplete = false
-                var synthesisError: Error?
-                
-                synthesizer.write(utterance) { buffer in
-                    if let pcmBuffer = buffer as? AVAudioPCMBuffer, pcmBuffer.frameLength > 0 {
-                        outputSampleRate = pcmBuffer.format.sampleRate
-                        outputChannels = pcmBuffer.format.channelCount
-                        let samples = self.extractSamples(from: pcmBuffer)
-                        allSamples.append(contentsOf: samples)
+        let operation = AppleTTSBatchOperation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                operation.install(continuation)
+                guard !operation.isFinished else { return }
+
+                // Run on a background thread with its own run loop.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let synthesizer = AVSpeechSynthesizer()
+                    guard operation.install(synthesizer) else { return }
+
+                    let utterance = AVSpeechUtterance(string: text)
+
+                    // Set voice
+                    if let selectedVoice = self.findVoice(voice) {
+                        utterance.voice = selectedVoice
                     } else {
-                        // Completion signal
-                        isComplete = true
+                        utterance.voice = AVSpeechSynthesisVoice(language: self.language)
+                    }
+
+                    let collector = AppleTTSAudioCollector()
+
+                    synthesizer.write(utterance) { buffer in
+                        if let pcmBuffer = buffer as? AVAudioPCMBuffer,
+                           pcmBuffer.frameLength > 0 {
+                            let samples = self.extractSamples(from: pcmBuffer)
+                            collector.append(
+                                samples,
+                                sampleRate: pcmBuffer.format.sampleRate
+                            )
+                        } else {
+                            // Completion signal
+                            collector.finish()
+                        }
+                    }
+
+                    // Pump the run loop until synthesis completes (required for
+                    // headless environments).
+                    let runLoop = RunLoop.current
+                    let timeout = Date(timeIntervalSinceNow: self.synthesisTimeout)
+                    while !collector.isComplete && !operation.isFinished && Date() < timeout {
+                        runLoop.run(
+                            mode: .default,
+                            before: Date(timeIntervalSinceNow: 0.05)
+                        )
+                    }
+
+                    guard !operation.isFinished else { return }
+                    let snapshot = collector.snapshot()
+                    if !snapshot.isComplete {
+                        synthesizer.stopSpeaking(at: .immediate)
+                        operation.complete(with: .failure(
+                            AudioToolError.resourceUnavailable(
+                                "Synthesis timed out after \(Int(self.synthesisTimeout)) seconds"
+                            )
+                        ))
+                    } else if snapshot.samples.isEmpty {
+                        operation.complete(with: .failure(
+                            AudioToolError.resourceUnavailable("No audio generated")
+                        ))
+                    } else {
+                        let result = AudioToolCore.AudioBuffer(
+                            samples: snapshot.samples,
+                            sampleRate: Int(snapshot.sampleRate),
+                            channels: 1
+                        )
+                        operation.complete(with: .success(result))
                     }
                 }
-                
-                // Pump run loop until synthesis completes (required for headless environments)
-                let runLoop = RunLoop.current
-                let timeout = Date(timeIntervalSinceNow: self.synthesisTimeout)
-                while !isComplete && Date() < timeout {
-                    runLoop.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
-                }
-                
-                if !isComplete {
-                    synthesisError = AudioToolError.resourceUnavailable("Synthesis timed out after \(Int(self.synthesisTimeout)) seconds")
-                }
-                
-                // Return result on main continuation
-                if let error = synthesisError {
-                    continuation.resume(throwing: error)
-                } else if allSamples.isEmpty {
-                    continuation.resume(throwing: AudioToolError.resourceUnavailable("No audio generated"))
-                } else {
-                    let result = AudioToolCore.AudioBuffer(
-                        samples: allSamples,
-                        sampleRate: Int(outputSampleRate),
-                        channels: Int(outputChannels)
-                    )
-                    continuation.resume(returning: result)
-                }
             }
+        } onCancel: {
+            operation.cancel()
         }
     }
     
@@ -169,10 +290,10 @@ public actor AppleTTSProvider: SpeechSynthesizer {
                         let chunk = AudioToolCore.AudioBuffer(
                             samples: samples,
                             sampleRate: Int(pcmBuffer.format.sampleRate),
-                            channels: Int(pcmBuffer.format.channelCount)
+                            channels: 1
                         )
                         if case .terminated = continuation.yield(chunk) {
-                            completion.finish()
+                            completion.cancel()
                         }
                     } else {
                         completion.finish()

@@ -175,6 +175,31 @@ struct AudioBufferTests {
         // Actually the replacement has 8000 samples but we're replacing a 8000 sample range
         #expect(buffer.samples[8000] == 1.0)
     }
+
+    @Test("Replacing a range outside the buffer is a no-op")
+    func testReplaceOutOfBounds() {
+        let buffer = AudioBuffer(samples: [1, 2, 3], sampleRate: 1)
+        let replacement = AudioBuffer(samples: [9], sampleRate: 1)
+
+        #expect(buffer.replacing(5..<6, with: replacement) == buffer)
+        #expect(buffer.replacing(-2 ..< -1, with: replacement) == buffer)
+    }
+
+    @Test("Partially overlapping replacement ranges clamp to the buffer")
+    func testReplacePartiallyOutOfBounds() {
+        let buffer = AudioBuffer(samples: [1, 2, 3], sampleRate: 1)
+        let replacement = AudioBuffer(samples: [9], sampleRate: 1)
+
+        #expect(buffer.replacing(-2..<1, with: replacement).samples == [9, 2, 3])
+        #expect(buffer.replacing(2..<6, with: replacement).samples == [1, 2, 9])
+    }
+
+    @Test("Unbounded time slices clamp without integer conversion traps")
+    func testUnboundedSlice() {
+        let buffer = AudioBuffer(samples: [1, 2, 3], sampleRate: 1)
+
+        #expect(buffer.slice(-Double.infinity..<Double.infinity) == buffer)
+    }
     
     // MARK: - Hashable
     

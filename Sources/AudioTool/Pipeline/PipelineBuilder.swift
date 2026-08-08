@@ -345,7 +345,12 @@ public struct PipelineBuilder: Sendable {
     
     // MARK: - Parallel Execution
     
-    /// Execute multiple branches in parallel
+    /// Execute multiple branches in parallel.
+    ///
+    /// Results are merged in declaration order, independent of completion order.
+    /// If more than one branch produces the same output field, the later declared
+    /// branch wins. Branch timing metrics are retained with `parallel[index].`
+    /// prefixes.
     public func parallel(
         _ branches: @escaping @Sendable () -> [PipelineBuilder]
     ) -> PipelineBuilder {

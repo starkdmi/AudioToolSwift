@@ -22,7 +22,7 @@ import Foundation
 /// }
 ///
 /// // Look up a variant
-/// if let variant = registry.variant(id: "mossformer2_se_int8") {
+/// if let variant = registry.variant(id: "mossformer2_se_fp16") {
 ///     print(variant.sizeString)
 /// }
 /// ```
@@ -110,22 +110,6 @@ public final class ModelCatalog: @unchecked Sendable {
                         sizeBytes: 90_000_000,
                         repo: ModelRepository.mossFormer2SE48K,
                         files: ModelFiles.standard(.fp16)
-                    ),
-                    ModelVariant(
-                        id: "mossformer2_se_int8",
-                        name: "MossFormer2 SE (Int8)",
-                        quantization: .int8,
-                        sizeBytes: 45_000_000,
-                        repo: ModelRepository.mossFormer2SE48K,
-                        files: ModelFiles.standard(.int8)
-                    ),
-                    ModelVariant(
-                        id: "mossformer2_se_int4",
-                        name: "MossFormer2 SE (Int4)",
-                        quantization: .int4,
-                        sizeBytes: 23_000_000,
-                        repo: ModelRepository.mossFormer2SE48K,
-                        files: ModelFiles.standard(.int4)
                     ),
                 ]
             ),
@@ -257,12 +241,12 @@ public final class ModelCatalog: @unchecked Sendable {
                 description: "High-quality text-to-speech with multiple voices",
                 variants: [
                     ModelVariant(
-                        id: "kokoro_tts_fp16",
-                        name: "Kokoro TTS (FP16)",
-                        quantization: .fp16,
-                        sizeBytes: 80_000_000,
-                        repo: "hexgrad/Kokoro-82M",
-                        files: ["kokoro-v1.0-fp16.onnx", "voices-v1.0.bin"]
+                        id: "kokoro_tts_bf16",
+                        name: "Kokoro TTS (BF16)",
+                        quantization: .bf16,
+                        sizeBytes: 180_000_000,
+                        repo: ModelRepository.kokoroBF16,
+                        files: ModelFiles.kokoro
                     ),
                 ]
             ),
@@ -277,9 +261,10 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "chatterbox_tts_fp32",
                         name: "ChatterBox TTS (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 450_000_000,
-                        repo: "ResembleAI/chatterbox",
-                        files: ["*.safetensors", "config.json", "tokenizer.json"]
+                        sizeBytes: 2_400_000_000,
+                        repo: ModelRepository.chatterboxFP32,
+                        files: ModelFiles.chatterboxDownload(for: .fp32),
+                        requiredFiles: ModelFiles.chatterboxRequired(for: .fp32)
                     ),
                 ]
             ),
@@ -338,8 +323,8 @@ public final class ModelCatalog: @unchecked Sendable {
                 id: "speech_studio_essentials",
                 name: "Speech Studio Essentials",
                 description: "Core tools for speech processing: enhancement, VAD",
-                variantIds: ["mossformer2_se_int8", "silero_vad_coreml"],
-                totalSizeBytes: 47_000_000
+                variantIds: ["mossformer2_se_fp16", "silero_vad_coreml"],
+                totalSizeBytes: 92_000_000
             ),
             
             ModelPackage(
@@ -347,13 +332,13 @@ public final class ModelCatalog: @unchecked Sendable {
                 name: "Speech Studio Pro",
                 description: "Complete toolkit: Enhancement, Separation, TTS, Transcription",
                 variantIds: [
-                    "mossformer2_se_int8",
+                    "mossformer2_se_fp16",
                     "mossformer2_ss_2spk_16k_fp32",
-                    "kokoro_tts_fp16",
+                    "kokoro_tts_bf16",
                     "whisper_small",
                     "silero_vad_coreml"
                 ],
-                totalSizeBytes: 577_000_000
+                totalSizeBytes: 722_000_000
             ),
             
             ModelPackage(
@@ -361,7 +346,7 @@ public final class ModelCatalog: @unchecked Sendable {
                 name: "Music Production",
                 description: "Tools for music: Source separation, Super resolution",
                 variantIds: ["demucs_fp32", "uss_fp32", "mossformer2_sr_fp32"],
-                totalSizeBytes: 620_000_000
+                totalSizeBytes: 636_123_696
             ),
             
             ModelPackage(

@@ -16,7 +16,7 @@ import MLXUtilsLibrary
 ///
 /// Example usage:
 /// ```swift
-/// let tts = KokoroTTS(modelPath: modelURL, g2p: .misaki)
+/// let tts = try KokoroTTS(modelPath: modelURL, g2p: .misaki)
 /// let audioData = try tts.generateAudio(voice: voiceEmbedding,
 ///                                       language: .english,
 ///                                       text: "Hello world",
@@ -30,28 +30,28 @@ public final class KokoroTTS {
   }
   
   /// BERT model for encoding phoneme sequences
-  private let bert: CustomAlbert!
+  private let bert: CustomAlbert
   
   /// Linear layer to project BERT embeddings
-  private let bertEncoder: Linear!
+  private let bertEncoder: Linear
   
   /// Encoder for duration prediction features
-  private let durationEncoder: DurationEncoder!
+  private let durationEncoder: DurationEncoder
   
   /// Bidirectional LSTM for duration prediction
-  private let predictorLSTM: LSTM!
+  private let predictorLSTM: LSTM
   
   /// Projection layer for final duration values
-  private let durationProj: Linear!
+  private let durationProj: Linear
   
   /// Predictor for prosodic features (F0, pitch)
-  private let prosodyPredictor: ProsodyPredictor!
+  private let prosodyPredictor: ProsodyPredictor
   
   /// Text encoder that processes phoneme sequences
-  private let textEncoder: TextEncoder!
+  private let textEncoder: TextEncoder
   
   /// Decoder that generates audio from encoded features
-  private let decoder: Decoder!
+  private let decoder: Decoder
   
   /// Grapheme-to-phoneme processor for text conversion
   private let g2pProcessor: G2PProcessor?
@@ -63,13 +63,13 @@ public final class KokoroTTS {
   /// - Parameters:
   ///   - modelPath: URL to the directory containing model weights
   ///   - g2p: Grapheme-to-phoneme processor type (default: Misaki)
-  public init(modelPath: URL, g2p: G2P = .misaki) {
+  public init(modelPath: URL, g2p: G2P = .misaki) throws {
     // Load and sanitize model weights
-    let sanitizedWeights = WeightLoader.loadWeights(modelPath: modelPath)
+    let sanitizedWeights = try WeightLoader.loadWeights(modelPath: modelPath)
     let config = KokoroConfig.loadConfig()
-    
+
     // Initialize BERT model for phoneme encoding
-    bert = CustomAlbert(
+    bert = try CustomAlbert(
       weights: sanitizedWeights,
       config: AlbertModelArgs(
         numHiddenLayers: config.plbert.numHiddenLayers,
@@ -82,12 +82,12 @@ public final class KokoroTTS {
     
     // Initialize BERT output encoder
     bertEncoder = Linear(
-      weight: sanitizedWeights["bert_encoder.weight"]!,
-      bias: sanitizedWeights["bert_encoder.bias"]!
+      weight: try sanitizedWeights.required("bert_encoder.weight"),
+      bias: try sanitizedWeights.required("bert_encoder.bias")
     )
     
     // Initialize duration prediction components
-    durationEncoder = DurationEncoder(
+    durationEncoder = try DurationEncoder(
       weights: sanitizedWeights,
       dModel: config.hiddenDim,
       styDim: config.styleDim,
@@ -98,31 +98,31 @@ public final class KokoroTTS {
     predictorLSTM = LSTM(
       inputSize: config.hiddenDim + config.styleDim,
       hiddenSize: config.hiddenDim / 2,
-      wxForward: sanitizedWeights["predictor.lstm.weight_ih_l0"]!,
-      whForward: sanitizedWeights["predictor.lstm.weight_hh_l0"]!,
-      biasIhForward: sanitizedWeights["predictor.lstm.bias_ih_l0"]!,
-      biasHhForward: sanitizedWeights["predictor.lstm.bias_hh_l0"]!,
-      wxBackward: sanitizedWeights["predictor.lstm.weight_ih_l0_reverse"]!,
-      whBackward: sanitizedWeights["predictor.lstm.weight_hh_l0_reverse"]!,
-      biasIhBackward: sanitizedWeights["predictor.lstm.bias_ih_l0_reverse"]!,
-      biasHhBackward: sanitizedWeights["predictor.lstm.bias_hh_l0_reverse"]!
+      wxForward: try sanitizedWeights.required("predictor.lstm.weight_ih_l0"),
+      whForward: try sanitizedWeights.required("predictor.lstm.weight_hh_l0"),
+      biasIhForward: try sanitizedWeights.required("predictor.lstm.bias_ih_l0"),
+      biasHhForward: try sanitizedWeights.required("predictor.lstm.bias_hh_l0"),
+      wxBackward: try sanitizedWeights.required("predictor.lstm.weight_ih_l0_reverse"),
+      whBackward: try sanitizedWeights.required("predictor.lstm.weight_hh_l0_reverse"),
+      biasIhBackward: try sanitizedWeights.required("predictor.lstm.bias_ih_l0_reverse"),
+      biasHhBackward: try sanitizedWeights.required("predictor.lstm.bias_hh_l0_reverse")
     )
 
     // Initialize duration projection layer
     durationProj = Linear(
-      weight: sanitizedWeights["predictor.duration_proj.linear_layer.weight"]!,
-      bias: sanitizedWeights["predictor.duration_proj.linear_layer.bias"]!
+      weight: try sanitizedWeights.required("predictor.duration_proj.linear_layer.weight"),
+      bias: try sanitizedWeights.required("predictor.duration_proj.linear_layer.bias")
     )
 
     // Initialize prosody predictor (F0, pitch, etc.)
-    prosodyPredictor = ProsodyPredictor(
+    prosodyPredictor = try ProsodyPredictor(
       weights: sanitizedWeights,
       styleDim: config.styleDim,
       dHid: config.hiddenDim
     )
 
     // Initialize text encoder
-    textEncoder = TextEncoder(
+    textEncoder = try TextEncoder(
       weights: sanitizedWeights,
       channels: config.hiddenDim,
       kernelSize: config.textEncoderKernelSize,
@@ -131,7 +131,7 @@ public final class KokoroTTS {
     )
 
     // Initialize audio decoder
-    decoder = Decoder(
+    decoder = try Decoder(
       weights: sanitizedWeights,
       dimIn: config.hiddenDim,
       styleDim: config.styleDim,
@@ -452,7 +452,7 @@ public final class KokoroTTS {
     let frameIndices = MLXArray(0 ..< totalFrames)
     
     // Create zeros and scatter 1.0 values at (frame, phoneme) positions
-    var oneHot = MLXArray.zeros([totalFrames, batchSize])
+    let oneHot = MLXArray.zeros([totalFrames, batchSize])
     oneHot[frameIndices, indicesMLX] = MLXArray(1.0)
     
     // Transpose to [batchSize, totalFrames] and add batch dimension

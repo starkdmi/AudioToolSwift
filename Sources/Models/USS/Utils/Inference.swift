@@ -5,6 +5,12 @@ import AudioUtils
 
 /// USS inference pipeline
 public class USSInference {
+
+    /// MLX's cache is process-global. Trimming after every two-second segment
+    /// serializes unrelated inference and defeats allocator reuse, so long-running
+    /// USS jobs only trim periodically once cached allocations are substantial.
+    private static let cacheTrimInterval = 8
+    private static let cacheTrimThresholdBytes = 512 * 1024 * 1024
     
     private let model: ResUNet30
 //    private let stft: STFT
@@ -47,8 +53,6 @@ public class USSInference {
     public func prewarm(conditioning: MLXArray) {
         if isPrewarmed { return }
         
-        print("[Inference] Prewarming compiled model...")
-        
         let segmentSamples = Int(segmentDuration * Float(sampleRate))
         let dummyMixture = MLXArray.zeros([1, 1, segmentSamples])
         
@@ -74,7 +78,6 @@ public class USSInference {
         }
         
         isPrewarmed = true
-        print("[Inference] Model prewarmed successfully")
     }
     
     /// Perform source separation on audio
@@ -140,7 +143,6 @@ public class USSInference {
         
         // Extract waveform output
         guard let waveform = outputs["waveform"] else {
-            print("[Inference] ERROR: Missing waveform output! Available outputs: \(outputs.keys)")
             fatalError("Model did not return waveform output")
         }
         
@@ -183,7 +185,6 @@ public class USSInference {
         
         // Extract waveform output
         guard let waveform = outputs["waveform"] else {
-            print("[Inference] ERROR: Missing waveform output! Available outputs: \(outputs.keys)")
             fatalError("Model did not return waveform output")
         }
         
@@ -252,7 +253,7 @@ public class USSInference {
                 output[outputIndex] += separatedSamples[sampleIndex] * weight
                 outputWeights[outputIndex] += weight
             }
-            GPU.clearCache()
+            Self.trimCacheIfNeeded(afterUnit: i + 1)
         }
         
         // Normalize by weights
@@ -295,7 +296,6 @@ public class USSInference {
         let audioLength = audio.shape[1]
         let numSegments = Int(ceil(Float(audioLength) / Float(segmentSamples)))
         
-        print("[Inference] Using optimized segmentation: \(numSegments) segments of \(segmentSamples) samples")
         var output = [Float](repeating: 0, count: audioLength)
         
         // Use configurable batch size
@@ -321,8 +321,6 @@ public class USSInference {
                         )
                     }
                     
-                    print("[Inference] Processing segment \(i + 1)/\(numSegments): [\(start):\(end)]")
-                    
                     let separated = processSingleSegment(
                         audio: segment,
                         conditioning: conditioning,
@@ -332,12 +330,10 @@ public class USSInference {
                     eval(separated)
                     let samples = separated[0, 0, 0..<actualLength].asArray(Float.self)
                     output.replaceSubrange(start..<end, with: samples)
-                    GPU.clearCache()
+                    Self.trimCacheIfNeeded(afterUnit: i + 1)
                 }
             } else {
                 // For batch size > 1, use true batch processing
-                print("[Inference] Processing segments \(startSeg + 1)-\(endSeg)/\(numSegments) as batch")
-                
                 // Collect segments for batch processing
                 var batchSegments: [MLXArray] = []
                 var batchRanges: [Range<Int>] = []
@@ -367,11 +363,20 @@ public class USSInference {
                     let samples = result[0, 0, 0..<range.count].asArray(Float.self)
                     output.replaceSubrange(range, with: samples)
                 }
-                GPU.clearCache()
+                Self.trimCacheIfNeeded(afterUnit: batchIdx + 1)
             }
         }
 
         return MLXArray(output).reshaped([1, 1, audioLength])
+    }
+
+    private static func trimCacheIfNeeded(afterUnit completedUnits: Int) {
+        guard completedUnits > 0,
+              completedUnits.isMultiple(of: cacheTrimInterval),
+              GPU.cacheMemory >= cacheTrimThresholdBytes else {
+            return
+        }
+        GPU.clearCache()
     }
     
     /// Create triangular window for overlap-add
@@ -383,20 +388,6 @@ public class USSInference {
     }
     
     /// Process multiple embeddings for the same audio.
-    ///
-    /// **Performance Note**: Benchmarks show this method is ~2x slower than calling
-    /// `separate()` sequentially for each embedding due to logging overhead.
-    /// For best performance, call `separate()` directly in a loop instead.
-    ///
-    /// ```swift
-    /// // Recommended (faster):
-    /// for conditioning in conditionings {
-    ///     let result = inference.separate(audio: audio, conditioning: conditioning)
-    /// }
-    ///
-    /// // Not recommended (slower due to logging overhead):
-    /// let results = inference.separateMultipleEmbeddings(audio: audio, conditionings: conditionings)
-    /// ```
     ///
     /// - Parameters:
     ///   - audio: Input audio as MLXArray
@@ -413,12 +404,9 @@ public class USSInference {
             prewarm(conditioning: conditionings[0])
         }
         
-        print("[Inference] Processing \(conditionings.count) embeddings sequentially")
-        
         // Process each embedding
         var results: [MLXArray] = []
-        for (idx, conditioning) in conditionings.enumerated() {
-            print("[Inference] Processing embedding \(idx + 1)/\(conditionings.count)")
+        for conditioning in conditionings {
             let result = separate(
                 audio: audio,
                 conditioning: conditioning,
@@ -496,7 +484,6 @@ public func runUSS(
     let inference = USSInference(model: model, compile: compile, segmentBatchSize: 1)
     
     // Run separation
-    print("Running source separation...")
     let separated = inference.separate(
         audio: audio,
         conditioning: conditioning,
@@ -521,6 +508,4 @@ public func runUSS(
         outputAudio = separated
     }
     try audioSaver.save(outputAudio, to: "\(outputDir)/\(baseName)_\(embeddingType.rawValue).wav")
-    
-    print("Separation complete! Result saved to \(outputDir)")
 }

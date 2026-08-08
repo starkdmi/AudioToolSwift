@@ -105,13 +105,13 @@ public actor AudioEngine {
         guard let managed = provider as? any ManagedModel else {
             return try await body()
         }
-        try await modelManager.beginUse(managed)
+        let lease = try await modelManager.beginUse(managed)
         do {
             let value = try await body()
-            await modelManager.endUse(managed.modelId)
+            await modelManager.endUse(lease)
             return value
         } catch {
-            await modelManager.endUse(managed.modelId)
+            await modelManager.endUse(lease)
             throw error
         }
     }
@@ -1706,48 +1706,47 @@ public actor AudioEngine {
                 // Execute all branches in parallel
                 // Capture values before entering task group to satisfy Swift 6 strict concurrency
                 let currentAudio = context.currentAudio
-                try await withThrowingTaskGroup(of: PipelineResult.self) { group in
-                    for branchStages in branches {
+                var branchResults = [PipelineResult?](
+                    repeating: nil,
+                    count: branches.count
+                )
+                try await withThrowingTaskGroup(
+                    of: (Int, PipelineResult).self
+                ) { group in
+                    for (index, branchStages) in branches.enumerated() {
                         group.addTask {
                             var subBuilder = PipelineBuilder(voice: self)
                             subBuilder.stages = branchStages
-                            return try await self.executePipeline(subBuilder, audio: currentAudio, eventHandler: eventHandler)
+                            let branchResult = try await self.executePipeline(
+                                subBuilder,
+                                audio: currentAudio,
+                                eventHandler: eventHandler
+                            )
+                            return (index, branchResult)
                         }
                     }
                     
-                    // Collect and merge results from all branches
-                    for try await branchResult in group {
-                        // Merge AnalysisResult components (VAD segments + diarization speakers)
-                        // separately to avoid one overwriting the other
-                        let mergedAnalysis: AnalysisResult?
-                        if let branchAnalysis = branchResult.analysis {
-                            if let existingAnalysis = result.analysis {
-                                // Merge: keep non-empty segments from either, same for speakers
-                                mergedAnalysis = AnalysisResult(
-                                    segments: existingAnalysis.segments.isEmpty ? branchAnalysis.segments : existingAnalysis.segments,
-                                    speakers: existingAnalysis.speakers.segments.isEmpty ? branchAnalysis.speakers : existingAnalysis.speakers
-                                )
-                            } else {
-                                mergedAnalysis = branchAnalysis
-                            }
-                        } else {
-                            mergedAnalysis = result.analysis
-                        }
-                        
-                        // Merge all non-nil results from branches
-                        result = PipelineResult(
-                            audio: branchResult.audio ?? result.audio,
-                            separatedTracks: branchResult.separatedTracks ?? result.separatedTracks,
-                            identifiedTracks: branchResult.identifiedTracks ?? result.identifiedTracks,
-                            ussSeparated: branchResult.ussSeparated ?? result.ussSeparated,
-                            transcription: branchResult.transcription ?? result.transcription,
-                            diarizedTranscription: branchResult.diarizedTranscription ?? result.diarizedTranscription,
-                            classifications: branchResult.classifications ?? result.classifications,
-                            analysis: mergedAnalysis,
-                            metrics: result.metrics
-                        )
+                    // Completion order is deliberately ignored. It is scheduler
+                    // state, not pipeline semantics.
+                    for try await (index, branchResult) in group {
+                        branchResults[index] = branchResult
                     }
                 }
+
+                let orderedResults = branchResults.compactMap { $0 }
+                result = Self.mergeParallelResults(orderedResults, onto: result)
+                for (name, duration) in result.metrics.stageDurations {
+                    metrics.stageDurations[name] = duration
+                }
+                metrics.peakMemoryUsage = max(
+                    metrics.peakMemoryUsage,
+                    result.metrics.peakMemoryUsage
+                )
+                context = PipelineContext(
+                    analysis: result.analysis ?? context.analysis,
+                    currentAudio: result.audio ?? context.currentAudio,
+                    originalAudio: context.originalAudio
+                )
                 
             case .forEach(let transform):
                 // Apply transform to each separated track
@@ -1833,6 +1832,63 @@ public actor AudioEngine {
             analysis: result.analysis,
             metrics: metrics
         )
+    }
+
+    /// Merge parallel branch values deterministically in their declaration order.
+    /// Later branches take precedence for fields they produce; complementary VAD
+    /// and diarization analysis values are combined rather than discarded.
+    internal nonisolated static func mergeParallelResults(
+        _ branches: [PipelineResult],
+        onto base: PipelineResult
+    ) -> PipelineResult {
+        var merged = base
+        var mergedMetrics = base.metrics
+
+        for (index, branch) in branches.enumerated() {
+            let analysis: AnalysisResult?
+            if let branchAnalysis = branch.analysis {
+                if let existing = merged.analysis {
+                    analysis = AnalysisResult(
+                        segments: branchAnalysis.segments.isEmpty
+                            ? existing.segments
+                            : branchAnalysis.segments,
+                        speakers: branchAnalysis.speakers.segments.isEmpty
+                            ? existing.speakers
+                            : branchAnalysis.speakers
+                    )
+                } else {
+                    analysis = branchAnalysis
+                }
+            } else {
+                analysis = merged.analysis
+            }
+
+            for (name, duration) in branch.metrics.stageDurations {
+                mergedMetrics.stageDurations["parallel[\(index)].\(name)"] = duration
+            }
+            mergedMetrics.totalDuration = max(
+                mergedMetrics.totalDuration,
+                branch.metrics.totalDuration
+            )
+            mergedMetrics.peakMemoryUsage = max(
+                mergedMetrics.peakMemoryUsage,
+                branch.metrics.peakMemoryUsage
+            )
+
+            merged = PipelineResult(
+                audio: branch.audio ?? merged.audio,
+                separatedTracks: branch.separatedTracks ?? merged.separatedTracks,
+                identifiedTracks: branch.identifiedTracks ?? merged.identifiedTracks,
+                ussSeparated: branch.ussSeparated ?? merged.ussSeparated,
+                transcription: branch.transcription ?? merged.transcription,
+                diarizedTranscription: branch.diarizedTranscription ?? merged.diarizedTranscription,
+                classifications: branch.classifications ?? merged.classifications,
+                analysis: analysis,
+                metrics: mergedMetrics
+            )
+        }
+
+        return merged
     }
     
     // MARK: - Model Management

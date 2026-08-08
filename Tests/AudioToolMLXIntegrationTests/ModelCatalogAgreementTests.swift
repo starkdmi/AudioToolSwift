@@ -8,6 +8,7 @@
 import XCTest
 import AudioToolCore
 import AudioToolUSS
+import AudioToolTTS
 @testable import AudioToolMLX
 
 /// What the catalog advertises has to be what the providers fetch.
@@ -102,6 +103,24 @@ final class ModelCatalogAgreementTests: XCTestCase {
         XCTAssertEqual(Set(demucs.files), Set(DemucsProvider.Stem.allCases.map { "\($0.rawValue).safetensors" }),
                        "Demucs needs one weight file per stem, catalog lists \(demucs.files)")
         XCTAssertEqual(demucs.files.count, 4)
+
+        let kokoro = try variant("kokoro_tts_bf16")
+        XCTAssertEqual(kokoro.repo, ModelRepository.kokoroBF16)
+        XCTAssertEqual(kokoro.repo, ModelPrecision.bf16.repo(base: KokoroTTSProvider.baseRepo))
+        XCTAssertEqual(kokoro.files, ModelFiles.kokoro)
+
+        let chatterbox = try variant("chatterbox_tts_fp32")
+        XCTAssertEqual(chatterbox.repo, ChatterboxTTSProvider.baseRepo)
+        XCTAssertEqual(chatterbox.files, ModelFiles.chatterboxDownload(for: .fp32))
+        XCTAssertEqual(chatterbox.requiredFiles, ModelFiles.chatterboxRequired(for: .fp32))
+        XCTAssertTrue(chatterbox.files.contains("conds.safetensors"))
+        XCTAssertTrue(chatterbox.files.contains("s3tokenizer.safetensors"))
+        XCTAssertFalse(chatterbox.requiredFiles.contains("conds.safetensors"))
+    }
+
+    func testMossFormerEnhancementAdvertisesOnlySupportedPrecisions() {
+        let precisions = Set(catalog.variants(for: "mossformer2_se").map(\.quantization))
+        XCTAssertEqual(precisions, Set([.fp32, .fp16]))
     }
 
     /// A size that is wrong by a factor of four misinforms a storage precheck, which
@@ -124,6 +143,14 @@ final class ModelCatalogAgreementTests: XCTestCase {
     func testEveryVariantNamesAtLeastOneFile() {
         for entry in catalog.allVariants {
             XCTAssertFalse(entry.files.isEmpty, "\(entry.id) lists no files to download")
+            XCTAssertFalse(
+                entry.requiredFiles.isEmpty,
+                "\(entry.id) lists no files required for verification"
+            )
+            XCTAssertTrue(
+                Set(entry.requiredFiles).isSubset(of: Set(entry.files)),
+                "\(entry.id) requires files its download manifest does not request"
+            )
             XCTAssertFalse(entry.repo.isEmpty, "\(entry.id) has no repo")
         }
     }

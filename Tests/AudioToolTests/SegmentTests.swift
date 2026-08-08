@@ -30,6 +30,10 @@ struct SegmentTests {
         
         #expect(a < b)
         #expect(!(b < a))
+
+        let sameStartShorter = TimeRange(start: 1.0, end: 1.5)
+        #expect(sameStartShorter < a)
+        #expect(!(a < sameStartShorter))
     }
     
     @Test("TimeRange overlap detection")
@@ -133,6 +137,46 @@ struct SegmentTests {
         #expect(overlaps.count == 1)
         #expect(overlaps[0].start == 2.0)
         #expect(overlaps[0].end == 3.0)
+    }
+
+    @Test("Overlap counts distinct simultaneously active speakers")
+    func testSpeakerTimelineDistinctConcurrentSpeakers() {
+        let speaker0 = SpeakerID(0)
+        let timeline = SpeakerTimeline(segments: [
+            // Duplicate, nested hypotheses for one speaker must count once.
+            DiarizedSegment(timeRange: TimeRange(start: 0, end: 10), speakerID: speaker0, confidence: 0.9),
+            DiarizedSegment(timeRange: TimeRange(start: 1, end: 9), speakerID: speaker0, confidence: 0.8),
+            DiarizedSegment(timeRange: TimeRange(start: 4, end: 5), speakerID: SpeakerID(1), confidence: 0.9),
+        ])
+
+        #expect(timeline.maxOverlappingSpeakers == 2)
+        #expect(timeline.overlappingRanges() == [TimeRange(start: 4, end: 5)])
+    }
+
+    @Test("Pairwise overlaps that never coincide do not inflate the maximum")
+    func testSpeakerTimelineNonCliqueOverlap() {
+        let timeline = SpeakerTimeline(segments: [
+            DiarizedSegment(timeRange: TimeRange(start: 0, end: 10), speakerID: SpeakerID(0), confidence: 1),
+            DiarizedSegment(timeRange: TimeRange(start: 0, end: 4), speakerID: SpeakerID(1), confidence: 1),
+            DiarizedSegment(timeRange: TimeRange(start: 6, end: 10), speakerID: SpeakerID(2), confidence: 1),
+        ])
+
+        #expect(timeline.maxOverlappingSpeakers == 2)
+        #expect(timeline.overlappingRanges() == [
+            TimeRange(start: 0, end: 4),
+            TimeRange(start: 6, end: 10),
+        ])
+    }
+
+    @Test("Zero-duration hypotheses do not remain active")
+    func testZeroDurationSegmentDoesNotAffectOverlap() {
+        let timeline = SpeakerTimeline(segments: [
+            DiarizedSegment(timeRange: TimeRange(start: 0, end: 2), speakerID: SpeakerID(0), confidence: 1),
+            DiarizedSegment(timeRange: TimeRange(start: 1, end: 1), speakerID: SpeakerID(1), confidence: 1),
+        ])
+
+        #expect(timeline.maxOverlappingSpeakers == 1)
+        #expect(timeline.overlappingRanges().isEmpty)
     }
     
     @Test("SpeakerTimeline filter by speaker")

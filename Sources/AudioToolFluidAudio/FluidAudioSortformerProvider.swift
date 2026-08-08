@@ -8,8 +8,9 @@
 
 import Foundation
 import os
-@preconcurrency import FluidAudio
+import AudioTool
 import AudioToolCore
+@preconcurrency import FluidAudio
 
 // MARK: - FluidAudio Sortformer Provider
 
@@ -116,13 +117,15 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         validateConfigCompatibility()
         
         // Create diarizer with config
-        diarizer = SortformerDiarizer(config: config)
+        let candidate = SortformerDiarizer(config: config)
         
         // Load models from HuggingFace (auto-downloads and caches)
         let models = try await SortformerModels.loadFromHuggingFace(config: config)
         
         // Initialize diarizer with loaded models
-        diarizer?.initialize(models: models)
+        candidate.initialize(models: models)
+        try Task.checkCancellation()
+        diarizer = candidate
     }
     
     /// Validates that the configuration is compatible with available models
@@ -360,12 +363,10 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         try validateInputChannels(audio)
         
         // Resample to 16kHz if needed (e.g., from 8kHz WHAMR output)
-        let inputSamples: [Float]
-        if audio.sampleRate != sampleRate {
-            inputSamples = resampleAudio(audio.samples, fromRate: audio.sampleRate, toRate: sampleRate)
-        } else {
-            inputSamples = audio.samples
-        }
+        let inputSamples = try audio.resampled(
+            to: sampleRate,
+            quality: .auto
+        ).samples
         
         // Process the audio through Sortformer.
         // Note: this streaming path preserves spkcache state, so the speaker
@@ -493,42 +494,4 @@ public actor FluidAudioSortformerProvider: DiarizationProvider, SpeakerIdentifie
         return results.sorted { $0.identification.speakerSlot < $1.identification.speakerSlot }
     }
     
-    // MARK: - Private Helpers
-    
-    /// Resample audio samples using linear interpolation
-    ///
-    /// Simple but effective resampling for speaker identification purposes.
-    /// Uses linear interpolation which is sufficient for re-identification
-    /// where we're comparing spectral characteristics, not preserving fidelity.
-    ///
-    /// - Parameters:
-    ///   - samples: Input audio samples
-    ///   - fromRate: Source sample rate
-    ///   - toRate: Target sample rate
-    /// - Returns: Resampled audio samples
-    private nonisolated func resampleAudio(_ samples: [Float], fromRate: Int, toRate: Int) -> [Float] {
-        guard fromRate != toRate else { return samples }
-        guard !samples.isEmpty else { return [] }
-        
-        let ratio = Double(toRate) / Double(fromRate)
-        let newLength = Int(Double(samples.count) * ratio)
-        
-        guard newLength > 0 else { return [] }
-        
-        var resampled = [Float](repeating: 0, count: newLength)
-        
-        for i in 0..<newLength {
-            let sourceIndex = Double(i) / ratio
-            let index = Int(sourceIndex)
-            let fraction = Float(sourceIndex - Double(index))
-            
-            if index < samples.count - 1 {
-                resampled[i] = samples[index] * (1 - fraction) + samples[index + 1] * fraction
-            } else if index < samples.count {
-                resampled[i] = samples[index]
-            }
-        }
-        
-        return resampled
-    }
 }

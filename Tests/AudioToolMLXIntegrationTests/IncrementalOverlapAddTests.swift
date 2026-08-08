@@ -180,3 +180,28 @@ struct IncrementalOverlapAddTailTests {
         #expect(abs(output[13] - (0.5 / 0.75)) < 1e-6)
     }
 }
+
+@Suite("MLX cache trimming policy")
+struct MLXCachePolicyTests {
+
+    @Test("Cache trims are periodic and pressure driven")
+    func periodicPressureThreshold() {
+        let threshold = MLXCachePolicy.defaultThresholdBytes
+
+        #expect(!MLXCachePolicy.shouldTrim(afterChunk: 0, cacheMemory: threshold))
+        #expect(!MLXCachePolicy.shouldTrim(afterChunk: 7, cacheMemory: threshold))
+        #expect(!MLXCachePolicy.shouldTrim(afterChunk: 8, cacheMemory: threshold - 1))
+        #expect(MLXCachePolicy.shouldTrim(afterChunk: 8, cacheMemory: threshold))
+        #expect(!MLXCachePolicy.shouldTrim(afterChunk: 9, cacheMemory: threshold * 2))
+        #expect(MLXCachePolicy.shouldTrim(afterChunk: 16, cacheMemory: threshold * 2))
+    }
+
+    @Test("Invalid intervals never request a trim")
+    func invalidInterval() {
+        #expect(!MLXCachePolicy.shouldTrim(
+            afterChunk: 1,
+            cacheMemory: .max,
+            chunkInterval: 0
+        ))
+    }
+}

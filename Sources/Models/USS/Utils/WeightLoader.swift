@@ -74,6 +74,5 @@ public class WeightLoader {
             print("[WeightLoader] FiLM weight AFTER update: shape=\(filmWeight.shape), max=\(MLX.max(filmWeight).item(Float.self)), mean=\(MLX.mean(filmWeight).item(Float.self))")
         }*/
         
-        print("Successfully loaded \(processedWeights.count) weights")
     }
 }

@@ -8,6 +8,78 @@
 import Foundation
 import os
 
+/// Broadcasts one shared load result to cancellation-aware waiters. Completion and
+/// each caller's cancellation race under one lock, so every checked continuation
+/// is resumed exactly once without creating a blocked observer task per caller.
+private final class PendingLoadCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<Void, Error>?
+    private var continuations: [UUID: CheckedContinuation<Void, Error>] = [:]
+    private var cancelledWaiters: Set<UUID> = []
+
+    func wait() async throws {
+        let waiterId = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                install(continuation, for: waiterId)
+            }
+        } onCancel: {
+            self.cancel(waiterId)
+        }
+    }
+
+    func complete(with result: Result<Void, Error>) {
+        lock.lock()
+        guard self.result == nil else {
+            lock.unlock()
+            return
+        }
+        self.result = result
+        let waitingContinuations = Array(continuations.values)
+        self.continuations.removeAll()
+        cancelledWaiters.removeAll()
+        lock.unlock()
+
+        for continuation in waitingContinuations {
+            continuation.resume(with: result)
+        }
+    }
+
+    private func install(
+        _ continuation: CheckedContinuation<Void, Error>,
+        for waiterId: UUID
+    ) {
+        lock.lock()
+        if let result {
+            lock.unlock()
+            continuation.resume(with: result)
+            return
+        }
+        if cancelledWaiters.remove(waiterId) != nil {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        continuations[waiterId] = continuation
+        lock.unlock()
+    }
+
+    private func cancel(_ waiterId: UUID) {
+        lock.lock()
+        guard result == nil else {
+            lock.unlock()
+            return
+        }
+        if let continuation = continuations.removeValue(forKey: waiterId) {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+        } else {
+            cancelledWaiters.insert(waiterId)
+            lock.unlock()
+        }
+    }
+}
+
 // MARK: - Model Lifecycle Manager
 
 /// Centralized model lifecycle management with memory tracking and LRU eviction.
@@ -22,9 +94,9 @@ import os
 ///
 /// // Make the model resident, mark it most-recently-used, and protect it from
 /// // eviction for the duration of the call.
-/// try await manager.beginUse(enhancer)
+/// let lease = try await manager.beginUse(enhancer)
 /// let enhanced = try await enhancer.process(audio)
-/// await manager.endUse(enhancer.modelId)
+/// await manager.endUse(lease)
 ///
 /// // Explicit unload
 /// await manager.unload(modelId: "mossformer2_se_48k")
@@ -49,6 +121,16 @@ public actor ModelResidency {
 
     
     // MARK: - Types
+
+    /// An instance-scoped claim on one resident model.
+    ///
+    /// Releasing by token prevents a late `endUse` from an explicitly unloaded old
+    /// provider from decrementing the claim count of a newer provider with the same
+    /// model identifier.
+    public struct Lease: Sendable, Hashable {
+        public let modelId: String
+        fileprivate let id: UUID
+    }
     
     /// Entry for a loaded model with metadata
     private struct LoadedModelEntry: Sendable {
@@ -58,6 +140,36 @@ public actor ModelResidency {
         let memoryBytes: Int
         
         var modelId: String { model.modelId }
+    }
+
+    /// One shared load operation for every caller waiting on the same provider.
+    /// The token prevents a cancelled/replaced operation from publishing itself
+    /// after a newer operation has taken its place.
+    private struct PendingLoad: Sendable {
+        let token: UUID
+        let model: any ManagedModel
+        let replacedModel: (any ManagedModel)?
+        let memoryBytes: Int
+        let startedAt: Date
+        let task: Task<Void, Error>
+        let completion: PendingLoadCompletion
+        var waiterCount: Int
+    }
+
+    /// One provider teardown, shared by explicit unloads, abandoned loads, and
+    /// eviction. The token prevents a late waiter from clearing a newer operation.
+    private struct ModelTeardown: Sendable {
+        let token: UUID
+        let replacedModel: (any ManagedModel)?
+        let task: Task<Void, Never>
+    }
+
+    /// One `unloadAll()` barrier. Keeping the model teardowns it joined lets the
+    /// final waiter remove their completed records before reopening admission.
+    private struct GlobalTeardown: Sendable {
+        let token: UUID
+        let joinedModelTeardowns: [String: ModelTeardown]
+        let task: Task<Void, Never>
     }
     
     /// Manager statistics
@@ -83,6 +195,16 @@ public actor ModelResidency {
     /// Loaded models keyed by modelId
     private var loadedModels: [String: LoadedModelEntry] = [:]
 
+    /// Loads are single-flight per model identifier. Actor isolation alone is not
+    /// sufficient because calls re-enter this actor while a provider awaits I/O.
+    private var pendingLoads: [String: PendingLoad] = [:]
+
+    /// Provider teardown permits actor reentrancy. Retaining the task makes every
+    /// duplicate unload a completion barrier and blocks admission until teardown
+    /// has actually finished.
+    private var modelTeardowns: [String: ModelTeardown] = [:]
+    private var globalTeardown: GlobalTeardown?
+
     /// How many in-flight calls are using each model.
     ///
     /// Non-zero means "do not unload": a provider evicted while its `process` was
@@ -90,6 +212,7 @@ public actor ModelResidency {
     /// Balanced by ``endUse(_:)``, and counted rather than flagged because
     /// concurrent calls to the same model are legal.
     private var activeUseCounts: [String: Int] = [:]
+    private var activeLeases: [UUID: String] = [:]
 
     /// Total evictions performed
     private var evictionCount: Int = 0
@@ -120,42 +243,26 @@ public actor ModelResidency {
     ///
     /// Every successful call must be balanced by ``endUse(_:)``, including on the
     /// error path, or the model is pinned in memory for the process's lifetime.
+    /// Cancelling a caller while it waits for a shared load releases its claim
+    /// immediately. The load itself is cancelled and rolled back once its final
+    /// waiter leaves.
     ///
     /// - Parameter model: The model about to be used
     /// - Throws: If the model fails to load, or cannot fit in the memory limit at all
-    public func beginUse(_ model: any ManagedModel) async throws {
+    /// - Returns: A lease that must be passed to ``endUse(_:)``.
+    public func beginUse(_ model: any ManagedModel) async throws -> Lease {
         let modelId = model.modelId
+        let requiredMemory = model.estimatedMemoryBytes
 
-        if let existing = loadedModels[modelId] {
-            if Self.isSameInstance(existing.model, model) {
-                // Trust the model, not the table. An entry can be stale - callers
-                // hold the provider directly and may unload it themselves.
-                if await model.checkIfLoaded() {
-                    touch(modelId)
-                    activeUseCounts[modelId, default: 0] += 1
-                    return
-                }
-                // Same instance, unloaded behind our back: reload it below.
-            } else if activeUseCounts[modelId] == nil {
-                // A different instance is registering under this id. The one in the
-                // table is about to become unreachable through the manager, so it
-                // has to be released here or its weights stay resident, untracked
-                // and impossible to evict - memory the accounting cannot see.
-                await existing.model.unload()
-            } else {
-                // Displaced while someone is mid-call on it. Unloading would tear
-                // weights out of a live inference, so the old instance is left to
-                // its caller; it simply stops being the manager's business.
-                Self.logger.error(
-                    "'\(modelId, privacy: .public)' was replaced by a different instance while in use - the previous one is no longer tracked")
-            }
-            loadedModels.removeValue(forKey: modelId)
+        guard globalTeardown == nil, modelTeardowns[modelId] == nil else {
+            throw AudioToolError.resourceUnavailable(
+                "Model '\(modelId)' is currently being unloaded"
+            )
         }
 
         // Strict managers reject a model that can never fit. The default policy
         // instead admits it as an oversized singleton; TranslateGemma is larger
         // than AudioEngine's normal 2 GB residency budget.
-        let requiredMemory = model.estimatedMemoryBytes
         if requiredMemory > memoryLimitBytes, !allowsOversizedSingleton {
             throw AudioToolError.memoryExhausted(
                 required: requiredMemory,
@@ -163,26 +270,305 @@ public actor ModelResidency {
             )
         }
 
-        // Claim before loading, so a reentrant beginUse for another model cannot
-        // pick this one as its eviction victim while its weights are being read.
-        activeUseCounts[modelId, default: 0] += 1
+        if let pending = pendingLoads[modelId] {
+            try ensureSameInstance(pending.model, model, modelId: modelId)
+            let lease = claim(modelId)
+            try await awaitPendingLoad(pending, lease: lease)
+            return lease
+        }
+
+        if let existing = loadedModels[modelId] {
+            if Self.isSameInstance(existing.model, model) {
+                // Claim before the await. A concurrent admission may otherwise
+                // evict this entry while its readiness is being checked.
+                let lease = claim(modelId)
+                // Trust the model, not the table. An entry can be stale - callers
+                // hold the provider directly and may unload it themselves.
+                if await model.checkIfLoaded() {
+                    if let current = loadedModels[modelId],
+                       Self.isSameInstance(current.model, model),
+                        pendingLoads[modelId] == nil {
+                        touch(modelId)
+                        return lease
+                    }
+                    // State changed during the await. Retry without leaking the
+                    // claim taken above.
+                    release(lease)
+                    return try await beginUse(model)
+                }
+
+                // Same instance, unloaded behind our back. Another reentrant call
+                // may already have started the reload while this check awaited.
+                if let pending = pendingLoads[modelId] {
+                    do {
+                        try ensureSameInstance(pending.model, model, modelId: modelId)
+                        try await awaitPendingLoad(pending, lease: lease)
+                    } catch {
+                        // `awaitPendingLoad` releases load errors itself. A validation
+                        // error occurs before it is called and still owns this lease.
+                        if activeLeases[lease.id] != nil { release(lease) }
+                        throw error
+                    }
+                    return lease
+                }
+                if let current = loadedModels[modelId],
+                   Self.isSameInstance(current.model, model) {
+                    loadedModels.removeValue(forKey: modelId)
+                    return try await startPendingLoad(
+                        model,
+                        memoryBytes: requiredMemory,
+                        replacing: nil,
+                        existingLease: lease
+                    )
+                }
+
+                release(lease)
+                return try await beginUse(model)
+            } else if activeUseCounts[modelId] == nil {
+                return try await startPendingLoad(
+                    model,
+                    memoryBytes: requiredMemory,
+                    replacing: existing,
+                    existingLease: nil
+                )
+            } else {
+                // A modelId is the manager's ownership key. Replacing an active
+                // instance would either unload live weights or orphan them outside
+                // memory accounting, so fail explicitly.
+                throw AudioToolError.pipelineConfigurationInvalid(
+                    "A different model instance with id '\(modelId)' is already in use"
+                )
+            }
+        }
+
+        return try await startPendingLoad(
+            model,
+            memoryBytes: requiredMemory,
+            replacing: nil,
+            existingLease: nil
+        )
+    }
+
+    private func startPendingLoad(
+        _ model: any ManagedModel,
+        memoryBytes: Int,
+        replacing existing: LoadedModelEntry?,
+        existingLease: Lease?
+    ) async throws -> Lease {
+        let modelId = model.modelId
+        let lease = existingLease ?? claim(modelId)
+        let token = UUID()
+        let startedAt = Date()
+        let completion = PendingLoadCompletion()
+        let task = Task {
+            do {
+                try await self.prepareAndLoad(
+                    model,
+                    memoryBytes: memoryBytes,
+                    replacing: existing
+                )
+                completion.complete(with: .success(()))
+            } catch {
+                completion.complete(with: .failure(error))
+                throw error
+            }
+        }
+        let pending = PendingLoad(
+            token: token,
+            model: model,
+            replacedModel: existing?.model,
+            memoryBytes: memoryBytes,
+            startedAt: startedAt,
+            task: task,
+            completion: completion,
+            waiterCount: 0
+        )
+        pendingLoads[modelId] = pending
+
+        try await awaitPendingLoad(pending, lease: lease)
+        return lease
+    }
+
+    private func awaitPendingLoad(
+        _ pending: PendingLoad,
+        lease: Lease
+    ) async throws {
+        let modelId = lease.modelId
+        guard registerWaiter(for: pending, modelId: modelId) else {
+            release(lease)
+            throw CancellationError()
+        }
+
         do {
-            await evictIfNeeded(forNewMemory: requiredMemory)
+            try Task.checkCancellation()
+            try await pending.completion.wait()
+            try Task.checkCancellation()
+            if let current = pendingLoads[modelId], current.token == pending.token {
+                pendingLoads.removeValue(forKey: modelId)
+                loadedModels[modelId] = LoadedModelEntry(
+                    model: pending.model,
+                    loadedAt: pending.startedAt,
+                    lastAccessedAt: Date(),
+                    memoryBytes: pending.memoryBytes
+                )
+            } else if let loaded = loadedModels[modelId],
+                      Self.isSameInstance(loaded.model, pending.model) {
+                // Another waiter won the race to publish this shared load.
+                touch(modelId)
+            } else {
+                throw CancellationError()
+            }
+        } catch {
+            let waiterWasCancelled = Task.isCancelled
+            let wasLastWaiter = unregisterWaiter(for: pending, modelId: modelId)
+            release(lease)
+
+            if waiterWasCancelled,
+               wasLastWaiter {
+                abandonPendingLoad(pending, modelId: modelId)
+            } else if !waiterWasCancelled,
+                      pendingLoads[modelId]?.token == pending.token {
+                pendingLoads.removeValue(forKey: modelId)
+            }
+            throw error
+        }
+    }
+
+    private func registerWaiter(
+        for pending: PendingLoad,
+        modelId: String
+    ) -> Bool {
+        guard var current = pendingLoads[modelId],
+              current.token == pending.token else { return false }
+        current.waiterCount += 1
+        pendingLoads[modelId] = current
+        return true
+    }
+
+    /// Returns whether this caller was the final waiter for the current pending
+    /// generation. Active inference leases are intentionally not part of this
+    /// count: they are residency claims, not callers awaiting this load.
+    private func unregisterWaiter(
+        for pending: PendingLoad,
+        modelId: String
+    ) -> Bool {
+        guard var current = pendingLoads[modelId],
+              current.token == pending.token,
+              current.waiterCount > 0 else { return false }
+        current.waiterCount -= 1
+        pendingLoads[modelId] = current
+        return current.waiterCount == 0
+    }
+
+    /// Cancel a shared load only after its final waiter has released its lease.
+    /// Keep the abandoned generation behind a tracked teardown until provider
+    /// rollback finishes; otherwise a new generation could start and then be torn
+    /// down by the old generation's delayed `unload()`.
+    private func abandonPendingLoad(
+        _ pending: PendingLoad,
+        modelId: String
+    ) {
+        guard let current = pendingLoads[modelId],
+              current.token == pending.token,
+              current.waiterCount == 0 else { return }
+
+        pendingLoads.removeValue(forKey: modelId)
+        pending.task.cancel()
+
+        let cleanupTask = Task {
+            let outcome = await pending.task.result
+            // `prepareAndLoad` rolls back every throwing path. A task that
+            // completed just before cancellation still needs explicit teardown
+            // because it was never published as a resident entry.
+            if case .success = outcome {
+                await pending.model.unload()
+            }
+        }
+        recordModelTeardown(
+            modelId: modelId,
+            replacedModel: pending.replacedModel,
+            task: cleanupTask
+        )
+    }
+
+    @discardableResult
+    private func recordModelTeardown(
+        modelId: String,
+        replacedModel: (any ManagedModel)?,
+        task: Task<Void, Never>
+    ) -> ModelTeardown {
+        let teardown = ModelTeardown(
+            token: UUID(),
+            replacedModel: replacedModel,
+            task: task
+        )
+        modelTeardowns[modelId] = teardown
+        Task { await settleModelTeardown(teardown, modelId: modelId) }
+        return teardown
+    }
+
+    private func settleModelTeardown(
+        _ teardown: ModelTeardown,
+        modelId: String
+    ) async {
+        await teardown.task.value
+        finishModelTeardown(teardown, modelId: modelId)
+    }
+
+    private func finishModelTeardown(
+        _ teardown: ModelTeardown,
+        modelId: String
+    ) {
+        guard modelTeardowns[modelId]?.token == teardown.token else { return }
+        modelTeardowns.removeValue(forKey: modelId)
+    }
+
+    private func finishGlobalTeardown(_ teardown: GlobalTeardown) {
+        guard globalTeardown?.token == teardown.token else { return }
+        for (modelId, modelTeardown) in teardown.joinedModelTeardowns {
+            finishModelTeardown(modelTeardown, modelId: modelId)
+        }
+        globalTeardown = nil
+    }
+
+    private func prepareAndLoad(
+        _ model: any ManagedModel,
+        memoryBytes: Int,
+        replacing existing: LoadedModelEntry?
+    ) async throws {
+        if let existing {
+            if let current = loadedModels[existing.modelId],
+               Self.isSameInstance(current.model, existing.model) {
+                loadedModels.removeValue(forKey: existing.modelId)
+            }
+            await existing.model.unload()
+        }
+
+        do {
+            try Task.checkCancellation()
+            await evictIfNeeded(forNewMemory: memoryBytes)
             if !(await model.checkIfLoaded()) {
                 try await model.load()
             }
+            try Task.checkCancellation()
         } catch {
-            releaseUse(modelId)
+            // A failed or cancelled load must never publish partially initialized
+            // provider state through the residency manager.
+            await model.unload()
             throw error
         }
+    }
 
-        let now = Date()
-        loadedModels[modelId] = LoadedModelEntry(
-            model: model,
-            loadedAt: now,
-            lastAccessedAt: now,
-            memoryBytes: requiredMemory
-        )
+    private func ensureSameInstance(
+        _ existing: any ManagedModel,
+        _ proposed: any ManagedModel,
+        modelId: String
+    ) throws {
+        guard Self.isSameInstance(existing, proposed) else {
+            throw AudioToolError.pipelineConfigurationInvalid(
+                "A different model instance with id '\(modelId)' is already loading"
+            )
+        }
     }
 
     /// Release the claim taken by ``beginUse(_:)``, and settle the budget.
@@ -194,14 +580,29 @@ public actor ModelResidency {
     /// the process - the limit would be respected only when models happened not to
     /// overlap, which is precisely when it does not matter.
     ///
-    /// - Parameter modelId: The model identifier passed to ``beginUse(_:)``
-    public func endUse(_ modelId: String) async {
-        releaseUse(modelId)
+    /// - Parameter lease: The exact lease returned by ``beginUse(_:)``.
+    public func endUse(_ lease: Lease) async {
+        release(lease)
+        let modelId = lease.modelId
         guard activeUseCounts[modelId] == nil else { return }  // still claimed elsewhere
         await evict(downTo: idleResidencyLimit)
     }
 
-    private func releaseUse(_ modelId: String) {
+    private func claim(_ modelId: String) -> Lease {
+        let lease = Lease(modelId: modelId, id: UUID())
+        activeLeases[lease.id] = modelId
+        activeUseCounts[modelId, default: 0] += 1
+        return lease
+    }
+
+    private func release(_ lease: Lease) {
+        guard activeLeases.removeValue(forKey: lease.id) == lease.modelId else {
+            return
+        }
+        releaseUseCount(lease.modelId)
+    }
+
+    private func releaseUseCount(_ modelId: String) {
         guard let count = activeUseCounts[modelId] else { return }
         if count <= 1 {
             activeUseCounts.removeValue(forKey: modelId)
@@ -236,22 +637,107 @@ public actor ModelResidency {
     ///
     /// - Parameter modelId: The model identifier to unload
     public func unload(modelId: String) async {
-        activeUseCounts.removeValue(forKey: modelId)
-        guard let entry = loadedModels.removeValue(forKey: modelId) else {
+        if let globalTeardown {
+            await globalTeardown.task.value
+            finishGlobalTeardown(globalTeardown)
             return
         }
-        await entry.model.unload()
+
+        // Explicit unload invalidates every lease for this identifier, even when
+        // it is joining an abandonment or eviction teardown started elsewhere.
+        activeUseCounts.removeValue(forKey: modelId)
+        activeLeases = activeLeases.filter { $0.value != modelId }
+        if let teardown = modelTeardowns[modelId] {
+            await teardown.task.value
+            finishModelTeardown(teardown, modelId: modelId)
+            return
+        }
+
+        let pending = pendingLoads.removeValue(forKey: modelId)
+        pending?.task.cancel()
+        let entry = loadedModels.removeValue(forKey: modelId)
+
+        guard pending != nil || entry != nil else { return }
+        let shouldUnloadEntry: Bool
+        if let entry, let replaced = pending?.replacedModel {
+            shouldUnloadEntry = !Self.isSameInstance(replaced, entry.model)
+        } else {
+            shouldUnloadEntry = entry != nil
+        }
+        let task = Task {
+            if let pending {
+                let outcome = await pending.task.result
+                if case .success = outcome {
+                    await pending.model.unload()
+                }
+            }
+            if shouldUnloadEntry, let entry {
+                await entry.model.unload()
+            }
+        }
+        let teardown = recordModelTeardown(
+            modelId: modelId,
+            replacedModel: pending?.replacedModel,
+            task: task
+        )
+        await teardown.task.value
+        finishModelTeardown(teardown, modelId: modelId)
     }
 
     /// Unload all models.
     public func unloadAll() async {
-        let entries = loadedModels.values
-        loadedModels.removeAll()
-        activeUseCounts.removeAll()
-
-        for entry in entries {
-            await entry.model.unload()
+        if let globalTeardown {
+            await globalTeardown.task.value
+            finishGlobalTeardown(globalTeardown)
+            return
         }
+
+        let joinedModelTeardowns = modelTeardowns
+        let entries = Array(loadedModels.values)
+        let pending = Array(pendingLoads.values)
+        loadedModels.removeAll()
+        pendingLoads.removeAll()
+        activeUseCounts.removeAll()
+        activeLeases.removeAll()
+
+        for load in pending {
+            load.task.cancel()
+        }
+        let entriesToUnload = entries.filter { entry in
+            let replacedByPendingLoad = pending.contains(where: { load in
+                guard let replaced = load.replacedModel else { return false }
+                return Self.isSameInstance(replaced, entry.model)
+            })
+            let replacedByExistingTeardown = joinedModelTeardowns.values.contains(
+                where: { teardown in
+                    guard let replaced = teardown.replacedModel else { return false }
+                    return Self.isSameInstance(replaced, entry.model)
+                }
+            )
+            return !replacedByPendingLoad && !replacedByExistingTeardown
+        }
+        let task = Task {
+            for teardown in joinedModelTeardowns.values {
+                await teardown.task.value
+            }
+            for load in pending {
+                let outcome = await load.task.result
+                if case .success = outcome {
+                    await load.model.unload()
+                }
+            }
+            for entry in entriesToUnload {
+                await entry.model.unload()
+            }
+        }
+        let teardown = GlobalTeardown(
+            token: UUID(),
+            joinedModelTeardowns: joinedModelTeardowns,
+            task: task
+        )
+        globalTeardown = teardown
+        await teardown.task.value
+        finishGlobalTeardown(teardown)
     }
     
     /// Access a loaded model by ID.
@@ -275,6 +761,12 @@ public actor ModelResidency {
     /// IDs of all currently loaded models
     public var loadedModelIds: [String] {
         Array(loadedModels.keys)
+    }
+
+    /// Number of callers currently waiting for a model's shared load. Internal so
+    /// concurrency tests can synchronize on actor state instead of timing sleeps.
+    func pendingWaiterCount(for modelId: String) -> Int {
+        pendingLoads[modelId]?.waiterCount ?? 0
     }
     
     /// Total memory used by loaded models in bytes
@@ -324,25 +816,34 @@ public actor ModelResidency {
 
     /// Evict least-recently-used models until usage is at or below `targetUsage`.
     ///
-    /// Models with an outstanding ``beginUse(_:)`` are not candidates. If the only
-    /// things left to evict are in use, this stops rather than freeing them: going
+    /// Models with an outstanding ``beginUse(_:)`` or teardown are not candidates.
+    /// If nothing safe remains, this stops rather than freeing a live model: going
     /// over the limit is recoverable, tearing weights out of a running inference is
     /// not. The limit is a budget, not an invariant - but ``endUse(_:)`` calls back
     /// here once a claim clears, so an overage lasts only as long as the calls that
     /// forced it.
     private func evict(downTo targetUsage: Int) async {
         while totalMemoryUsage > targetUsage {
-            let candidates = loadedModels.values.filter { activeUseCounts[$0.modelId] == nil }
+            let candidates = loadedModels.values.filter {
+                activeUseCounts[$0.modelId] == nil && modelTeardowns[$0.modelId] == nil
+            }
             guard let lruEntry = candidates.min(by: { $0.lastAccessedAt < $1.lastAccessedAt }) else {
                 #if DEBUG
                 Self.logger.info(
-                    "Over budget by \((self.totalMemoryUsage - targetUsage) / 1_000_000, privacy: .public)MB but every resident model is in use - not evicting")
+                    "Over budget by \((self.totalMemoryUsage - targetUsage) / 1_000_000, privacy: .public)MB but every resident model is in use or unloading - not evicting")
                 #endif
                 return
             }
 
             loadedModels.removeValue(forKey: lruEntry.modelId)
-            await lruEntry.model.unload()
+            let task = Task { await lruEntry.model.unload() }
+            let teardown = recordModelTeardown(
+                modelId: lruEntry.modelId,
+                replacedModel: nil,
+                task: task
+            )
+            await teardown.task.value
+            finishModelTeardown(teardown, modelId: lruEntry.modelId)
             evictionCount += 1
 
             #if DEBUG

@@ -44,6 +44,10 @@ public struct AudioBuffer: Sendable, Hashable {
     public init(samples: [Float], sampleRate: Int, channels: Int = 1) {
         precondition(sampleRate > 0, "Sample rate must be positive")
         precondition(channels > 0, "Channels must be positive")
+        precondition(
+            samples.count.isMultiple(of: channels),
+            "Interleaved samples must contain a whole number of frames"
+        )
         self.samples = samples
         self.sampleRate = sampleRate
         self.channels = channels
@@ -51,7 +55,12 @@ public struct AudioBuffer: Sendable, Hashable {
     
     /// Create empty buffer with capacity
     public init(capacity: Int, sampleRate: Int, channels: Int = 1) {
-        self.samples = [Float](repeating: 0, count: capacity * channels)
+        precondition(capacity >= 0, "Capacity must not be negative")
+        precondition(sampleRate > 0, "Sample rate must be positive")
+        precondition(channels > 0, "Channels must be positive")
+        let (sampleCapacity, overflow) = capacity.multipliedReportingOverflow(by: channels)
+        precondition(!overflow, "Capacity and channel count are too large")
+        self.samples = [Float](repeating: 0, count: sampleCapacity)
         self.sampleRate = sampleRate
         self.channels = channels
     }
@@ -60,12 +69,13 @@ public struct AudioBuffer: Sendable, Hashable {
     
     /// Extract slice by time range
     public func slice(_ range: Range<Double>) -> AudioBuffer {
-        let startSample = max(0, Int(range.lowerBound * Double(sampleRate)) * channels)
-        let endSample = min(samples.count, Int(range.upperBound * Double(sampleRate)) * channels)
-        
-        guard startSample < endSample else {
+        guard let startFrame = frameIndex(for: range.lowerBound),
+              let endFrame = frameIndex(for: range.upperBound),
+              startFrame < endFrame else {
             return AudioBuffer(samples: [], sampleRate: sampleRate, channels: channels)
         }
+        let startSample = startFrame * channels
+        let endSample = endFrame * channels
         
         return AudioBuffer(
             samples: Array(samples[startSample..<endSample]),
@@ -76,8 +86,10 @@ public struct AudioBuffer: Sendable, Hashable {
     
     /// Extract slice by sample range
     public func slice(samples range: Range<Int>) -> AudioBuffer {
-        let startSample = max(0, range.lowerBound * channels)
-        let endSample = min(samples.count, range.upperBound * channels)
+        let startFrame = min(frameCount, max(0, range.lowerBound))
+        let endFrame = min(frameCount, max(0, range.upperBound))
+        let startSample = startFrame * channels
+        let endSample = endFrame * channels
         
         guard startSample < endSample else {
             return AudioBuffer(samples: [], sampleRate: sampleRate, channels: channels)
@@ -94,8 +106,16 @@ public struct AudioBuffer: Sendable, Hashable {
     
     /// Replace segment at time range with new audio
     public func replacing(_ range: Range<Double>, with replacement: AudioBuffer) -> AudioBuffer {
-        let startSample = max(0, Int(range.lowerBound * Double(sampleRate)) * channels)
-        let endSample = min(samples.count, Int(range.upperBound * Double(sampleRate)) * channels)
+        precondition(replacement.sampleRate == sampleRate, "Sample rates must match")
+        precondition(replacement.channels == channels, "Channel counts must match")
+
+        guard let startFrame = frameIndex(for: range.lowerBound),
+              let endFrame = frameIndex(for: range.upperBound),
+              startFrame < endFrame else {
+            return self
+        }
+        let startSample = startFrame * channels
+        let endSample = endFrame * channels
         
         var newSamples = samples
         newSamples.replaceSubrange(startSample..<endSample, with: replacement.samples)
@@ -105,6 +125,16 @@ public struct AudioBuffer: Sendable, Hashable {
             sampleRate: sampleRate,
             channels: channels
         )
+    }
+
+    /// Convert a timeline position to a valid frame boundary without first
+    /// converting an unbounded `Double` to `Int`, which can trap. Infinities clamp
+    /// naturally; NaN has no meaningful position and is rejected by callers.
+    private func frameIndex(for time: Double) -> Int? {
+        guard !time.isNaN else { return nil }
+        if time <= 0 { return 0 }
+        if !time.isFinite || time >= duration { return frameCount }
+        return min(frameCount, Int(time * Double(sampleRate)))
     }
     
     /// Subtract another buffer (for residual computation)

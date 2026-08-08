@@ -81,7 +81,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
             enableFloat16: precision == .fp16,
             normalizationMode: .disabled
         )
-        pipeline = MossFormer2Pipeline(configuration: config)
+        let candidate = MossFormer2Pipeline(configuration: config)
         
         let resolvedPath: String
         if let path = weightsPath {
@@ -104,7 +104,9 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
             }
         }
         
-        try pipeline?.loadWeights(from: resolvedPath)
+        try candidate.loadWeights(from: resolvedPath)
+        try Task.checkCancellation()
+        pipeline = candidate
     }
     
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
@@ -171,8 +173,7 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
             currentIdx += stride
             chunkCount += 1
             
-            // Clear GPU cache between chunks to reduce peak memory
-            GPU.clearCache()
+            MLXCachePolicy.trimIfNeeded(afterChunk: chunkCount)
         }
         
         
@@ -290,6 +291,7 @@ extension MossFormer2SE48KProvider: StreamableOutput {
         
         var currentIdx = 0
         var isFirst = true
+        var completedChunks = 0
         
         while currentIdx + chunkSamples <= totalLength + stride {
             try Task.checkCancellation()
@@ -325,8 +327,8 @@ extension MossFormer2SE48KProvider: StreamableOutput {
                 if case .terminated = continuation.yield(chunkBuffer) { throw CancellationError() }
             }
             
-            // Clear GPU cache between chunks
-            GPU.clearCache()
+            completedChunks += 1
+            MLXCachePolicy.trimIfNeeded(afterChunk: completedChunks)
             
             currentIdx += stride
             isFirst = false
@@ -410,14 +412,16 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     /// Load model weights (downloads if not cached)
     public func load() async throws {
         let resolvedPath = try await resolveWeightsPath()
-        model = FRCRN_SE_16K()
-        try model?.loadWeights(from: resolvedPath)
-        model?.prepareForInference()
+        let candidate = FRCRN_SE_16K()
+        try candidate.loadWeights(from: resolvedPath)
+        candidate.prepareForInference()
         
         // Prewarm (JIT compilation)
         let dummy = MLXArray.zeros([1, sampleRate])
-        let output = model?(dummy)
-        eval(output ?? dummy)
+        let output = candidate(dummy)
+        eval(output)
+        try Task.checkCancellation()
+        model = candidate
         GPU.clearCache()
     }
 
@@ -490,7 +494,7 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
 
             currentIdx += stride
             chunkIndex += 1
-            GPU.clearCache()
+            MLXCachePolicy.trimIfNeeded(afterChunk: chunkIndex)
         }
 
         return AudioBuffer(samples: result, sampleRate: sampleRate, channels: 1)
@@ -602,6 +606,7 @@ extension FRCRNSE16KProvider: StreamableOutput {
         
         var currentIdx = 0
         var isFirst = true
+        var completedChunks = 0
         
         while currentIdx + chunkSamples <= totalLength + stride {
             try Task.checkCancellation()
@@ -636,7 +641,8 @@ extension FRCRNSE16KProvider: StreamableOutput {
                 }
             }
             
-            GPU.clearCache()
+            completedChunks += 1
+            MLXCachePolicy.trimIfNeeded(afterChunk: completedChunks)
             
             currentIdx += stride
             isFirst = false

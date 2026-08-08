@@ -82,7 +82,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     // MARK: - Public Properties
     
     /// Base HuggingFace repository (without precision suffix)
-    public static let baseRepo = "starkdmi/chatterbox"
+    public static let baseRepo = ModelRepository.chatterboxFP32
     
     /// Default precision
     public static let defaultPrecision: ModelPrecision = .fp32
@@ -111,6 +111,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     private var textTokenizer: MTLTokenizer?
     
     private var modelPath: URL?
+    private var loadGeneration: UInt64 = 0
     private nonisolated let language: ChatterboxLanguage
     private nonisolated let repo: String
     private nonisolated let precision: ModelPrecision
@@ -232,20 +233,24 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     
     /// Load model, downloading if necessary
     public func load() async throws {
+        loadGeneration &+= 1
+        let generation = loadGeneration
+
         // Check for explicit path first
         if let path = modelPath {
-            try await loadFromPath(path)
+            try await loadFromPath(path, generation: generation)
             return
         }
 
-        let requiredFiles = ["*.safetensors", "*.json"]
+        let requiredFiles = ModelFiles.chatterboxRequired(for: precision)
+        let downloadFiles = ModelFiles.chatterboxDownload(for: precision)
         
         // Check if already downloaded
         if let cached = ModelDownloader.shared.localPath(
             for: repo,
             matching: requiredFiles
         ) {
-            try await loadFromPath(cached)
+            try await loadFromPath(cached, generation: generation)
             return
         }
         
@@ -255,20 +260,60 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         do {
             let path = try await ModelDownloader.shared.downloadAndGetPath(
                 repo: repo,
-                matching: requiredFiles
+                matching: downloadFiles
             ) { [weak self] progress in
-                Task { @MainActor in
-                    await self?.updateState(.downloading(progress: progress.fractionCompleted))
+                Task {
+                    await self?.updateDownloadProgress(
+                        progress.fractionCompleted,
+                        generation: generation
+                    )
                 }
             }
-            
-            try await loadFromPath(path)
+
+            guard ModelDownloader.hasRequiredFiles(
+                at: path,
+                patterns: requiredFiles
+            ) else {
+                throw AudioToolError.modelNotFound(
+                    "Downloaded Chatterbox snapshot is missing model or tokenizer files"
+                )
+            }
+            try await loadFromPath(path, generation: generation)
         } catch {
-            voiceEncoder = nil
-            t3 = nil
-            s3Tokenizer = nil
-            s3Gen = nil
-            textTokenizer = nil
+            if generation == loadGeneration {
+                clearLoadedState()
+                GPU.clearCache()
+                updateState(.failed(error.localizedDescription))
+            }
+            throw error
+        }
+    }
+    
+    /// Load from a specific path
+    private func loadFromPath(_ path: URL, generation: UInt64) async throws {
+        guard generation == loadGeneration else { throw CancellationError() }
+        updateState(.loading)
+
+        do {
+            // Prepare the only asynchronous dependency before publishing any model
+            // components. Actor reentrancy during this download must not expose a
+            // half-built Chatterbox graph to synthesis calls.
+            let candidateVAD: FluidAudioVADProvider?
+            if vadTrimEnabled {
+                let vad = FluidAudioVADProvider(
+                    threshold: 0.9,
+                    minSpeechDuration: 0.1,
+                    minSilenceDuration: 0.1
+                )
+                try await vad.load()
+                candidateVAD = vad
+            } else {
+                candidateVAD = nil
+            }
+            guard generation == loadGeneration else { throw CancellationError() }
+
+            // Never carry conditioning tensors from an older model instance into a
+            // reload. The CPU configuration below remains available for rebuilding.
             referenceWav = nil
             referenceSampleRate = nil
             speakerEmbedding = nil
@@ -276,28 +321,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             defaultT3Cond = nil
             defaultRefDict = nil
             hasDefaultVoice = false
-            vadProvider = nil
-            GPU.clearCache()
-            updateState(.failed(error.localizedDescription))
-            throw error
-        }
-    }
-    
-    /// Load from a specific path
-    private func loadFromPath(_ path: URL) async throws {
-        updateState(.loading)
 
-        // Never carry conditioning tensors from an older model instance into a
-        // reload. The CPU configuration below remains available for rebuilding.
-        referenceWav = nil
-        referenceSampleRate = nil
-        speakerEmbedding = nil
-        refDict = nil
-        defaultT3Cond = nil
-        defaultRefDict = nil
-        hasDefaultVoice = false
-        
-        do {
             // Find the model weights
             var weightsPath = path
             
@@ -315,9 +339,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             }
             
             // Load all weights
-            let weightsURL = URL(fileURLWithPath: weightsPath.path)
-            let weightsData = try Data(contentsOf: weightsURL)
-            let allWeights = try MLX.loadArrays(data: weightsData)
+            let allWeights = try MLX.loadArrays(url: weightsPath)
             
             // Load quantization config if present
             let quantizationConfig = loadQuantizationConfig(weightsPath: weightsPath.path)
@@ -389,40 +411,16 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
                 try rebuildReferenceConditioning(from: referenceAudioConfiguration)
             }
             
-            // Load VAD provider for trimming start/end artifacts (enabled by default)
-            // Parameters tuned for TTS output based on Silero VAD best practices:
-            // Optimized for ChatterBox TTS artifact trimming (tested 2024-01):
-            // - threshold 0.9: Required to detect low-level breathing/whisper artifacts
-            // - minSpeechDuration 0.1: Catch brief intonations at speech boundaries
-            // - minSilenceDuration 0.1: Standard silence detection
-            if vadTrimEnabled {
-                let vad = FluidAudioVADProvider(
-                    threshold: 0.9,
-                    minSpeechDuration: 0.1,
-                    minSilenceDuration: 0.1
-                )
-                try await vad.load()
-                self.vadProvider = vad
-            }
-            
+            vadProvider = candidateVAD
             modelPath = path
+            guard generation == loadGeneration else { throw CancellationError() }
             updateState(.ready)
         } catch {
-            voiceEncoder = nil
-            t3 = nil
-            s3Tokenizer = nil
-            s3Gen = nil
-            textTokenizer = nil
-            referenceWav = nil
-            referenceSampleRate = nil
-            speakerEmbedding = nil
-            refDict = nil
-            defaultT3Cond = nil
-            defaultRefDict = nil
-            hasDefaultVoice = false
-            vadProvider = nil
-            GPU.clearCache()
-            updateState(.failed(error.localizedDescription))
+            if generation == loadGeneration {
+                clearLoadedState()
+                GPU.clearCache()
+                updateState(.failed(error.localizedDescription))
+            }
             throw error
         }
     }
@@ -432,6 +430,34 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     private func updateState(_ newState: ModelState) {
         state = newState
         stateBroadcaster.send(newState)
+    }
+
+    private func updateDownloadProgress(_ progress: Double, generation: UInt64) {
+        guard progress.isFinite else { return }
+        let clampedProgress = min(1, max(0, progress))
+        guard ModelLoadStateGate.acceptsProgress(
+            clampedProgress,
+            generation: generation,
+            currentGeneration: loadGeneration,
+            state: state
+        ) else { return }
+        updateState(.downloading(progress: clampedProgress))
+    }
+
+    private func clearLoadedState() {
+        voiceEncoder = nil
+        t3 = nil
+        s3Tokenizer = nil
+        s3Gen = nil
+        textTokenizer = nil
+        referenceWav = nil
+        referenceSampleRate = nil
+        speakerEmbedding = nil
+        refDict = nil
+        defaultT3Cond = nil
+        defaultRefDict = nil
+        hasDefaultVoice = false
+        vadProvider = nil
     }
     
     // MARK: - Reference Audio
@@ -546,8 +572,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     /// Load default voice conditioning from conds.safetensors
     /// - Parameter path: Path to conds.safetensors file
     private func loadDefaultConds(from path: URL) throws {
-        let data = try Data(contentsOf: path)
-        let tensors = try MLX.loadArrays(data: data)
+        let tensors = try MLX.loadArrays(url: path)
         
         // Load T3 conditioning
         guard let speakerEmb = tensors["t3.speaker_emb"] else {
@@ -1098,15 +1123,13 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         for name in candidates {
             let path = baseDir.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: path.path) {
-                let data = try Data(contentsOf: path)
-                return try MLX.loadArrays(data: data)
+                return try MLX.loadArrays(url: path)
             }
         }
         
         // Fall back to HuggingFace cache (mlx-community/S3TokenizerV2)
         if let hfPath = resolveHFS3TokenizerPath() {
-            let data = try Data(contentsOf: URL(fileURLWithPath: hfPath))
-            return try MLX.loadArrays(data: data)
+            return try MLX.loadArrays(url: URL(fileURLWithPath: hfPath))
         }
         
         throw AudioToolError.modelNotFound("S3Tokenizer weights not found in model bundle or HuggingFace cache")
@@ -1168,21 +1191,10 @@ extension ChatterboxTTSProvider: ManagedModel {
     }
 
     public func unload() async {
-        voiceEncoder = nil
-        t3 = nil
-        s3Tokenizer = nil
-        s3Gen = nil
-        textTokenizer = nil
-        referenceWav = nil
-        referenceSampleRate = nil
-        speakerEmbedding = nil
-        refDict = nil
+        loadGeneration &+= 1
+        clearLoadedState()
         // `referenceAudioConfiguration` is CPU-backed user configuration and is
         // intentionally retained for rebuildReferenceConditioning(from:).
-        defaultT3Cond = nil
-        defaultRefDict = nil
-        hasDefaultVoice = false
-        vadProvider = nil
         updateState(.notLoaded)
         GPU.clearCache()
     }

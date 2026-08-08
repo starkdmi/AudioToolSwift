@@ -118,7 +118,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
             skip_mask_multiplication: modelType.skipMaskMultiplication
         )
         
-        model = MossFormer2_SS_16K(config: config)
+        let candidate = MossFormer2_SS_16K(config: config)
         
         let resolvedPath: String
         if let path = weightsPath {
@@ -143,7 +143,10 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         
         let weights = try loadArrays(url: URL(fileURLWithPath: resolvedPath))
         let nestedWeights = NestedDictionary<String, MLXArray>.unflattened(weights)
-        try model?.update(parameters: nestedWeights, verify: .all)
+        try candidate.update(parameters: nestedWeights, verify: .all)
+        eval(candidate)
+        try Task.checkCancellation()
+        model = candidate
     }
     
     /// Separate mixed audio into speaker streams.
@@ -267,8 +270,7 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
                 speakerOutputs[spkIdx].append(contentsOf: ready)
             }
             
-            // Clear GPU cache between chunks to reduce peak memory
-            GPU.clearCache()
+            MLXCachePolicy.trimIfNeeded(afterChunk: chunkIdx + 1)
             
             // Report progress (0-90% for chunking, 90-100% for reassembly)
             let percent = Double(chunkIdx + 1) / Double(totalChunks) * 90.0
@@ -387,9 +389,15 @@ public actor DemucsProvider: MusicSeparator {
     /// Load all four source models
     public func loadAll() async throws {
         let directory = try await resolveWeightsDirectory(for: Stem.allCases)
+        var candidates: [Stem: HTDemucs] = [:]
         for stem in Stem.allCases {
-            try loadSync(stem: stem, weightsDirectory: directory)
+            try Task.checkCancellation()
+            candidates[stem] = try Self.loadModel(
+                stem: stem,
+                weightsDirectory: directory
+            )
         }
+        models = candidates
     }
 
     /// Directory holding the stem weights, downloading only what is asked for.
@@ -422,6 +430,16 @@ public actor DemucsProvider: MusicSeparator {
 
     /// Load a specific source model from a directory already on disk
     public func loadSync(stem: Stem, weightsDirectory: String) throws {
+        models[stem] = try Self.loadModel(
+            stem: stem,
+            weightsDirectory: weightsDirectory
+        )
+    }
+
+    private nonisolated static func loadModel(
+        stem: Stem,
+        weightsDirectory: String
+    ) throws -> HTDemucs {
         let config = HTDemucsConfig()
         let model = HTDemucs(config: config)
         
@@ -434,7 +452,7 @@ public actor DemucsProvider: MusicSeparator {
         model.train(false)
         MLX.eval(model)
         
-        models[stem] = model
+        return model
     }
     
     /// Separate a specific source from the audio
@@ -445,17 +463,20 @@ public actor DemucsProvider: MusicSeparator {
             throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
         }
 
-        // Deinterleave once, here, so both paths see the same stereo pair.
-        let stereo = Self.stereoPair(from: input)
-        eval(stereo)
-        let frameCount = stereo.shape[1]
+        let frameCount = input.frameCount
         let durationSeconds = Float(frameCount) / Float(input.sampleRate)
 
         // Use chunking for longer audio
         if durationSeconds > maxDirectDuration {
-            return try await separateWithChunking(stereo, frameCount: frameCount, stem: stem)
+            return try await separateWithChunking(
+                input,
+                frameCount: frameCount,
+                stem: stem
+            )
         }
 
+        let stereo = Self.stereoPair(from: input)
+        eval(stereo)
         return try await separateDirect(stereo, stem: stem)
     }
 
@@ -473,19 +494,45 @@ public actor DemucsProvider: MusicSeparator {
     /// Mono is duplicated to both channels; more than two channels are downmixed,
     /// since the model has exactly two input channels.
     internal static func stereoPair(from input: AudioBuffer) -> MLXArray {
-        let channels = max(1, input.channels)
-        if channels == 1 {
-            let mono = MLXArray(input.samples)
-            return MLX.stacked([mono, mono], axis: 0)
-        }
+        stereoPair(from: input, frames: 0..<input.frameCount)
+    }
 
-        // (frames, channels) -> (channels, frames)
-        let planar = MLXArray(input.samples).reshaped([-1, channels]).transposed(1, 0)
-        if channels == 2 {
-            return planar
+    /// Convert only the requested frames. Long recordings use this overload so
+    /// chunking never materializes a second full-recording MLX tensor.
+    internal static func stereoPair(
+        from input: AudioBuffer,
+        frames requestedFrames: Range<Int>
+    ) -> MLXArray {
+        let channels = max(1, input.channels)
+        let lower = min(input.frameCount, max(0, requestedFrames.lowerBound))
+        let upper = min(input.frameCount, max(lower, requestedFrames.upperBound))
+        let frameCount = upper - lower
+        var left = [Float]()
+        var right = [Float]()
+        left.reserveCapacity(frameCount)
+        right.reserveCapacity(frameCount)
+
+        if channels == 1 {
+            left.append(contentsOf: input.samples[lower..<upper])
+            right = left
+        } else if channels == 2 {
+            for frame in lower..<upper {
+                left.append(input.samples[frame * channels])
+                right.append(input.samples[frame * channels + 1])
+            }
+        } else {
+            for frame in lower..<upper {
+                let base = frame * channels
+                var sum: Float = 0
+                for channel in 0..<channels {
+                    sum += input.samples[base + channel]
+                }
+                let mono = sum / Float(channels)
+                left.append(mono)
+                right.append(mono)
+            }
         }
-        let mono = mean(planar, axis: 0)
-        return MLX.stacked([mono, mono], axis: 0)
+        return MLX.stacked([MLXArray(left), MLXArray(right)], axis: 0)
     }
 
     /// Run one `(2, frames)` block through the model and take the requested stem.
@@ -510,6 +557,7 @@ public actor DemucsProvider: MusicSeparator {
         guard let model = models[stem] else {
             throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
         }
+        defer { GPU.clearCache() }
 
         let sourceOutput = stemOutput(stereo, stem: stem, model: model)
         // Downmixed to mono, matching ``outputChannels``. The separation itself used
@@ -527,10 +575,15 @@ public actor DemucsProvider: MusicSeparator {
     /// to mono first, so long audio silently lost the stereo information that short
     /// audio kept. Same windowing and normalization as
     /// ``MLXOverlap/reassembleOverlapAdd``, applied per channel.
-    private func separateWithChunking(_ stereo: MLXArray, frameCount: Int, stem: Stem) async throws -> AudioBuffer {
+    private func separateWithChunking(
+        _ input: AudioBuffer,
+        frameCount: Int,
+        stem: Stem
+    ) async throws -> AudioBuffer {
         guard let model = models[stem] else {
             throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
         }
+        defer { GPU.clearCache() }
 
         let chunkingConfig = ChunkingConfig.demucs(sampleRate: sampleRate)
         let chunkSamples = chunkingConfig.chunkSamples
@@ -538,14 +591,23 @@ public actor DemucsProvider: MusicSeparator {
         let stride = max(1, chunkSamples - overlapSamples)
         let window = MLXOverlap.triangularWindow(length: chunkSamples).asArray(Float.self)
 
-        // Accumulate the downmixed result; the model still sees both channels.
-        var accumulator = [Float](repeating: 0, count: frameCount)
-        var weights = [Float](repeating: 0, count: frameCount)
+        var assembler = IncrementalOverlapAdd(
+            chunkSamples: chunkSamples,
+            stride: stride,
+            window: window,
+            totalLength: frameCount
+        )
+        var output: [Float] = []
+        output.reserveCapacity(frameCount)
 
         var startIdx = 0
         while startIdx < frameCount {
+            try Task.checkCancellation()
             let endIdx = min(startIdx + chunkSamples, frameCount)
-            var chunk = stereo[0..., startIdx..<endIdx]
+            var chunk = Self.stereoPair(
+                from: input,
+                frames: startIdx..<endIdx
+            )
             if endIdx - startIdx < chunkSamples {
                 let padding = MLXArray.zeros([2, chunkSamples - (endIdx - startIdx)])
                 chunk = concatenated([chunk, padding], axis: 1)
@@ -556,27 +618,21 @@ public actor DemucsProvider: MusicSeparator {
             let monoOutput = mean(sourceOutput, axis: 0)
             eval(monoOutput)
             let chunkResult = monoOutput.asArray(Float.self)
-
-            for i in 0..<(endIdx - startIdx) where i < chunkResult.count {
-                accumulator[startIdx + i] += window[i] * chunkResult[i]
-                weights[startIdx + i] += window[i]
-            }
-
-            GPU.clearCache()
+            output.append(contentsOf: assembler.add(chunkResult, startIdx: startIdx))
             startIdx += stride
         }
-
-        for i in 0..<frameCount where weights[i] > 0 {
-            accumulator[i] /= weights[i]
+        output.append(contentsOf: assembler.finish())
+        if output.count > frameCount {
+            output.removeLast(output.count - frameCount)
         }
-
-        return AudioBuffer(samples: accumulator, sampleRate: sampleRate, channels: 1)
+        return AudioBuffer(samples: output, sampleRate: sampleRate, channels: 1)
     }
     
     /// Separate all sources
     public func separateAll(_ input: AudioBuffer) async throws -> [Stem: AudioBuffer] {
         var results: [Stem: AudioBuffer] = [:]
-        for stem in models.keys {
+        for stem in Stem.allCases where models[stem] != nil {
+            try Task.checkCancellation()
             results[stem] = try await separate(input, stem: stem)
         }
         return results
@@ -600,8 +656,16 @@ public actor DemucsProvider: MusicSeparator {
         let missing = Stem.allCases.filter { models[$0] == nil }
         if !missing.isEmpty {
             let directory = try await resolveWeightsDirectory(for: missing)
+            var candidates: [Stem: HTDemucs] = [:]
             for stem in missing {
-                try loadSync(stem: stem, weightsDirectory: directory)
+                try Task.checkCancellation()
+                candidates[stem] = try Self.loadModel(
+                    stem: stem,
+                    weightsDirectory: directory
+                )
+            }
+            for (stem, model) in candidates {
+                models[stem] = model
             }
         }
         
@@ -663,15 +727,15 @@ extension DemucsProvider: ManagedModel {
     ///
     /// ManagedModel treats a provider as one loadable unit, so this is all four. Use
     /// ``load(stem:)`` to bring up a single stem, which is what you want when you
-    /// only need vocals - `checkIfLoaded` reports true for any partial state.
+    /// only need vocals. Residency-managed loading deliberately requires all four
+    /// stems because `ManagedModel` treats this provider as one loadable unit.
     public func load() async throws {
-        let directory = try await resolveWeightsDirectory(for: Stem.allCases)
-        for stem in Stem.allCases {
-            try loadSync(stem: stem, weightsDirectory: directory)
-        }
+        try await loadAll()
     }
 
-    public func checkIfLoaded() async -> Bool { !models.isEmpty }
+    public func checkIfLoaded() async -> Bool {
+        Stem.allCases.allSatisfy { models[$0] != nil }
+    }
 
     public func unload() async {
         models.removeAll()

@@ -87,4 +87,16 @@ final class DemucsChannelLayoutTests: MLXTestCase {
         XCTAssertEqual(pair.shape[1], frames)
         XCTAssertEqual(pair.shape[1], buffer.frameCount)
     }
+
+    func testRangedConversionMaterializesOnlyRequestedFrames() throws {
+        let interleaved: [Float] = [1, -1, 2, -2, 3, -3, 4, -4]
+        let buffer = AudioBuffer(samples: interleaved, sampleRate: 44100, channels: 2)
+
+        let pair = DemucsProvider.stereoPair(from: buffer, frames: 1..<3)
+        eval(pair)
+
+        XCTAssertEqual(pair.shape, [2, 2])
+        XCTAssertEqual(pair[0].asArray(Float.self), [2, 3])
+        XCTAssertEqual(pair[1].asArray(Float.self), [-2, -3])
+    }
 }

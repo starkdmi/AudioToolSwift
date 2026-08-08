@@ -59,6 +59,15 @@ public enum ModelRepository {
 
     /// Demucs music separation.
     public static let demucs = "starkdmi/Demucs_MLX"
+
+    /// Base for Kokoro's precision-specific MLX conversions.
+    public static let kokoroBase = "mlx-community/Kokoro-82M"
+
+    /// Kokoro's default bfloat16 MLX conversion.
+    public static let kokoroBF16 = "\(kokoroBase)-bf16"
+
+    /// Chatterbox's default full-precision MLX checkpoint.
+    public static let chatterboxFP32 = "starkdmi/chatterbox"
 }
 
 // MARK: - File Layouts
@@ -94,5 +103,45 @@ public enum ModelFiles {
     /// The weight file for one Demucs stem.
     public static func demucsStem(_ stem: String) -> String {
         "\(stem).safetensors"
+    }
+
+    /// Kokoro weights, voice embeddings, and architecture configuration.
+    public static let kokoro = ["*.safetensors", "voices/*.npy", "config.json"]
+
+    /// Files every canonical Chatterbox checkpoint needs in order to load.
+    /// Optional voice conditioning, tokenizer shards, and quantization metadata
+    /// must not let an interrupted snapshot satisfy this manifest by accident.
+    public static let chatterbox = [
+        "model.safetensors",
+        "grapheme_mtl_merged_expanded_v1.json",
+    ]
+
+    /// Additional files worth fetching when a repository provides them. They are
+    /// deliberately separate from the common loadability manifest above.
+    public static let chatterboxOptional = [
+        "config.json",
+        "conds.safetensors",
+        "s3tokenizer.safetensors",
+        "s3_tokenizer.safetensors",
+        "s3tokenizer/model.safetensors",
+        "s3_tokenizer/model.safetensors",
+    ]
+
+    /// Quantized checkpoints cannot reconstruct their module layout without the
+    /// quantization metadata in `config.json`.
+    public static func chatterboxRequired(for precision: ModelPrecision) -> [String] {
+        switch precision {
+        case .int8, .int4, .bit8, .bit6, .bit4:
+            chatterbox + ["config.json"]
+        case .fp32, .fp16, .bf16:
+            chatterbox
+        }
+    }
+
+    /// Download filters include optional assets without making them evidence that
+    /// the snapshot itself is complete.
+    public static func chatterboxDownload(for precision: ModelPrecision) -> [String] {
+        let required = chatterboxRequired(for: precision)
+        return required + chatterboxOptional.filter { !required.contains($0) }
     }
 }

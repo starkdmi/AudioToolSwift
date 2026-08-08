@@ -100,22 +100,29 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         }
         
         let configData = try Data(contentsOf: URL(fileURLWithPath: resolvedConfigPath))
-        let modelConfig = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
+        let configObject = try JSONSerialization.jsonObject(with: configData)
+        guard let modelConfig = configObject as? [String: Any] else {
+            throw AudioToolError.incompatibleModelVersion(
+                expected: "a JSON object at the config root",
+                found: String(describing: type(of: configObject))
+            )
+        }
         
-        args = AttrDict(modelConfig)
-        args["one_time_decode_length"] = 20.0
-        args["decode_window"] = 4.0
+        let candidateArgs = AttrDict(modelConfig)
+        candidateArgs["one_time_decode_length"] = 20.0
+        candidateArgs["decode_window"] = 4.0
         
-        model = MossFormer2_SR_48K(args: args)
+        let candidate = MossFormer2_SR_48K(args: candidateArgs)
         
         let weights = try MLX.loadArrays(url: URL(fileURLWithPath: resolvedWeightsPath))
         let filteredWeights = weights.filter { !$0.key.contains("num_batches_tracked") }
         let parameters = ModuleParameters.unflattened(filteredWeights)
-        model?.update(parameters: parameters)
-        
-        if let model = model {
-            eval(model)
-        }
+        candidate.update(parameters: parameters)
+        eval(candidate)
+        try Task.checkCancellation()
+
+        args = candidateArgs
+        model = candidate
     }
     
     /// Upsample audio to 48kHz
@@ -158,12 +165,14 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         )
         var output: [Float] = []
         output.reserveCapacity(totalLength)
+        var completedChunks = 0
 
         while let chunk = try source.nextChunk(chunkSamples: chunkSamples, stride: stride) {
             try Task.checkCancellation()
             let processed = try await processChunk(chunk.samples, model: model)
             output.append(contentsOf: assembler.add(processed.samples, startIdx: chunk.startIdx))
-            GPU.clearCache()
+            completedChunks += 1
+            MLXCachePolicy.trimIfNeeded(afterChunk: completedChunks)
         }
         output.append(contentsOf: assembler.finish())
         return AudioBuffer(
@@ -296,6 +305,7 @@ extension MossFormer2SR48KProvider: StreamableOutput {
             window: window,
             totalLength: totalLength
         )
+        var completedChunks = 0
 
         while let chunk = try source.nextChunk(chunkSamples: chunkSamples, stride: stride) {
             try Task.checkCancellation()
@@ -312,7 +322,8 @@ extension MossFormer2SR48KProvider: StreamableOutput {
                 }
             }
 
-            GPU.clearCache()
+            completedChunks += 1
+            MLXCachePolicy.trimIfNeeded(afterChunk: completedChunks)
         }
 
         let tail = assembler.finish()

@@ -163,8 +163,9 @@ struct KokoroConfig: Decodable {
   /// parses it as JSON, and caches the result for future use.
   ///
   /// - Returns: Parsed KokoroConfig instance
-  /// - Note: Uses forced unwrapping (try!) as configuration loading is critical
-  ///         and should fail fast if the file is missing or malformed
+  /// - Note: The configuration is a build-time bundled resource, so a missing or
+  ///   malformed copy indicates a broken package installation rather than bad
+  ///   externally downloaded model data.
   nonisolated static func loadConfig() -> KokoroConfig {
     guard let config else {
       preconditionFailure("Kokoro config.json is missing or malformed")

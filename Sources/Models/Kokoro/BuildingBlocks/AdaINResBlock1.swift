@@ -24,7 +24,7 @@ class AdaINResBlock1: Module {
     kernelSize: Int = 3,
     dilation: [Int] = [1, 3, 5],
     styleDim: Int = 64
-  ) {
+  ) throws {
     var convs1Arr: [ConvWeighted] = []
     var convs2Arr: [ConvWeighted] = []
     var adain1Arr: [AdaIN1d] = []
@@ -35,9 +35,9 @@ class AdaINResBlock1: Module {
     for i in 0 ..< 3 {
       let dilationValue = dilation[i]
       let conv = ConvWeighted(
-        weightG: weights[weightPrefixKey + ".convs1.\(i).weight_g"]!,
-        weightV: weights[weightPrefixKey + ".convs1.\(i).weight_v"]!,
-        bias: weights[weightPrefixKey + ".convs1.\(i).bias"]!,
+        weightG: try weights.required(weightPrefixKey + ".convs1.\(i).weight_g"),
+        weightV: try weights.required(weightPrefixKey + ".convs1.\(i).weight_v"),
+        bias: try weights.required(weightPrefixKey + ".convs1.\(i).bias"),
         stride: 1,
         padding: Int((kernelSize * dilationValue - dilationValue) / 2),
         dilation: dilationValue
@@ -47,9 +47,9 @@ class AdaINResBlock1: Module {
 
     for i in 0 ..< 3 {
       let conv = ConvWeighted(
-        weightG: weights[weightPrefixKey + ".convs2.\(i).weight_g"]!,
-        weightV: weights[weightPrefixKey + ".convs2.\(i).weight_v"]!,
-        bias: weights[weightPrefixKey + ".convs2.\(i).bias"]!,
+        weightG: try weights.required(weightPrefixKey + ".convs2.\(i).weight_g"),
+        weightV: try weights.required(weightPrefixKey + ".convs2.\(i).weight_v"),
+        bias: try weights.required(weightPrefixKey + ".convs2.\(i).bias"),
         stride: 1,
         padding: Int((kernelSize - 1) / 2),
         dilation: 1
@@ -61,21 +61,21 @@ class AdaINResBlock1: Module {
       adain1Arr.append(AdaIN1d(
         styleDim: styleDim,
         numFeatures: channels,
-        fcWeight: weights[weightPrefixKey + ".adain1.\(i).fc.weight"]!,
-        fcBias: weights[weightPrefixKey + ".adain1.\(i).fc.bias"]!
+        fcWeight: try weights.required(weightPrefixKey + ".adain1.\(i).fc.weight"),
+        fcBias: try weights.required(weightPrefixKey + ".adain1.\(i).fc.bias")
       ))
 
       adain2Arr.append(AdaIN1d(
         styleDim: styleDim,
         numFeatures: channels,
-        fcWeight: weights[weightPrefixKey + ".adain2.\(i).fc.weight"]!,
-        fcBias: weights[weightPrefixKey + ".adain2.\(i).fc.bias"]!
+        fcWeight: try weights.required(weightPrefixKey + ".adain2.\(i).fc.weight"),
+        fcBias: try weights.required(weightPrefixKey + ".adain2.\(i).fc.bias")
       ))
     }
 
     for i in 0 ..< 3 {
-      alpha1Arr.append(weights[weightPrefixKey + ".alpha1.\(i)"]!)
-      alpha2Arr.append(weights[weightPrefixKey + ".alpha2.\(i)"]!)
+      alpha1Arr.append(try weights.required(weightPrefixKey + ".alpha1.\(i)"))
+      alpha2Arr.append(try weights.required(weightPrefixKey + ".alpha2.\(i)"))
     }
 
     self._convs1.wrappedValue = convs1Arr
