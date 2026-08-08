@@ -444,15 +444,26 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     private func parseModelOutputToMLX(
         _ output: MLFeatureProvider
     ) throws -> (MLXArray, MLXArray) {
-        guard let feature = output.featureValue(for: "enhanced_spectrogram") else {
+        // The published .mlpackage does not name its output `enhanced_spectrogram`
+        // - the converter left it as `var_9026`. Requiring the friendly name makes
+        // every prediction throw, so accept a sole unnamed output and only refuse
+        // when the choice is genuinely ambiguous.
+        let feature: MLFeatureValue
+        if let named = output.featureValue(for: "enhanced_spectrogram") {
+            feature = named
+        } else if output.featureNames.count == 1,
+                  let only = output.featureNames.first,
+                  let sole = output.featureValue(for: only) {
+            feature = sole
+        } else {
             throw AudioToolError.incompatibleModelVersion(
-                expected: "CoreML output named enhanced_spectrogram",
+                expected: "one CoreML output, or one named enhanced_spectrogram",
                 found: output.featureNames.sorted().joined(separator: ", ")
             )
         }
         guard let multiArray = feature.multiArrayValue else {
             throw AudioToolError.incompatibleModelVersion(
-                expected: "enhanced_spectrogram as MLMultiArray",
+                expected: "the enhanced spectrogram as MLMultiArray",
                 found: "feature type \(feature.type.rawValue)"
             )
         }
