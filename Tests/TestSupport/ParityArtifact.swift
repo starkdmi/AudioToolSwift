@@ -208,6 +208,24 @@ public enum ParityMetrics {
         return 10 * log10(signal / noise)
     }
 
+    /// Render an SNR for the `PARITY_RECORD=1` log.
+    ///
+    /// `+∞` is the only value that means "no error". `-∞` means the comparison
+    /// could not be made - a non-finite sample, or a silent reference the
+    /// candidate disagrees with - and printing that as `bit-identical` would hand
+    /// the baseline workflow its worst possible answer: invalid output recorded as
+    /// perfect, usually alongside a `maxabs` of `nan`.
+    ///
+    /// This lives beside ``snrDB(reference:candidate:)`` rather than in the parity
+    /// target because it is the last step between a measurement and a number
+    /// somebody writes into `ParityThresholds`. In the gated target it was reached
+    /// only under `PARITY_RECORD=1`, so no test run of any kind executed it.
+    public static func renderSNR(_ snr: Double) -> String {
+        if snr == .infinity { return "bit-identical" }
+        if snr == -.infinity { return "INVALID (non-finite samples or silent reference)" }
+        return String(format: "%.1f dB", snr)
+    }
+
     /// Largest absolute sample difference. Useful when SNR is high but a single
     /// sample is wrong - a boundary, a first frame, an off-by-one.
     public static func maxAbsDiff(reference: [Float], candidate: [Float]) -> Double {

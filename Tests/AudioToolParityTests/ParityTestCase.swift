@@ -35,19 +35,6 @@ class ParityTestCase: XCTestCase {
         }
     }
 
-    /// Render an SNR for the record log.
-    ///
-    /// `+∞` is the only value that means "no error". `-∞` means the comparison
-    /// could not be made - a non-finite sample, or a silent reference the
-    /// candidate disagrees with - and printing that as `bit-identical` would
-    /// hand the baseline workflow its worst possible answer: invalid output
-    /// recorded as perfect, usually alongside a `maxabs` of `nan`.
-    static func renderSNR(_ snr: Double) -> String {
-        if snr == .infinity { return "bit-identical" }
-        if snr == -.infinity { return "INVALID (non-finite samples or silent reference)" }
-        return String(format: "%.1f dB", snr)
-    }
-
     /// A generated parity case, or a skip.
     func artifact(_ name: String) throws -> ParityArtifact {
         guard let artifact = try TestGate.parityArtifact(name) else {
@@ -144,7 +131,7 @@ class ParityTestCase: XCTestCase {
                 reference: Array(reference.prefix(overlap)),
                 candidate: Array(candidate.prefix(overlap))
             )
-            let rendered = Self.renderSNR(prefixSNR)
+            let rendered = ParityMetrics.renderSNR(prefixSNR)
             let message = """
                 \(label): length mismatch - \
                 \(ParityMetrics.lengthReport(reference: reference, candidate: candidate)); \
@@ -162,7 +149,7 @@ class ParityTestCase: XCTestCase {
         let worst = ParityMetrics.maxAbsDiff(reference: reference, candidate: candidate)
 
         if TestGate.recordParityBaselines {
-            let rendered = Self.renderSNR(snr)
+            let rendered = ParityMetrics.renderSNR(snr)
             print(String(
                 format: "PARITY %-52@ SNR %@  maxabs %.3e  n=%d",
                 label as NSString, rendered as NSString, worst, reference.count

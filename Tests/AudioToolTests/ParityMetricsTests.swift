@@ -12,6 +12,45 @@ import XCTest
 
 final class ParityMetricsTests: XCTestCase {
 
+    // MARK: - Rendering a measurement into a threshold
+
+    /// The record log is where a number stops being a measurement and becomes a
+    /// threshold somebody types into `ParityThresholds`. `isInfinite` is true for
+    /// both signs, so the obvious spelling of this renders the NaN verdict as
+    /// perfect agreement - the one mistake that cannot be caught downstream.
+    func testInvalidComparisonDoesNotRenderAsBitIdentical() {
+        let rendered = ParityMetrics.renderSNR(-.infinity)
+        XCTAssertFalse(rendered.contains("bit-identical"),
+                       "an unmeasurable comparison must not read as perfect")
+        XCTAssertTrue(rendered.contains("INVALID"), "got \(rendered)")
+    }
+
+    func testOnlyPositiveInfinityIsBitIdentical() {
+        XCTAssertEqual(ParityMetrics.renderSNR(.infinity), "bit-identical")
+    }
+
+    /// The two verdicts have to come from the metric itself, not just from
+    /// hand-written infinities - this is the pairing the record log actually sees.
+    func testVerdictsMatchWhatSNRProduces() {
+        let signal: [Float] = [0.5, -0.25, 0.125]
+        XCTAssertEqual(
+            ParityMetrics.renderSNR(ParityMetrics.snrDB(reference: signal, candidate: signal)),
+            "bit-identical")
+
+        let withNaN: [Float] = [0.5, .nan, 0.125]
+        XCTAssertTrue(
+            ParityMetrics.renderSNR(
+                ParityMetrics.snrDB(reference: signal, candidate: withNaN)
+            ).contains("INVALID"))
+    }
+
+    /// One decimal place, and a unit - the format the thresholds are written in.
+    func testFiniteSNRRendersWithOneDecimalAndUnit() {
+        XCTAssertEqual(ParityMetrics.renderSNR(129.04), "129.0 dB")
+        XCTAssertEqual(ParityMetrics.renderSNR(-19.763), "-19.8 dB")
+        XCTAssertEqual(ParityMetrics.renderSNR(0), "0.0 dB")
+    }
+
     // MARK: - The non-finite hole
 
     /// A NaN anywhere used to read as `.infinity`, which clears every threshold.
