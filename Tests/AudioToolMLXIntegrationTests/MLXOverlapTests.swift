@@ -248,24 +248,43 @@ final class MLXOverlapTests: MLXTestCase {
         }
     }
 
-    func testMixtureConsistencyPreservesRelativeSourceGain() {
+    /// The contract is the Python adapter's `_normalize`: each source is scaled to
+    /// the mixture's RMS independently. That does raise a quiet estimate to the
+    /// same level as a loud one - which is the point, since SS estimates come out
+    /// at an arbitrary level - and it is what the published parity tensors encode.
+    func testSourcesAreIndependentlyMatchedToMixtureRMS() {
         let mixture: [Float] = [0.6, -0.3, 0.9]
-        let sources: [[Float]] = [
-            [0.1, -0.05, 0.15],
-            [0.4, -0.2, 0.6],
-        ]
-        let corrected = MossFormer2SSProvider.enforceMixtureConsistency(
-            mixture: mixture,
-            sources: sources
-        )
+        let quiet: [Float] = [0.1, -0.05, 0.15]
+        let loud: [Float] = [0.4, -0.2, 0.6]
+        let inputRMS = MossFormer2SSProvider.rootMeanSquare(mixture)
 
-        XCTAssertEqual(corrected.count, 2)
-        for index in mixture.indices {
-            XCTAssertEqual(corrected[0][index] + corrected[1][index], mixture[index], accuracy: 1e-6)
+        for source in [quiet, loud] {
+            let normalized = MossFormer2SSProvider.normalizeToInputRMS(source, inputRMS: inputRMS)
+            XCTAssertEqual(
+                MossFormer2SSProvider.rootMeanSquare(normalized), inputRMS, accuracy: 1e-5,
+                "Each source is matched to the mixture RMS on its own"
+            )
         }
-        // A quiet estimate stays quieter; it is not independently raised to the
-        // mixture RMS.
-        XCTAssertLessThan(abs(corrected[0][0]), abs(corrected[1][0]))
+    }
+
+    /// The peak divide only engages above full scale, and when it does it costs the
+    /// exact RMS match - so it must not fire on signals that were already in range.
+    func testPeakLimitOnlyEngagesAboveFullScale() {
+        let inRange = MossFormer2SSProvider.normalizeToInputRMS([0.1, -0.2, 0.15], inputRMS: 0.2)
+        XCTAssertEqual(
+            MossFormer2SSProvider.rootMeanSquare(inRange), 0.2, accuracy: 1e-5)
+        XCTAssertLessThanOrEqual(inRange.map { abs($0) }.max() ?? 0, 1.0)
+
+        let clipped = MossFormer2SSProvider.normalizeToInputRMS([0.01, -0.005, 0.008], inputRMS: 0.9)
+        XCTAssertEqual(clipped.map { abs($0) }.max() ?? 0, 1.0, accuracy: 1e-5)
+    }
+
+    /// A silent estimate has no RMS to match, and must pass through rather than
+    /// being scaled by a division that is not defined.
+    func testSilentSourcePassesThroughUnscaled() {
+        let silent = [Float](repeating: 0, count: 16)
+        XCTAssertEqual(
+            MossFormer2SSProvider.normalizeToInputRMS(silent, inputRMS: 0.5), silent)
     }
     
     // MARK: - Edge Cases

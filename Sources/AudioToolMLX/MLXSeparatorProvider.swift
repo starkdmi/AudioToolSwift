@@ -150,6 +150,9 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     }
     
     /// Separate mixed audio into speaker streams.
+    ///
+    /// Each output is RMS-matched to the input and peak-limited, the same
+    /// normalisation the Python reference applies.
     public func separate(_ audio: AudioBuffer) async throws -> [AudioBuffer] {
         try await separate(audio, onProgress: nil)
     }
@@ -176,46 +179,53 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
             results = try await processChunk(audio.samples)
         }
         
-        // Project the estimates back onto the mixture. Applying an independent
-        // RMS gain to every source makes a quiet speaker as loud as a dominant
-        // one and destroys the model's relative gains. Mixture consistency shares
-        // only the residual equally and guarantees sum(sources) == input.
-        let consistent = Self.enforceMixtureConsistency(
-            mixture: audio.samples,
-            sources: results.map(\.samples)
-        )
-        let corrected = zip(results, consistent).map { buffer, samples in
-            AudioBuffer(samples: samples, sampleRate: buffer.sampleRate, channels: buffer.channels)
+        // Match each source's RMS to the mixture's, then de-clip. SS estimates come
+        // out at an arbitrary and often very loud level, and this is the step that
+        // makes them usable.
+        //
+        // This mirrors `_normalize` in Parity/adapters/mossformer2_ss.py, which is
+        // why the published tensors are named `speaker_N_normalized`. Mixture
+        // consistency - sharing the residual so sum(sources) == mixture - is a
+        // defensible alternative that keeps relative gains, but it is a *different*
+        // output contract: swapping it in here alone put every SS parity case at
+        // -19 to -44 dB. If it is wanted, the reference has to move first.
+        let inputRMS = Self.rootMeanSquare(audio.samples)
+        let normalized = results.map { buffer in
+            AudioBuffer(
+                samples: Self.normalizeToInputRMS(buffer.samples, inputRMS: inputRMS),
+                sampleRate: buffer.sampleRate,
+                channels: buffer.channels
+            )
         }
-        
+
         await onProgress?(100.0)
-        return corrected
+        return normalized
     }
 
-    internal static func enforceMixtureConsistency(
-        mixture: [Float],
-        sources: [[Float]]
-    ) -> [[Float]] {
-        guard !sources.isEmpty else { return [] }
-        var corrected = sources.map { source -> [Float] in
-            if source.count == mixture.count { return source }
-            if source.count > mixture.count { return Array(source.prefix(mixture.count)) }
-            return source + [Float](repeating: 0, count: mixture.count - source.count)
+    /// Accumulated in `Double` because the reference computes it as
+    /// `np.mean(x.astype(np.float64) ** 2)`; a Float32 sum over a long recording
+    /// drifts from that by more than the parity floor allows.
+    internal static func rootMeanSquare(_ samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sum = 0.0
+        for sample in samples {
+            sum += Double(sample) * Double(sample)
         }
-        guard !mixture.isEmpty else { return corrected }
+        return Float((sum / Double(samples.count)).squareRoot())
+    }
 
-        let sourceCount = Float(corrected.count)
-        for index in mixture.indices {
-            var estimate: Float = 0
-            for source in corrected {
-                estimate += source[index]
-            }
-            let correction = (mixture[index] - estimate) / sourceCount
-            for sourceIndex in corrected.indices {
-                corrected[sourceIndex][index] += correction
-            }
+    /// `_normalize` from the Python adapter: scale to the mixture's RMS, then divide
+    /// out any peak above full scale.
+    internal static func normalizeToInputRMS(_ samples: [Float], inputRMS: Float) -> [Float] {
+        let outputRMS = rootMeanSquare(samples)
+        var scaled = outputRMS > 1e-8
+            ? samples.map { $0 * (inputRMS / outputRMS) }
+            : samples
+        let peak = scaled.reduce(Float(0)) { Swift.max($0, abs($1)) }
+        if peak > 1.0 {
+            scaled = scaled.map { $0 / peak }
         }
-        return corrected
+        return scaled
     }
     
     
