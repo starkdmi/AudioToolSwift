@@ -10,16 +10,14 @@ class AlbertEncoder: Module {
   @ModuleInfo var embeddingHiddenMappingIn: Linear
   @ModuleInfo(key: "albert_layer_groups") var albertLayerGroups: [AlbertLayerGroup]
 
-  init(weights: [String: MLXArray], config: AlbertModelArgs) throws {
+  init(weights: [String: MLXArray], config: AlbertModelArgs) {
     self.config = config
-    self._embeddingHiddenMappingIn.wrappedValue = Linear(
-      weight: try weights.required("bert.encoder.embedding_hidden_mapping_in.weight"),
-      bias: try weights.required("bert.encoder.embedding_hidden_mapping_in.bias")
-    )
+    self._embeddingHiddenMappingIn.wrappedValue = Linear(weight: weights["bert.encoder.embedding_hidden_mapping_in.weight"]!,
+                                      bias: weights["bert.encoder.embedding_hidden_mapping_in.bias"]!)
 
     var groups: [AlbertLayerGroup] = []
     for layerNum in 0 ..< config.numHiddenGroups {
-      groups.append(try AlbertLayerGroup(config: config, layerNum: layerNum, weights: weights))
+      groups.append(AlbertLayerGroup(config: config, layerNum: layerNum, weights: weights))
     }
     self._albertLayerGroups.wrappedValue = groups
   }

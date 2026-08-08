@@ -5,32 +5,6 @@ import Foundation
 import MLX
 import MLXNN
 
-enum KokoroModelLoadingError: LocalizedError {
-  case missingWeight(String)
-  case invalidWeightShape(name: String, expected: Int, found: Int)
-  case invalidWeightRank(name: String, expected: Int, found: Int)
-
-  var errorDescription: String? {
-    switch self {
-    case .missingWeight(let name):
-      return "Kokoro checkpoint is missing required tensor '\(name)'"
-    case .invalidWeightShape(let name, let expected, let found):
-      return "Kokoro tensor '\(name)' has \(found) values; expected \(expected)"
-    case .invalidWeightRank(let name, let expected, let found):
-      return "Kokoro tensor '\(name)' has rank \(found); expected rank \(expected)"
-    }
-  }
-}
-
-extension Dictionary where Key == String, Value == MLXArray {
-  func required(_ name: String) throws -> MLXArray {
-    guard let weight = self[name] else {
-      throw KokoroModelLoadingError.missingWeight(name)
-    }
-    return weight
-  }
-}
-
 /// Utility class for loading and preprocessing neural network weights.
 ///
 /// WeightLoader handles the loading of model weights from disk and applies necessary
@@ -56,10 +30,10 @@ final class WeightLoader {
   /// - **Decoder weights**: Transposes noise convolution weights and handles weight_v conditionally
   /// - Parameter modelPath: URL to the directory containing model weight files
   /// - Returns: Dictionary mapping weight names to their processed MLXArray tensors
-  /// - Throws: The underlying safetensors parsing or file-system error.
-  static func loadWeights(modelPath: URL) throws -> [String: MLXArray] {
+  /// - Note: Uses forced try (try!) as weight loading is critical and should fail fast if unsuccessful
+  static func loadWeights(modelPath: URL) -> [String: MLXArray] {
     // Load raw weights from disk
-    let weights = try MLX.loadArrays(url: modelPath)
+    let weights = try! MLX.loadArrays(url: modelPath)
     var sanitizedWeights: [String: MLXArray] = [:]
 
     // Process each weight based on its component prefix
@@ -76,18 +50,18 @@ final class WeightLoader {
       } else if key.hasPrefix("predictor") {
         // F0 projection weights need transposition for proper matrix multiplication
         if key.contains("F0_proj.weight") {
-          sanitizedWeights[key] = try transposedConvWeight(value, name: key)
+          sanitizedWeights[key] = value.transposed(0, 2, 1)
           
         // N (noise) projection weights need transposition
         } else if key.contains("N_proj.weight") {
-          sanitizedWeights[key] = try transposedConvWeight(value, name: key)
+          sanitizedWeights[key] = value.transposed(0, 2, 1)
           
         // Weight normalization V parameters need conditional transposition
         } else if key.contains("weight_v") {
           if checkArrayShape(arr: value) {
             sanitizedWeights[key] = value
           } else {
-            sanitizedWeights[key] = try transposedConvWeight(value, name: key)
+            sanitizedWeights[key] = value.transposed(0, 2, 1)
           }
         } else {
           sanitizedWeights[key] = value
@@ -100,7 +74,7 @@ final class WeightLoader {
           if checkArrayShape(arr: value) {
             sanitizedWeights[key] = value
           } else {
-            sanitizedWeights[key] = try transposedConvWeight(value, name: key)
+            sanitizedWeights[key] = value.transposed(0, 2, 1)
           }
         } else {
           sanitizedWeights[key] = value
@@ -110,14 +84,14 @@ final class WeightLoader {
       } else if key.hasPrefix("decoder") {
         // Noise convolution weights need transposition
         if key.contains("noise_convs"), key.hasSuffix(".weight") {
-          sanitizedWeights[key] = try transposedConvWeight(value, name: key)
+          sanitizedWeights[key] = value.transposed(0, 2, 1)
           
         // Weight normalization V parameters need conditional transposition
         } else if key.contains("weight_v") {
           if checkArrayShape(arr: value) {
             sanitizedWeights[key] = value
           } else {
-            sanitizedWeights[key] = try transposedConvWeight(value, name: key)
+            sanitizedWeights[key] = value.transposed(0, 2, 1)
           }
         } else {
           sanitizedWeights[key] = value
@@ -126,17 +100,6 @@ final class WeightLoader {
     }
 
     return sanitizedWeights
-  }
-
-  static func transposedConvWeight(_ value: MLXArray, name: String) throws -> MLXArray {
-    guard value.ndim == 3 else {
-      throw KokoroModelLoadingError.invalidWeightRank(
-        name: name,
-        expected: 3,
-        found: value.ndim
-      )
-    }
-    return value.transposed(0, 2, 1)
   }
 
   /// Checks if a 3D weight array has the correct shape and doesn't need transposition.

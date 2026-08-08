@@ -14,21 +14,8 @@ import Foundation
 ///
 /// Configuration is loaded from a JSON file bundled with the module.
 struct KokoroConfig: Decodable {
-  /// Swift's static initialization is atomic, so concurrent model loads cannot
-  /// race while parsing or replacing the shared configuration.
-  static let config: KokoroConfig? = {
-    guard
-      let fileURL = Bundle.module.url(
-        forResource: "config",
-        withExtension: "json",
-        subdirectory: "Resources"
-      ),
-      let data = try? Data(contentsOf: fileURL)
-    else {
-      return nil
-    }
-    return try? JSONDecoder().decode(KokoroConfig.self, from: data)
-  }()
+  /// Shared configuration instance cached after first load
+  nonisolated(unsafe) static var config: KokoroConfig?
 
   /// Configuration for the iSTFT (Inverse Short-Time Fourier Transform) decoder network.
   /// Defines the architecture of the decoder that converts mel-spectrograms to audio.
@@ -163,13 +150,18 @@ struct KokoroConfig: Decodable {
   /// parses it as JSON, and caches the result for future use.
   ///
   /// - Returns: Parsed KokoroConfig instance
-  /// - Note: The configuration is a build-time bundled resource, so a missing or
-  ///   malformed copy indicates a broken package installation rather than bad
-  ///   externally downloaded model data.
+  /// - Note: Uses forced unwrapping (try!) as configuration loading is critical
+  ///         and should fail fast if the file is missing or malformed
   nonisolated static func loadConfig() -> KokoroConfig {
-    guard let config else {
-      preconditionFailure("Kokoro config.json is missing or malformed")
-    }
-    return config
+    // Locate config.json in the module bundle
+    let fileURL = Bundle.module.url(forResource: "config", withExtension: "json", subdirectory: "Resources")!
+    
+    // Read file contents
+    let configJSON = try! String(contentsOf: fileURL, encoding: .utf8)
+    
+    // Parse JSON and cache the result
+    KokoroConfig.config = try! JSONDecoder().decode(KokoroConfig.self, from: configJSON.data(using: .utf8)!)
+    
+    return KokoroConfig.config!
   }
 }

@@ -28,14 +28,14 @@ class Generator: Module {
        upsampleKernelSizes: [Int],
        genIstftNFft: Int,
        genIstftHopSize: Int)
-  throws {
+  {
     numKernels = resblockKernelSizes.count
     numUpsamples = upsampleRates.count
 
     let upsampleScaleNum = MLX.product(MLXArray(upsampleRates)) * genIstftHopSize
     let upsampleScaleNumVal: Int = upsampleScaleNum.item()
 
-    self._mSource.wrappedValue = try SourceModuleHnNSF(
+    self._mSource.wrappedValue = SourceModuleHnNSF(
       weights: weights,
       samplingRate: KokoroTTS.Constants.samplingRate,
       upsampleScale: upsampleScaleNum.item(),
@@ -52,9 +52,9 @@ class Generator: Module {
     for (i, (u, k)) in zip(upsampleRates, upsampleKernelSizes).enumerated() {
       upsArr.append(
         ConvWeighted(
-          weightG: try weights.required("decoder.generator.ups.\(i).weight_g"),
-          weightV: try weights.required("decoder.generator.ups.\(i).weight_v"),
-          bias: try weights.required("decoder.generator.ups.\(i).bias"),
+          weightG: weights["decoder.generator.ups.\(i).weight_g"]!,
+          weightV: weights["decoder.generator.ups.\(i).weight_v"]!,
+          bias: weights["decoder.generator.ups.\(i).bias"]!,
           stride: u,
           padding: (k - u) / 2
         )
@@ -66,7 +66,7 @@ class Generator: Module {
       let ch = upsampleInitialChannel / Int(pow(2.0, Double(i + 1)))
       for (j, (k, d)) in zip(resblockKernelSizes, resblockDilationSizes).enumerated() {
         resBlocksArr.append(
-          try AdaINResBlock1(
+          AdaINResBlock1(
             weights: weights,
             weightPrefixKey: "decoder.generator.resblocks.\((i * resblockKernelSizes.count) + j)",
             channels: ch,
@@ -87,13 +87,13 @@ class Generator: Module {
             kernelSize: strideF0 * 2,
             stride: strideF0,
             padding: (strideF0 + 1) / 2,
-            weight: try weights.required("decoder.generator.noise_convs.\(i).weight"),
-            bias: try weights.required("decoder.generator.noise_convs.\(i).bias")
+            weight: weights["decoder.generator.noise_convs.\(i).weight"]!,
+            bias: weights["decoder.generator.noise_convs.\(i).bias"]!
           )
         )
 
         noiseResArr.append(
-          try AdaINResBlock1(
+          AdaINResBlock1(
             weights: weights,
             weightPrefixKey: "decoder.generator.noise_res.\(i)",
             channels: cCur,
@@ -108,12 +108,12 @@ class Generator: Module {
             inputChannels: genIstftNFft + 2,
             outputChannels: cCur,
             kernelSize: 1,
-            weight: try weights.required("decoder.generator.noise_convs.\(i).weight"),
-            bias: try weights.required("decoder.generator.noise_convs.\(i).bias")
+            weight: weights["decoder.generator.noise_convs.\(i).weight"]!,
+            bias: weights["decoder.generator.noise_convs.\(i).bias"]!
           )
         )
         noiseResArr.append(
-          try AdaINResBlock1(
+          AdaINResBlock1(
             weights: weights,
             weightPrefixKey: "decoder.generator.noise_res.\(i)",
             channels: cCur,
@@ -133,9 +133,9 @@ class Generator: Module {
     self._noiseRes.wrappedValue = noiseResArr
 
     self._convPost.wrappedValue = ConvWeighted(
-      weightG: try weights.required("decoder.generator.conv_post.weight_g"),
-      weightV: try weights.required("decoder.generator.conv_post.weight_v"),
-      bias: try weights.required("decoder.generator.conv_post.bias"),
+      weightG: weights["decoder.generator.conv_post.weight_g"]!,
+      weightV: weights["decoder.generator.conv_post.weight_v"]!,
+      bias: weights["decoder.generator.conv_post.bias"]!,
       stride: 1,
       padding: 3
     )

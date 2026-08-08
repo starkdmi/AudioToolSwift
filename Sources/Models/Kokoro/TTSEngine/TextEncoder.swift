@@ -32,11 +32,9 @@ final class TextEncoder: Module {
   ///   - depth: Number of CNN blocks to stack
   ///   - nSymbols: Size of the vocabulary (number of unique tokens)
   ///   - actv: Activation function (default: LeakyReLU with slope 0.2)
-  init(weights: [String: MLXArray], channels: Int, kernelSize: Int, depth: Int, nSymbols _: Int, actv: Module = LeakyReLU(negativeSlope: 0.2)) throws {
+  init(weights: [String: MLXArray], channels: Int, kernelSize: Int, depth: Int, nSymbols _: Int, actv: Module = LeakyReLU(negativeSlope: 0.2)) {
     // Initialize embedding layer
-    self._embedding.wrappedValue = Embedding(
-      weight: try weights.required("text_encoder.embedding.weight")
-    )
+    self._embedding.wrappedValue = Embedding(weight: weights["text_encoder.embedding.weight"]!)
     
     // Calculate padding to maintain sequence length
     let padding = (kernelSize - 1) / 2
@@ -47,15 +45,15 @@ final class TextEncoder: Module {
       cnnLayers.append([
         // Weight-normalized convolution
         ConvWeighted(
-          weightG: try weights.required("text_encoder.cnn.\(i).0.weight_g"),
-          weightV: try weights.required("text_encoder.cnn.\(i).0.weight_v"),
-          bias: try weights.required("text_encoder.cnn.\(i).0.bias"),
+          weightG: weights["text_encoder.cnn.\(i).0.weight_g"]!,
+          weightV: weights["text_encoder.cnn.\(i).0.weight_v"]!,
+          bias: weights["text_encoder.cnn.\(i).0.bias"]!,
           padding: padding
         ),
         // Layer normalization for stability
         LayerNormInference(
-          weight: try weights.required("text_encoder.cnn.\(i).1.gamma"),
-          bias: try weights.required("text_encoder.cnn.\(i).1.beta")
+          weight: weights["text_encoder.cnn.\(i).1.gamma"]!,
+          bias: weights["text_encoder.cnn.\(i).1.beta"]!
         ),
         // Activation function
         actv,
@@ -67,14 +65,14 @@ final class TextEncoder: Module {
     self._lstm.wrappedValue = LSTM(
       inputSize: channels,
       hiddenSize: channels / 2,  // Half size because bidirectional (forward + backward)
-      wxForward: try weights.required("text_encoder.lstm.weight_ih_l0"),
-      whForward: try weights.required("text_encoder.lstm.weight_hh_l0"),
-      biasIhForward: try weights.required("text_encoder.lstm.bias_ih_l0"),
-      biasHhForward: try weights.required("text_encoder.lstm.bias_hh_l0"),
-      wxBackward: try weights.required("text_encoder.lstm.weight_ih_l0_reverse"),
-      whBackward: try weights.required("text_encoder.lstm.weight_hh_l0_reverse"),
-      biasIhBackward: try weights.required("text_encoder.lstm.bias_ih_l0_reverse"),
-      biasHhBackward: try weights.required("text_encoder.lstm.bias_hh_l0_reverse")
+      wxForward: weights["text_encoder.lstm.weight_ih_l0"]!,
+      whForward: weights["text_encoder.lstm.weight_hh_l0"]!,
+      biasIhForward: weights["text_encoder.lstm.bias_ih_l0"]!,
+      biasHhForward: weights["text_encoder.lstm.bias_hh_l0"]!,
+      wxBackward: weights["text_encoder.lstm.weight_ih_l0_reverse"]!,
+      whBackward: weights["text_encoder.lstm.weight_hh_l0_reverse"]!,
+      biasIhBackward: weights["text_encoder.lstm.bias_ih_l0_reverse"]!,
+      biasHhBackward: weights["text_encoder.lstm.bias_hh_l0_reverse"]!
     )
   }
   

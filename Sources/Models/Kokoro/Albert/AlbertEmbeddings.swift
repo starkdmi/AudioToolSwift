@@ -11,35 +11,16 @@ class AlbertEmbeddings: Module {
   @ModuleInfo var tokenTypeEmbeddings: Embedding
   @ModuleInfo var layerNorm: LayerNormInference
 
-  init(weights: [String: MLXArray], config: AlbertModelArgs) throws {
-    self._wordEmbeddings.wrappedValue = Embedding(
-      weight: try weights.required("bert.embeddings.word_embeddings.weight")
-    )
-    self._positionEmbeddings.wrappedValue = Embedding(
-      weight: try weights.required("bert.embeddings.position_embeddings.weight")
-    )
-    self._tokenTypeEmbeddings.wrappedValue = Embedding(
-      weight: try weights.required("bert.embeddings.token_type_embeddings.weight")
-    )
+  init(weights: [String: MLXArray], config: AlbertModelArgs) {
+    self._wordEmbeddings.wrappedValue = Embedding(weight: weights["bert.embeddings.word_embeddings.weight"]!)
+    self._positionEmbeddings.wrappedValue = Embedding(weight: weights["bert.embeddings.position_embeddings.weight"]!)
+    self._tokenTypeEmbeddings.wrappedValue = Embedding(weight: weights["bert.embeddings.token_type_embeddings.weight"]!)
     
-    let weightName = "bert.embeddings.LayerNorm.weight"
-    let biasName = "bert.embeddings.LayerNorm.bias"
-    let layerNormWeights = try weights.required(weightName)
-    let layerNormBiases = try weights.required(biasName)
+    let layerNormWeights = weights["bert.embeddings.LayerNorm.weight"]!
+    let layerNormBiases = weights["bert.embeddings.LayerNorm.bias"]!
 
-    guard layerNormWeights.count == config.embeddingSize else {
-      throw KokoroModelLoadingError.invalidWeightShape(
-        name: weightName,
-        expected: config.embeddingSize,
-        found: layerNormWeights.count
-      )
-    }
-    guard layerNormBiases.count == config.embeddingSize else {
-      throw KokoroModelLoadingError.invalidWeightShape(
-        name: biasName,
-        expected: config.embeddingSize,
-        found: layerNormBiases.count
-      )
+    guard layerNormBiases.count == config.embeddingSize, layerNormWeights.count == config.embeddingSize else {
+      fatalError("Wrong shape for AlbertEmbeddings LayerNorm bias or weights!")
     }
 
     // Use LayerNormInference which accepts weights directly in init

@@ -238,7 +238,13 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
             }
             
             // KokoroSwift uses .misaki G2P by default (MIT license, no ESpeakNG)
-            let candidate = try KokoroTTS(modelPath: weightsPath, g2p: .misaki)
+            //
+            // Non-throwing: KokoroSwift traps on a malformed checkpoint rather than
+            // reporting one. That is upstream's behaviour and this file tracks
+            // upstream byte for byte, so the guard belongs on the way in - see
+            // `resolveWeightsPath`, which is what keeps a truncated download from
+            // reaching this call.
+            let candidate = KokoroTTS(modelPath: weightsPath, g2p: .misaki)
             guard generation == loadGeneration else { throw CancellationError() }
             tts = candidate
             modelPath = path

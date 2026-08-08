@@ -11,41 +11,18 @@ class AlbertLayer: Module {
   @ModuleInfo var ffn: Linear
   @ModuleInfo var ffnOutput: Linear
 
-  init(weights: [String: MLXArray], config: AlbertModelArgs, layerNum: Int, innerGroupNum: Int) throws {
-    let prefix = "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum)"
-    self._attention.wrappedValue = try AlbertSelfAttention(
-      weights: weights,
-      config: config,
-      layerNum: layerNum,
-      innerGroupNum: innerGroupNum
-    )
-    self._ffn.wrappedValue = Linear(
-      weight: try weights.required("\(prefix).ffn.weight"),
-      bias: try weights.required("\(prefix).ffn.bias")
-    )
-    self._ffnOutput.wrappedValue = Linear(
-      weight: try weights.required("\(prefix).ffn_output.weight"),
-      bias: try weights.required("\(prefix).ffn_output.bias")
-    )
+  init(weights: [String: MLXArray], config: AlbertModelArgs, layerNum: Int, innerGroupNum: Int) {
+    self._attention.wrappedValue = AlbertSelfAttention(weights: weights, config: config, layerNum: layerNum, innerGroupNum: innerGroupNum)
+    self._ffn.wrappedValue = Linear(weight: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).ffn.weight"]!,
+                 bias: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).ffn.bias"]!)
+    self._ffnOutput.wrappedValue = Linear(weight: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).ffn_output.weight"]!,
+                       bias: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).ffn_output.bias"]!)
 
-    let weightName = "\(prefix).full_layer_layer_norm.weight"
-    let biasName = "\(prefix).full_layer_layer_norm.bias"
-    let fullLayerLayerNormWeights = try weights.required(weightName)
-    let fullLayerLayerNormBiases = try weights.required(biasName)
+    let fullLayerLayerNormWeights = weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).full_layer_layer_norm.weight"]!
+    let fullLayerLayerNormBiases = weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).full_layer_layer_norm.bias"]!
 
-    guard fullLayerLayerNormWeights.count == config.hiddenSize else {
-      throw KokoroModelLoadingError.invalidWeightShape(
-        name: weightName,
-        expected: config.hiddenSize,
-        found: fullLayerLayerNormWeights.count
-      )
-    }
-    guard fullLayerLayerNormBiases.count == config.hiddenSize else {
-      throw KokoroModelLoadingError.invalidWeightShape(
-        name: biasName,
-        expected: config.hiddenSize,
-        found: fullLayerLayerNormBiases.count
-      )
+    guard fullLayerLayerNormWeights.count == config.hiddenSize, fullLayerLayerNormBiases.count == config.hiddenSize else {
+      fatalError("Wrong shape for AlbertLayer FullLayerLayerNorm bias or weights!")
     }
 
     // Use LayerNormInference which accepts weights directly in init
