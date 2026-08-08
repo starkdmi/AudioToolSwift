@@ -29,7 +29,6 @@ public class USSInference {
 //    private let istft: ISTFT
     private let sampleRate: Int
     private let segmentDuration: Float
-    private let hopLength: Float
     private var isPrewarmed: Bool = false
     private let segmentBatchSize: Int
     
@@ -37,18 +36,15 @@ public class USSInference {
         model: ResUNet30,
         sampleRate: Int = 32000,
         segmentDuration: Float = 2.0,
-        hopLength: Float = 0.5,
         compile: Bool = true,
         segmentBatchSize: Int = 1  // Default to 1 based on performance testing
     ) {
         precondition(sampleRate > 0, "Sample rate must be positive")
         precondition(segmentDuration > 0, "Segment duration must be positive")
-        precondition(hopLength > 0, "Hop length must be positive")
         precondition(segmentBatchSize > 0, "Segment batch size must be positive")
         self.model = model
         self.sampleRate = sampleRate
         self.segmentDuration = segmentDuration
-        self.hopLength = hopLength
         self.segmentBatchSize = segmentBatchSize
 
         // Applied before any inference, not on the first trim - a short job that
@@ -100,8 +96,7 @@ public class USSInference {
     public func separate(
         audio: MLXArray,
         conditioning: MLXArray,
-        compile: Bool = false,
-        useSimpleSegmentation: Bool = true  // Default to Python-compatible segmentation
+        compile: Bool = false
     ) -> MLXArray {
         // Prewarm model if needed
         if !isPrewarmed {
@@ -110,7 +105,6 @@ public class USSInference {
         
         // Calculate segment parameters
         let segmentSamples = Int(segmentDuration * Float(sampleRate))
-        let hopSamples = Int(hopLength * Float(sampleRate))
         let audioLength = audio.shape[1]
         
         // Process full audio if it's short enough
@@ -118,25 +112,13 @@ public class USSInference {
             return processSingleSegment(audio: audio, conditioning: conditioning, compile: compile)
         }
         
-        // Process in segments for longer audio
-        if useSimpleSegmentation {
-            // Use simple non-overlapping segmentation (matches Python)
-            return processSegmentedSimple(
-                audio: audio,
-                conditioning: conditioning,
-                segmentSamples: segmentSamples,
-                compile: compile
-            )
-        } else {
-            // Use overlap-add segmentation (original Swift implementation)
-            return processSegmented(
-                audio: audio,
-                conditioning: conditioning,
-                segmentSamples: segmentSamples,
-                hopSamples: hopSamples,
-                compile: compile
-            )
-        }
+        // Non-overlapping segments, matching the Python reference.
+        return processSegmentedSimple(
+            audio: audio,
+            conditioning: conditioning,
+            segmentSamples: segmentSamples,
+            compile: compile
+        )
     }
     
     /// Process a single audio segment
@@ -212,94 +194,6 @@ public class USSInference {
         }
         
         return results
-    }
-    
-    /// Process audio in segments with overlap
-    private func processSegmented(
-        audio: MLXArray,
-        conditioning: MLXArray,
-        segmentSamples: Int,
-        hopSamples: Int,
-        compile: Bool
-    ) -> MLXArray {
-        let audioLength = audio.shape[1]
-        let numSegments = 1 + Int(ceil(
-            Double(audioLength - segmentSamples) / Double(hopSamples)
-        ))
-        var output = [Float](repeating: 0, count: audioLength)
-        var outputWeights = [Float](repeating: 0, count: audioLength)
-        
-        // Create window for overlap-add
-        let window = createTriangularWindow(segmentSamples).asArray(Float.self)
-        
-        for i in 0..<numSegments {
-            let start = i * hopSamples
-            let end = min(start + segmentSamples, audioLength)
-            let actualLength = end - start
-            
-            // Extract segment
-            var segment = audio[0..., start..<end]
-            
-            // Pad if needed
-            if actualLength < segmentSamples {
-                let padAmount = segmentSamples - actualLength
-                segment = MLX.padded(segment, widths: [IntOrPair(0), IntOrPair([0, padAmount])])
-            }
-            
-            // Process segment
-            let separated = processSingleSegment(
-                audio: segment,
-                conditioning: conditioning,
-                compile: compile
-            )
-            
-            eval(separated)
-            let separatedSamples = separated[0, 0, 0..<actualLength].asArray(Float.self)
-
-            for sampleIndex in 0..<actualLength {
-                let weight = Self.overlapAddWeight(
-                    windowWeight: window[sampleIndex],
-                    sampleIndex: sampleIndex,
-                    segmentSamples: segmentSamples,
-                    hopSamples: hopSamples,
-                    isFirstSegment: i == 0,
-                    isFinalSegment: i == numSegments - 1
-                )
-                let outputIndex = start + sampleIndex
-                output[outputIndex] += separatedSamples[sampleIndex] * weight
-                outputWeights[outputIndex] += weight
-            }
-            Self.trimCacheIfNeeded(afterUnit: i + 1)
-        }
-        
-        // Normalize by weights
-        let eps: Float = 1e-8
-        for index in output.indices where outputWeights[index] > eps {
-            output[index] /= outputWeights[index]
-        }
-
-        return MLXArray(output).reshaped([1, 1, audioLength])
-    }
-
-    /// Preserve the triangular crossfade wherever a neighboring segment still
-    /// contributes. A padded final segment can contain fewer than `hopSamples`
-    /// real samples, but that does not enlarge its non-overlapped region.
-    static func overlapAddWeight(
-        windowWeight: Float,
-        sampleIndex: Int,
-        segmentSamples: Int,
-        hopSamples: Int,
-        isFirstSegment: Bool,
-        isFinalSegment: Bool
-    ) -> Float {
-        if isFirstSegment && sampleIndex < hopSamples {
-            return 1
-        }
-        if isFinalSegment,
-           sampleIndex >= max(0, segmentSamples - hopSamples) {
-            return 1
-        }
-        return windowWeight
     }
     
     /// Process audio in simple non-overlapping segments (matches Python implementation)
@@ -409,25 +303,16 @@ public class USSInference {
         GPU.set(cacheLimit: mlxCacheLimitBytes)
     }()
     
-    /// Create triangular window for overlap-add
-    private func createTriangularWindow(_ length: Int) -> MLXArray {
-        let half = length / 2
-        let firstHalf = MLX.linspace(0, 1, count: half)
-        let secondHalf = MLX.linspace(1, 0, count: length - half)
-        return MLX.concatenated([firstHalf, secondHalf])
-    }
     
     /// Process multiple embeddings for the same audio.
     ///
     /// - Parameters:
     ///   - audio: Input audio as MLXArray
     ///   - conditionings: Array of conditioning embeddings
-    ///   - useSimpleSegmentation: Use simple non-overlapping segmentation (default: true)
     /// - Returns: Array of separated audio, one per conditioning
     public func separateMultipleEmbeddings(
         audio: MLXArray,
-        conditionings: [MLXArray],
-        useSimpleSegmentation: Bool = true
+        conditionings: [MLXArray]
     ) -> [MLXArray] {
         // Prewarm model if needed with first conditioning
         if !isPrewarmed && !conditionings.isEmpty {
@@ -440,8 +325,7 @@ public class USSInference {
             let result = separate(
                 audio: audio,
                 conditioning: conditioning,
-                compile: true,
-                useSimpleSegmentation: useSimpleSegmentation
+                compile: true
             )
             results.append(result)
         }
@@ -517,8 +401,7 @@ public func runUSS(
     let separated = inference.separate(
         audio: audio,
         conditioning: conditioning,
-        compile: compile,
-        useSimpleSegmentation: true  // Use Python-compatible segmentation
+        compile: compile
     )
     
     // Save results

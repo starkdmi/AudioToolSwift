@@ -202,12 +202,12 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
             throw AudioToolError.modelNotFound("USS embedding for \(initialEmbeddingType.rawValue)")
         }
         
-        // Create inference pipeline with 2s chunks, no overlap (hopLength == segmentDuration)
+        // Create inference pipeline with 2s non-overlapping segments, as the
+        // Python reference does.
         let inference = USSInference(
             model: model,
             sampleRate: sampleRate,
             segmentDuration: segmentDuration,
-            hopLength: segmentDuration,  // No overlap
             compile: compile,
             segmentBatchSize: 1
         )
@@ -280,8 +280,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
             let output = inference.separate(
                 audio: tinyAudio,
                 conditioning: conditioning,
-                compile: compile,
-                useSimpleSegmentation: true
+                compile: compile
             )
             // MLX is lazy: retaining or discarding the graph does not compile it.
             // Materialize the actual model output before reporting this embedding
@@ -348,8 +347,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         // Use USSInference.separateMultipleEmbeddings for efficient batch processing
         let separatedArrays = inference.separateMultipleEmbeddings(
             audio: audio,
-            conditionings: conditionings,
-            useSimpleSegmentation: true
+            conditionings: conditionings
         )
         
         // Build result dictionary
@@ -381,8 +379,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         let separated = inference.separate(
             audio: audio,
             conditioning: conditioning,
-            compile: compile,
-            useSimpleSegmentation: true  // No overlap matches Python
+            compile: compile
         )
         eval(separated)
         
@@ -463,8 +460,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         let separated = inference.separate(
             audio: inputAudio,
             conditioning: conditioning,
-            compile: compile,
-            useSimpleSegmentation: true
+            compile: compile
         )
         eval(separated)
         
