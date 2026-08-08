@@ -11,7 +11,19 @@ public class USSInference {
     /// USS jobs only trim periodically once cached allocations are substantial.
     private static let cacheTrimInterval = 8
     private static let cacheTrimThresholdBytes = 512 * 1024 * 1024
-    
+
+    /// The interval is a politeness measure, not a bound - past this, trim at the
+    /// next segment regardless of where the interval falls.
+    private static let cacheTrimHardCeilingBytes = 4 * cacheTrimThresholdBytes
+
+    /// MLX's default cache ceiling is the device's recommended working set, which on
+    /// a 16 GB Mac is about 10.6 GB. Without an explicit cap a segmented job's
+    /// resident size tracks the machine rather than the work. This is a process-global
+    /// setting; `MLXCachePolicy.cacheLimitBytes` mirrors it, because `USSMLXSwift`
+    /// sits below `AudioToolMLX` and the two cannot share a constant.
+    static let mlxCacheLimitBytes = 3 * 1024 * 1024 * 1024
+
+
     private let model: ResUNet30
 //    private let stft: STFT
 //    private let istft: ISTFT
@@ -38,7 +50,11 @@ public class USSInference {
         self.segmentDuration = segmentDuration
         self.hopLength = hopLength
         self.segmentBatchSize = segmentBatchSize
-        
+
+        // Applied before any inference, not on the first trim - a short job that
+        // never reaches a trim boundary should still run under the cap.
+        Self.applyMLXCacheLimit()
+
         // Enable or disable compilation
         model.setCompile(compile)
         
@@ -371,13 +387,27 @@ public class USSInference {
     }
 
     private static func trimCacheIfNeeded(afterUnit completedUnits: Int) {
-        guard completedUnits > 0,
-              completedUnits.isMultiple(of: cacheTrimInterval),
-              GPU.cacheMemory >= cacheTrimThresholdBytes else {
+        applyMLXCacheLimit()
+        guard completedUnits > 0 else { return }
+        guard GPU.cacheMemory >= cacheTrimHardCeilingBytes else {
+            guard completedUnits.isMultiple(of: cacheTrimInterval),
+                  GPU.cacheMemory >= cacheTrimThresholdBytes else {
+                return
+            }
+            GPU.clearCache()
             return
         }
         GPU.clearCache()
     }
+
+    /// Idempotent. See `mlxCacheLimitBytes`.
+    static func applyMLXCacheLimit() {
+        _ = cacheLimitApplied
+    }
+
+    private static let cacheLimitApplied: Void = {
+        GPU.set(cacheLimit: mlxCacheLimitBytes)
+    }()
     
     /// Create triangular window for overlap-add
     private func createTriangularWindow(_ length: Int) -> MLXArray {

@@ -735,8 +735,13 @@ private final class ISTFTNormBufferCache: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private let maximumEntries = 32
+    /// Each entry pins a buffer the length of the whole reconstructed signal, plus
+    /// the window it was built for. Keying on window identity means a caller that
+    /// builds its own window per call misses every time and inserts, so this bound
+    /// is what stands between that and a full cache of whole-signal buffers.
+    private let maximumEntries = 8
     private var entries: [ISTFTNormCacheKey: Entry] = [:]
+    private var insertionOrder: [ISTFTNormCacheKey] = []
 
     func value(
         numFrames: Int,
@@ -767,16 +772,22 @@ private final class ISTFTNormBufferCache: @unchecked Sendable {
         if let cached = entries[key]?.buffer {
             return cached
         }
-        if entries.count >= maximumEntries, let oldest = entries.keys.first {
+        // `entries.keys.first` is whatever the hash table hands back, which can be
+        // the entry currently in use. Evict in insertion order, as the window cache
+        // above does.
+        while entries.count >= maximumEntries, let oldest = insertionOrder.first {
             entries.removeValue(forKey: oldest)
+            insertionOrder.removeFirst()
         }
         entries[key] = Entry(window: window, buffer: candidate)
+        insertionOrder.append(key)
         return candidate
     }
 
     func removeAll() {
         lock.lock()
         entries.removeAll()
+        insertionOrder.removeAll()
         lock.unlock()
     }
 
