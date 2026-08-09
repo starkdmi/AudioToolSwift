@@ -51,16 +51,31 @@ final class ResamplerEffectTests: IntegrationTestCase {
         let viaCubic = try input.resampled(to: 44100, quality: .balanced)
         let viaHigh = try input.resampled(to: 44100, quality: .high)
 
-        let fromCubic = try await provider.separate(viaCubic, stem: .vocals)
-        let fromHigh = try await provider.separate(viaHigh, stem: .vocals)
+        // Demucs declares `inputChannels = 2` and `validateInputChannels` enforces it,
+        // so a mono buffer is rejected before the model sees it. Callers do not hit
+        // that because `AudioEngine.process` adapts the layout first
+        // (`AudioEngine.swift:124`); this test drives the provider directly and so has
+        // to do the same thing the engine would.
+        //
+        // Resample first, then upmix - that is the engine's order, and it keeps this
+        // measuring the resampler rather than the resampler plus a channel copy.
+        let fromCubic = try await provider.separate(
+            try viaCubic.converted(toChannels: provider.inputChannels), stem: .vocals
+        )
+        let fromHigh = try await provider.separate(
+            try viaHigh.converted(toChannels: provider.inputChannels), stem: .vocals
+        )
 
         let count = min(fromCubic.samples.count, fromHigh.samples.count)
         let difference = rms((0..<count).map { fromCubic.samples[$0] - fromHigh.samples[$0] })
         let scale = max(rms(fromHigh.samples), 1e-9)
 
-        // Measured at ~87% relative RMS. The threshold is far below that: the claim
-        // is "this is a first-order effect", not a pinned number, since the exact
-        // figure depends on the signal.
+        print(String(format: "resampler choice moves Demucs vocals by %.1f%% relative RMS",
+                     100 * difference / scale))
+
+        // The threshold is far below the measured figure: the claim is "this is a
+        // first-order effect", not a pinned number, since the exact value depends on
+        // the signal. It is printed rather than asserted for the same reason.
         XCTAssertGreaterThan(difference / scale, 0.2,
                              "the resampler choice barely moved the model's output (\(difference / scale)) - either the preference is not reaching the edge conversion, or `.high` has stopped anti-aliasing")
     }
