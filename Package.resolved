@@ -103,8 +103,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/starkdmi/SwiftAudio",
       "state" : {
-        "revision" : "69d684095c68302f0676231258d6a673c45b6c1c",
-        "version" : "1.1.0"
+        "revision" : "beb6d4da3ce0c04e8d729b4ad075b30c37c96606",
+        "version" : "1.2.0"
       }
     },
     {

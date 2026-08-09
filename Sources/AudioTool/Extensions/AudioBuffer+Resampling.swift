@@ -2,19 +2,22 @@
 //  AudioBuffer+Resampling.swift
 //  AudioTool
 //
-//  Native Swift resampling for AudioBuffer - follows SwiftAudio/AudioUtils algorithms
-//  without MLXArray conversion overhead.
+//  AudioBuffer resampling, on AudioUtils' [Float] algorithms.
 //
 
 import Foundation
 @preconcurrency import AVFoundation
 import Accelerate
 import AudioToolCore
+import AudioUtils
 
 /// Type alias to disambiguate from AVFoundation's AudioBuffer
 public typealias CVAudioBuffer = AudioToolCore.AudioBuffer
 
-// ResamplingQuality lives in AudioToolCore so providers can declare a preference.
+// `ResamplingQuality` and `ResamplingError` are declared in both AudioToolCore and
+// AudioUtils. AudioToolCore's are the ones this package's API is written in - the
+// quality enum is what providers declare a preference with - so they are qualified
+// throughout rather than left to whichever module wins a lookup.
 
 extension CVAudioBuffer {
     
@@ -23,13 +26,13 @@ extension CVAudioBuffer {
     ///   - targetSampleRate: Target sample rate in Hz
     ///   - quality: Resampling quality (default: .balanced)
     /// - Returns: New AudioBuffer at target sample rate
-    public func resampled(to targetSampleRate: Int, quality: ResamplingQuality = .balanced) throws -> CVAudioBuffer {
+    public func resampled(to targetSampleRate: Int, quality: AudioToolCore.ResamplingQuality = .balanced) throws -> CVAudioBuffer {
         guard targetSampleRate > 0 else {
-            throw ResamplingError.invalidParameters("Target sample rate must be positive")
+            throw AudioToolCore.ResamplingError.invalidParameters("Target sample rate must be positive")
         }
         guard sampleRate != targetSampleRate else { return self }
         guard samples.count.isMultiple(of: channels) else {
-            throw ResamplingError.invalidParameters(
+            throw AudioToolCore.ResamplingError.invalidParameters(
                 "Interleaved sample count must be divisible by the channel count"
             )
         }
@@ -73,34 +76,36 @@ extension CVAudioBuffer {
     }
     
     /// Resample asynchronously (for large files)
-    public func resampledAsync(to targetSampleRate: Int, quality: ResamplingQuality = .balanced) async throws -> CVAudioBuffer {
+    public func resampledAsync(to targetSampleRate: Int, quality: AudioToolCore.ResamplingQuality = .balanced) async throws -> CVAudioBuffer {
         try await Task.detached(priority: .userInitiated) {
             try self.resampled(to: targetSampleRate, quality: quality)
         }.value
     }
 }
 
-private func expectedOutputFrames(inputFrames: Int, fromRate: Int, toRate: Int) -> Int {
-    Int((Double(inputFrames) * Double(toRate) / Double(fromRate)).rounded())
-}
-
+/// Map `AudioToolCore`'s quality preference onto AudioUtils' resamplers.
+///
+/// The algorithms themselves live in `AudioUtils.FloatResampling`; this package used
+/// to carry its own copies, which drifted ahead of the ones in the library and were
+/// folded back in AudioUtils 1.2.0. What stays here is the policy - which resampler
+/// each `AudioToolCore.ResamplingQuality` means - because `AudioToolCore.ResamplingQuality` is AudioToolCore's
+/// type and the mapping is this package's decision, not the library's.
 private func resampleChannel(
     _ samples: [Float],
     fromRate: Int,
     toRate: Int,
-    quality: ResamplingQuality,
+    quality: AudioToolCore.ResamplingQuality,
     expectedLength: Int
 ) throws -> [Float] {
-    let output: [Float]
     switch quality {
     case .fast:
-        output = resampleLinear(samples, fromRate: Float(fromRate),
-                                toRate: Float(toRate), outputLength: expectedLength)
+        return resampleLinear(samples, fromRate: Float(fromRate),
+                              toRate: Float(toRate), outputLength: expectedLength)
     case .balanced:
-        output = resampleCubic(samples, fromRate: Float(fromRate),
-                               toRate: Float(toRate), outputLength: expectedLength)
+        return resampleCubic(samples, fromRate: Float(fromRate),
+                             toRate: Float(toRate), outputLength: expectedLength)
     case .high:
-        output = try resampleAVAudioConverter(
+        return try resampleAVAudioConverter(
             samples,
             fromRate: Float(fromRate),
             toRate: Float(toRate),
@@ -109,246 +114,21 @@ private func resampleChannel(
             expectedLength: expectedLength
         )
     case .auto:
+        // Upsampling has nothing to alias, so the cheap interpolator is honest there.
+        // Downsampling does, so it goes through the converter.
         if toRate > fromRate {
-            output = resampleCubic(samples, fromRate: Float(fromRate),
-                                   toRate: Float(toRate), outputLength: expectedLength)
-        } else {
-            output = try resampleAVAudioConverter(
-                samples,
-                fromRate: Float(fromRate),
-                toRate: Float(toRate),
-                algorithm: AVSampleRateConverterAlgorithm_Normal,
-                quality: AVAudioQuality.high,
-                expectedLength: expectedLength
-            )
+            return resampleCubic(samples, fromRate: Float(fromRate),
+                                 toRate: Float(toRate), outputLength: expectedLength)
         }
-    }
-    return output
-}
-
-// MARK: - Linear Resampling
-
-/// Simple linear interpolation resampling (fastest but lowest quality)
-private func resampleLinear(
-    _ samples: [Float],
-    fromRate: Float,
-    toRate: Float,
-    outputLength: Int
-) -> [Float] {
-    let ratio = toRate / fromRate
-    let inputLength = samples.count
-
-    guard outputLength > 0 else { return [] }
-    guard inputLength > 1 else {
-        return [Float](repeating: samples.first ?? 0, count: outputLength)
-    }
-    
-    var result = [Float](repeating: 0, count: outputLength)
-    
-    for i in 0..<outputLength {
-        let inputPosition = Float(i) / ratio
-        let index = min(max(Int(inputPosition), 0), inputLength - 1)
-        let idx0 = index
-        let idx1 = min(index + 1, inputLength - 1)
-        // Once the sampling position reaches the last source frame there is no
-        // right-hand neighbour to interpolate toward. Hold that endpoint instead
-        // of clamping the index back by one while retaining the old fraction,
-        // which made an upsampled signal jump backwards at its tail.
-        let fraction = idx0 == idx1 ? 0 : inputPosition - Float(index)
-        
-        result[i] = samples[idx0] * (1 - fraction) + samples[idx1] * fraction
-    }
-    
-    return result
-}
-
-// MARK: - Cubic Resampling (Catmull-Rom)
-
-/// Catmull-Rom cubic interpolation resampling.
-///
-/// Pure interpolation with no anti-aliasing stage, so downsampling folds content
-/// above the new Nyquist back into the band. That is a property to be aware of, not
-/// necessarily a defect to fix - see the note on `ResamplingQuality`.
-///
-/// This is a second copy of the implementation in SwiftAudio's AudioUtils; the two
-/// should be reconciled rather than left to drift.
-///
-/// - Note: The figure "~84.3 dB SNR with 0.01% THD" was carried over from AudioUtils
-///   and has not been verified here; it cannot hold for downsampling without a
-///   low-pass stage.
-private func resampleCubic(
-    _ samples: [Float],
-    fromRate: Float,
-    toRate: Float,
-    outputLength: Int
-) -> [Float] {
-    let ratio = toRate / fromRate
-    let inputLength = samples.count
-
-    guard outputLength > 0 else { return [] }
-    guard inputLength >= 4 else {
-        // Fall back to linear for very short samples
-        return resampleLinear(
+        return try resampleAVAudioConverter(
             samples,
-            fromRate: fromRate,
-            toRate: toRate,
-            outputLength: outputLength
+            fromRate: Float(fromRate),
+            toRate: Float(toRate),
+            algorithm: AVSampleRateConverterAlgorithm_Normal,
+            quality: AVAudioQuality.high,
+            expectedLength: expectedLength
         )
     }
-    
-    var result = [Float](repeating: 0, count: outputLength)
-    
-    // Catmull-Rom coefficients
-    let c0: Float = -0.5
-    let c1: Float = 1.5
-    let c2: Float = 2.5
-    let c3: Float = 2.0
-    
-    for i in 0..<outputLength {
-        let inputPosition = Float(i) / ratio
-        let index = Int(inputPosition)
-        let f = inputPosition - Float(index)
-        
-        // Get 4 points for cubic interpolation with boundary clamping
-        let idx0 = max(0, min(index - 1, inputLength - 1))
-        let idx1 = max(0, min(index, inputLength - 1))
-        let idx2 = max(0, min(index + 1, inputLength - 1))
-        let idx3 = max(0, min(index + 2, inputLength - 1))
-        
-        let y0 = samples[idx0]
-        let y1 = samples[idx1]
-        let y2 = samples[idx2]
-        let y3 = samples[idx3]
-        
-        // Catmull-Rom cubic interpolation
-        let a0 = c0 * y0 + c1 * y1 - c1 * y2 + (-c0) * y3
-        let a1 = y0 - c2 * y1 + c3 * y2 - (-c0) * y3
-        let a2 = c0 * y0 + (-c0) * y2
-        let a3 = y1
-        
-        // Polynomial evaluation: a0*f^3 + a1*f^2 + a2*f + a3
-        let f2 = f * f
-        let f3 = f2 * f
-        
-        result[i] = a0 * f3 + a1 * f2 + a2 * f + a3
-    }
-    
-    return result
-}
-
-// MARK: - AVAudioConverter Resampling
-
-/// High-quality resampling using AVAudioConverter
-/// Provides professional-grade quality with hardware acceleration and anti-aliasing
-private func resampleAVAudioConverter(
-    _ samples: [Float],
-    fromRate: Float,
-    toRate: Float,
-    algorithm: String,
-    quality: AVAudioQuality,
-    expectedLength: Int
-) throws -> [Float] {
-    guard let inputFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: Double(fromRate),
-        channels: 1,
-        interleaved: false
-    ) else {
-        throw ResamplingError.invalidFormat
-    }
-    
-    guard let outputFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: Double(toRate),
-        channels: 1,
-        interleaved: false
-    ) else {
-        throw ResamplingError.invalidFormat
-    }
-    
-    guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-        throw ResamplingError.conversionFailed
-    }
-
-    // Set explicitly rather than inherited. AVAudioConverter's own defaults are
-    // Normal at quality 64, which is neither of the two settings this package needs
-    // to be able to reproduce: Mastering/`.max` for the generators that ask for it,
-    // and Normal/`.medium` for `AudioLoader`'s `.auto`. Leaving it implicit meant
-    // `.high` silently delivered the former's promise with the latter's algorithm.
-    converter.sampleRateConverterAlgorithm = algorithm
-    converter.sampleRateConverterQuality = quality.rawValue
-    
-    // Create input buffer
-    guard let inputBuffer = AVAudioPCMBuffer(
-        pcmFormat: inputFormat,
-        frameCapacity: AVAudioFrameCount(samples.count)
-    ) else {
-        throw ResamplingError.invalidFormat
-    }
-    inputBuffer.frameLength = AVAudioFrameCount(samples.count)
-    
-    // Copy input data using memcpy for efficiency
-    if let channelData = inputBuffer.floatChannelData?[0] {
-        samples.withUnsafeBufferPointer { ptr in
-            channelData.update(from: ptr.baseAddress!, count: samples.count)
-        }
-    }
-    
-    // Use a class to wrap mutable state for the converter callback
-    final class InputProvider: @unchecked Sendable {
-        var consumed = false
-        let buffer: AVAudioPCMBuffer
-        init(buffer: AVAudioPCMBuffer) { self.buffer = buffer }
-    }
-    let provider = InputProvider(buffer: inputBuffer)
-
-    var output = [Float]()
-    output.reserveCapacity(expectedLength)
-    var reachedEnd = false
-    var emptyPasses = 0
-
-    // AVAudioConverter is stateful and withholds its latency tail. Keep pulling,
-    // and report end-of-stream after the single input buffer, until it is drained.
-    while !reachedEnd && output.count < expectedLength {
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: outputFormat,
-            frameCapacity: AVAudioFrameCount(min(16_384, max(1, expectedLength - output.count)))
-        ) else {
-            throw ResamplingError.invalidFormat
-        }
-
-        var error: NSError?
-        let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-        if provider.consumed {
-            outStatus.pointee = .endOfStream
-            return nil
-        }
-        outStatus.pointee = .haveData
-        provider.consumed = true
-        return provider.buffer
-        }
-
-        guard status != .error, error == nil else {
-            throw ResamplingError.conversionFailed
-        }
-
-        let produced = min(Int(outputBuffer.frameLength), expectedLength - output.count)
-        if produced > 0, let channelData = outputBuffer.floatChannelData?[0] {
-            output.append(contentsOf: UnsafeBufferPointer(start: channelData, count: produced))
-            emptyPasses = 0
-        } else {
-            emptyPasses += 1
-        }
-        reachedEnd = status == .endOfStream
-        if emptyPasses > 2 { break }
-    }
-
-    if output.count > expectedLength {
-        output.removeLast(output.count - expectedLength)
-    } else if output.count < expectedLength {
-        output.append(contentsOf: [Float](repeating: 0, count: expectedLength - output.count))
-    }
-    return output
 }
 
 // MARK: - vDSP Optimized Mixing (Bonus)

@@ -7,9 +7,14 @@
 
 import XCTest
 import AudioToolTestSupport
-@testable import ChatterboxMLXSwift
+import AudioUtils
 
-/// Timings for `resamplePolyphaseScipyEdge`, reported rather than asserted.
+/// Timings for AudioUtils' polyphase resampler, reported rather than asserted.
+///
+/// The engine lives in SwiftAudio; `AudioUtilsTests.PolyphaseResamplingTests` is what
+/// pins its arithmetic. This measures it at the rates *this* package resamples at,
+/// and on the call pattern Chatterbox conditioning actually performs, neither of
+/// which the library knows about.
 ///
 /// This exists because the alternative is a claim. `kaiser_best` uses 50 zero
 /// crossings where `scipy.signal.resample_poly`'s default uses 10, so the
@@ -129,12 +134,12 @@ final class ResamplerBenchmarkTests: XCTestCase {
             let numtaps = 2 * ResamplerDesign.kaiserBest.zeroCrossings * max(r.up, r.down) + 1
 
             let scalar = best {
-                _ = resamplePolyphaseScipyEdge(
+                _ = resamplePolyphase(
                     x, up: r.up, down: r.down, design: .kaiserBest, kernel: .scalarReference
                 )
             }
             let vectorized = best {
-                _ = resamplePolyphaseScipyEdge(
+                _ = resamplePolyphase(
                     x, up: r.up, down: r.down, design: .kaiserBest, kernel: .vectorized
                 )
             }
@@ -173,20 +178,10 @@ final class ResamplerBenchmarkTests: XCTestCase {
         let prompt = signal(count: sourceSR * 12, sampleRate: sourceSR)
 
         let elapsed = best {
-            let to16k = ratio(sourceSR, 16000)
-            _ = resamplePolyphaseScipyEdge(
-                prompt, up: to16k.up, down: to16k.down, design: .kaiserBest, kernel: .vectorized
-            )
-            let to24k = ratio(sourceSR, 24000)
-            let at24k = resamplePolyphaseScipyEdge(
-                prompt, up: to24k.up, down: to24k.down, design: .kaiserBest, kernel: .vectorized
-            )
+            _ = resamplePolyphase(prompt, fromRate: sourceSR, toRate: 16000)
+            let at24k = resamplePolyphase(prompt, fromRate: sourceSR, toRate: 24000)
             let window = Array(at24k[0..<min(10 * 24000, at24k.count)])
-            let down16k = ratio(24000, 16000)
-            _ = resamplePolyphaseScipyEdge(
-                window, up: down16k.up, down: down16k.down,
-                design: .kaiserBest, kernel: .vectorized
-            )
+            _ = resamplePolyphase(window, fromRate: 24000, toRate: 16000)
         }
 
         print("")
@@ -198,31 +193,40 @@ final class ResamplerBenchmarkTests: XCTestCase {
 
     // MARK: - What the design cache is worth
 
+    /// What `DesignedFilterCache` saves, measured end to end rather than in isolation.
+    ///
     /// `numtaps` is `2 * zeroCrossings * max(up, down) + 1`, which is 301 for
     /// 24k -> 16k but 44101 for 22.05k -> 16k, and every tap costs a `sin` and two
-    /// `besselI0`. That is the work `DesignedFilterCache` removes from the second
-    /// call onward, and it grew as a share of the total when the convolution got
-    /// faster - so it is worth watching, not just worth doing.
+    /// `besselI0`. Timing a cold call against a warm one is the honest form of that
+    /// number: it is the difference a caller sees, and it grew as a share of the
+    /// total when the convolution got faster.
+    ///
+    /// Recorded on an M1 Pro: 0.57 ms for the 44101-tap design, ~11% of a cold call.
     func testFilterDesignCost() {
         print("")
-        print("filter design, isolated")
-        print("conversion         taps     design")
+        print("filter design, cold call minus warm call")
+        print("conversion         taps      cold      warm     design")
 
         for (origSR, targetSR) in [(24000, 16000), (48000, 16000), (22050, 16000)] {
+            let x = signal(count: origSR * 10, sampleRate: origSR)
             let r = ratio(origSR, targetSR)
-            let maxRate = max(r.up, r.down)
-            let numtaps = 2 * ResamplerDesign.kaiserBest.zeroCrossings * maxRate + 1
+            let numtaps = 2 * ResamplerDesign.kaiserBest.zeroCrossings * max(r.up, r.down) + 1
 
-            let design = best {
-                _ = firwinLowpassDouble(
-                    numtaps: numtaps,
-                    cutoff: ResamplerDesign.kaiserBest.rolloff / Double(maxRate),
-                    beta: ResamplerDesign.kaiserBest.beta
-                )
+            // Cold: cache emptied before every run, so each pays the design once.
+            var cold = Double.infinity
+            for _ in 0..<5 {
+                DesignedFilterCache.shared.removeAll()
+                let start = DispatchTime.now().uptimeNanoseconds
+                _ = resamplePolyphase(x, fromRate: origSR, toRate: targetSR)
+                cold = min(cold, Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6)
+            }
+            let warm = best {
+                _ = resamplePolyphase(x, fromRate: origSR, toRate: targetSR)
             }
 
             print(String(
-                format: "%6d -> %5d  %7d  %8.2f ms", origSR, targetSR, numtaps, design
+                format: "%6d -> %5d  %7d  %6.2f ms  %6.2f ms  %6.2f ms",
+                origSR, targetSR, numtaps, cold, warm, cold - warm
             ))
         }
     }
