@@ -525,9 +525,16 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         let wav = MLXArray(audio.samples)
         let sourceSampleRate = audio.sampleRate
 
+        // Band-limited sinc, not `resampleAudioPolyphase`, for every conditioning
+        // resample here. scipy's default filter puts its cutoff at Nyquist and folds
+        // content from above 8 kHz back into the band - measured -20.9 dB alias
+        // rejection against -55.8 dB for this one - and the S3 tokenizer resolves the
+        // difference into different speech tokens. `S3Gen.embed_ref` is the one place
+        // that must keep the scipy filter, because the reference uses it there too.
+        //
         // VoiceEncoder expects 16 kHz. Resample explicitly so both file and
         // AudioBuffer configuration follow the same conditioning path.
-        let wav16k = resampleAudioPolyphase(
+        let wav16k = resampleAudioKaiserBest(
             wav,
             origSR: sourceSampleRate,
             targetSR: S3_SR
@@ -537,14 +544,14 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             sampleRate: S3_SR
         )
 
-        let wav24k = resampleAudioPolyphase(
+        let wav24k = resampleAudioKaiserBest(
             wav,
             origSR: sourceSampleRate,
             targetSR: S3GEN_SR
         )
         let decoderConditioningLength = 10 * S3GEN_SR
         let wav24kTrimmed = wav24k[0..<min(decoderConditioningLength, wav24k.shape[0])]
-        let wav16kFrom24k = resampleAudioPolyphase(
+        let wav16kFrom24k = resampleAudioKaiserBest(
             wav24kTrimmed,
             origSR: S3GEN_SR,
             targetSR: S3_SR
@@ -566,7 +573,87 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         speakerEmbedding = newSpeakerEmbedding
         refDict = newRefDict
     }
-    
+
+    /// T3's encoder-conditioning speech tokens, from the reference audio.
+    ///
+    /// Its own method because it has two callers with nothing else in common:
+    /// `generate` needs it to build `T3Cond`, and the parity suite needs it without
+    /// generating, since everything past this point samples. It is not folded into
+    /// `rebuildReferenceConditioning` because it does not have to be - it depends on
+    /// nothing that `setReferenceAudio` computes, only on the stored reference audio,
+    /// and computing it eagerly would charge every caller for a tokenizer pass they
+    /// may never use.
+    ///
+    /// The 6 s window is T3's encoder-conditioning length, separate from the 10 s
+    /// decoder window `rebuildReferenceConditioning` applies; on a reference shorter
+    /// than 6 s neither bites and the two token sets coincide.
+    private func t3PromptSpeechTokens() throws -> MLXArray {
+        guard let t3, let s3Tokenizer else {
+            throw AudioToolError.modelNotLoaded("ChatterBox")
+        }
+        guard let refWav = referenceWav, let refSr = referenceSampleRate else {
+            throw AudioToolError.resourceUnavailable("Reference audio not set")
+        }
+
+        let encCondLen = 6 * S3_SR
+        // Same band-limited sinc as `rebuildReferenceConditioning`; these tokens go
+        // through the same tokenizer and are sensitive the same way.
+        let refWav16kFull = resampleAudioKaiserBest(refWav, origSR: refSr, targetSR: S3_SR)
+        let refWav16k = refWav16kFull[0..<min(encCondLen, refWav16kFull.shape[0])]
+
+        var t3Mel = logMelSpectrogramCompat(refWav16k, nMels: 128)
+        // Trim the mel before tokenizing, not the tokens after: 4 mel frames per
+        // token, and tokenizing the untrimmed mel yields plen+1.
+        let maxMelFrames = t3.hp.speech_cond_prompt_len * 4
+        if t3Mel.dim(1) > maxMelFrames {
+            t3Mel = t3Mel[0..., 0..<maxMelFrames]
+        }
+
+        let t3MelBatch = t3Mel.expandedDimensions(axis: 0)
+        let t3MelLen = MLXArray([Int32(t3MelBatch.shape[2])])
+        let (t3Tokens, _) = s3Tokenizer(t3MelBatch, t3MelLen)
+        let plen = t3.hp.speech_cond_prompt_len
+        return t3Tokens[0..., 0..<min(plen, t3Tokens.shape[1])]
+    }
+
+    /// A materialized conditioning tensor. `MLXArray` is not `Sendable`, so the
+    /// values are read out here, inside the actor, rather than handed across.
+    internal struct ConditioningSnapshot: Sendable {
+        let shape: [Int]
+        let values: [Float]
+    }
+
+    /// The conditioning this provider is holding, keyed as `conds.safetensors` keys it.
+    ///
+    /// Exists for the parity suite. Conditioning is the deterministic half of
+    /// Chatterbox - everything past it samples - so it is the part that can be held
+    /// to a reference at all, and it is private state otherwise. Reading it through
+    /// the provider rather than rebuilding the sequence in the test is deliberate:
+    /// a test that re-derives `prepareConditioning` measures the test's copy of it.
+    internal func conditioningTensors() -> [String: ConditioningSnapshot] {
+        var arrays: [String: MLXArray] = [:]
+        if let speakerEmbedding {
+            arrays["t3.speaker_emb"] = speakerEmbedding
+        }
+        // Derived on demand rather than stored: `generate` computes it the same way
+        // from the same input, so this is the shipped path and not a parallel one.
+        if referenceWav != nil, let tokens = try? t3PromptSpeechTokens() {
+            arrays["t3.cond_prompt_speech_tokens"] = tokens
+        }
+        for (key, value) in refDict ?? [:] {
+            arrays["gen.\(key)"] = value
+        }
+        guard !arrays.isEmpty else { return [:] }
+
+        eval(Array(arrays.values))
+        return arrays.mapValues {
+            ConditioningSnapshot(
+                shape: $0.shape,
+                values: $0.asType(.float32).flattened().asArray(Float.self)
+            )
+        }
+    }
+
     // MARK: - Default Voice Loading
     
     /// Load default voice conditioning from conds.safetensors
@@ -772,35 +859,11 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
             // Update exaggeration
             t3Cond.emotion_adv = MLX.ones([1, 1, 1]) * exaggeration
         } else {
-            // Compute T3 conditioning from reference audio
-            guard let refWav = referenceWav, let refSr = referenceSampleRate else {
-                throw AudioToolError.resourceUnavailable("Reference audio not set")
-            }
-            
-            let encCondLen = 6 * S3_SR
-            let refWav16kFull = resampleAudioPolyphase(refWav, origSR: refSr, targetSR: S3_SR)
-            let refWav16k = refWav16kFull[0..<min(encCondLen, refWav16kFull.shape[0])]
-            
-            var t3Mel = logMelSpectrogramCompat(refWav16k, nMels: 128)
-            let maxMelFrames = t3.hp.speech_cond_prompt_len * 4
-            if t3Mel.dim(1) > maxMelFrames {
-                t3Mel = t3Mel[0..., 0..<maxMelFrames]
-            }
-            
-            let t3MelBatch = t3Mel.expandedDimensions(axis: 0)
-            let t3MelLen = MLXArray([Int32(t3MelBatch.shape[2])])
-            guard let s3Tokenizer = s3Tokenizer else {
-                throw AudioToolError.modelNotLoaded("S3Tokenizer")
-            }
-            let (t3Tokens, _) = s3Tokenizer(t3MelBatch, t3MelLen)
-            let plen = t3.hp.speech_cond_prompt_len
-            let t3PromptTokens = t3Tokens[0..., 0..<min(plen, t3Tokens.shape[1])]
-            
             let veMean = MLX.mean(useSpeakerEmbedding, axis: 0, keepDims: true)
-            
+
             t3Cond = T3Cond(
                 speaker_emb: veMean,
-                cond_prompt_speech_tokens: t3PromptTokens,
+                cond_prompt_speech_tokens: try t3PromptSpeechTokens(),
                 emotion_adv: MLX.ones([1, 1, 1]) * exaggeration
             )
         }

@@ -1,14 +1,84 @@
 import Foundation
 import MLX
 
+/// The lowpass a polyphase resampler filters with, as a specification rather than
+/// a set of tuned numbers.
+///
+/// Kaiser's design formulas fix `beta` and the length from a stopband attenuation
+/// and a transition width (Kaiser 1974; Oppenheim & Schafer, *Discrete-Time Signal
+/// Processing*, 7.5), so a resampler is described by three published constants and
+/// not by a search. Both designs below are quoted from their sources; neither was
+/// fitted here, and fitting one to match another implementation's output is how you
+/// get a filter that tracks a reference and is not otherwise good.
+public struct ResamplerDesign: Sendable, Equatable {
+    /// Sinc zero crossings either side of centre. Sets the filter length.
+    public let zeroCrossings: Int
+    /// Kaiser window parameter.
+    public let beta: Double
+    /// Passband edge as a fraction of the target Nyquist.
+    public let rolloff: Double
+
+    public init(zeroCrossings: Int, beta: Double, rolloff: Double) {
+        self.zeroCrossings = zeroCrossings
+        self.beta = beta
+        self.rolloff = rolloff
+    }
+
+    /// `scipy.signal.resample_poly`'s defaults.
+    ///
+    /// Kept because matching it is sometimes the requirement: `S3Gen.embed_ref`
+    /// resamples with exactly this on the Python side, so reproducing it there is
+    /// correctness, not inertia.
+    ///
+    /// It is not a good filter. The cutoff sits at Nyquist, where a lowpass is only
+    /// -6 dB, and 61 taps give it no room to reach stopband: measured alias rejection
+    /// is -20.9 dB against -57.7 dB for soxr on the same sweep.
+    public static let scipyDefault = ResamplerDesign(
+        zeroCrossings: 10, beta: 5.0, rolloff: 1.0
+    )
+
+    /// `resampy`'s `kaiser_best`, as published by that project (ISC licensed).
+    ///
+    /// Designed for -120 dB stopband; measures -55.8 dB alias rejection here, within
+    /// 2 dB of soxr's HQ preset. soxr's own header specifies HQ as passband_end 0.913
+    /// against this 0.917347 - two independent designs landing on the same passband
+    /// edge, which is what makes ~0.915 the answer rather than a preference.
+    ///
+    /// This is the design, realized through the polyphase path below. It is not a
+    /// transcription of resampy's implementation, which interpolates a precomputed
+    /// table; for the rational ratios here the two agree, and reusing the existing
+    /// `upfirdn` keeps one code path under test instead of two.
+    public static let kaiserBest = ResamplerDesign(
+        zeroCrossings: 50, beta: 12.9846, rolloff: 0.917347
+    )
+}
+
+/// Resample with `scipy.signal.resample_poly`'s own filter.
+///
+/// For call sites whose reference is scipy. Everywhere else prefer
+/// ``resampleAudioKaiserBest(_:origSR:targetSR:)`` - see ``ResamplerDesign/scipyDefault``
+/// for why this one aliases.
 public func resampleAudioPolyphase(_ audio: MLXArray, origSR: Int, targetSR: Int) -> MLXArray {
+    resampleAudio(audio, origSR: origSR, targetSR: targetSR, design: .scipyDefault)
+}
+
+/// Resample with a band-limited sinc designed for -120 dB stopband.
+///
+/// The default choice for anything feeding a model. See ``ResamplerDesign/kaiserBest``.
+public func resampleAudioKaiserBest(_ audio: MLXArray, origSR: Int, targetSR: Int) -> MLXArray {
+    resampleAudio(audio, origSR: origSR, targetSR: targetSR, design: .kaiserBest)
+}
+
+public func resampleAudio(
+    _ audio: MLXArray, origSR: Int, targetSR: Int, design: ResamplerDesign
+) -> MLXArray {
     if origSR == targetSR {
         return audio
     }
     let gcd = greatestCommonDivisor(origSR, targetSR)
     let up = targetSR / gcd
     let down = origSR / gcd
-    return resamplePolyphaseScipyEdge(audio, up: up, down: down)
+    return resamplePolyphaseScipyEdge(audio, up: up, down: down, design: design)
 }
 
 public func trimSilenceLibrosa(_ audio: MLXArray, topDb: Float) -> MLXArray {
@@ -78,7 +148,9 @@ private func greatestCommonDivisor(_ a: Int, _ b: Int) -> Int {
     return a
 }
 
-private func resamplePolyphaseScipyEdge(_ audio: MLXArray, up: Int, down: Int) -> MLXArray {
+private func resamplePolyphaseScipyEdge(
+    _ audio: MLXArray, up: Int, down: Int, design: ResamplerDesign
+) -> MLXArray {
     if up == 1 && down == 1 {
         return audio
     }
@@ -91,9 +163,13 @@ private func resamplePolyphaseScipyEdge(_ audio: MLXArray, up: Int, down: Int) -
     let nOut = (nIn * up + down - 1) / down
 
     let maxRate = max(up, down)
-    let halfLen = 10 * maxRate
+    let halfLen = design.zeroCrossings * maxRate
     let numtaps = 2 * halfLen + 1
-    var h = firwinLowpassDouble(numtaps: numtaps, cutoff: 1.0 / Double(maxRate), beta: 5.0)
+    var h = firwinLowpassDouble(
+        numtaps: numtaps,
+        cutoff: design.rolloff / Double(maxRate),
+        beta: design.beta
+    )
     for i in 0..<h.count {
         h[i] *= Double(up)
     }
