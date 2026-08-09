@@ -473,6 +473,10 @@ let package = Package(
                 "AudioToolCoreML",
                 "AudioToolUSS",
                 "USSMLXSwift",
+                // Chatterbox conditioning. See the AudioToolCLI note above: the
+                // MisakiSwift dynamic-library problem that once made this target
+                // unlinkable is fixed in the forked manifest.
+                "AudioToolTTS",
                 "AudioToolTestSupport",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],

@@ -117,5 +117,83 @@ enum ParityThresholds {
         // were wrong.
         "mossformer2_sr_48k.enhanced": 95,
         "mossformer2_sr_48k_direct.enhanced": 100,
+
+        // Chatterbox conditioning, two cases. Every token tensor is bit-identical and
+        // the continuous ones measure 116.3/131.9/104.8 dB short and 120.5/134.7/109.4
+        // long - float32 round-off throughout. Exact equality is the only result worth
+        // accepting for codebook indices, so the token floors sit at 120: one flipped
+        // token reads about 19 dB and fails loudly.
+        //
+        // The short case was 43.6 dB and 11 of 75 tokens wrong before both sides were
+        // put on one specified resampler. See the note below, kept because the
+        // reasoning is not recoverable from the code.
+        //
+        // The long case is the one with teeth: 12 s at 22050 Hz, past both the 6 s and
+        // 10 s conditioning windows, so the truncations run and the token tensors are
+        // 150 and 250 rather than the same 75 twice. 22050 against 24000 also puts the
+        // resampler at 160/147 where the short case gets 1/1.
+        "chatterbox_conditionals_24k.ve_speaker_emb": 100,
+        "chatterbox_conditionals_24k.t3_cond_prompt_tokens": 120,
+        "chatterbox_conditionals_24k.s3gen_prompt_token": 120,
+        "chatterbox_conditionals_24k.s3gen_prompt_feat": 110,
+        "chatterbox_conditionals_24k.s3gen_embedding": 90,
+
+        "chatterbox_conditionals_22k_long.ve_speaker_emb": 100,
+        "chatterbox_conditionals_22k_long.t3_cond_prompt_tokens": 120,
+        "chatterbox_conditionals_22k_long.s3gen_prompt_token": 120,
+        "chatterbox_conditionals_22k_long.s3gen_prompt_feat": 110,
+        "chatterbox_conditionals_22k_long.s3gen_embedding": 90,
     ]
+
+    // MARK: - Chatterbox: why the resampler is what it is
+    //
+    // Resolved, and recorded because the next person to read
+    // `Sources/Models/Chatterbox/Utils/Audio.swift` will find two resamplers and no
+    // reason for it in the code.
+    //
+    // `Models/python/chatterbox_mlx` has two different functions both named
+    // `resample_audio`: model.py's called librosa, s3gen.py's calls
+    // `scipy.signal.resample_poly`. Swift used the scipy-equivalent for both. That
+    // read 43.6 dB on `ve_speaker_emb` and 19.4 dB on `s3gen_prompt_token`, with the
+    // two tensors whose inputs never leave 24 kHz already at round-off - the split in
+    // the numbers was exactly the split in the resamplers.
+    //
+    // scipy's defaults are the defect, not the port. `resampleAudioPolyphase` is a
+    // faithful Double-precision port of `resample_poly(padtype: "edge")`; that filter
+    // is 61 taps with its cutoff at Nyquist, where a lowpass is only -6 dB, so
+    // content above 8 kHz folds back into the band. On a sweep from 8.2 to 11.8 kHz
+    // resampled 24 -> 16, alias rejection measures:
+    //
+    //     soxr HQ                          -57.7 dB
+    //     resampy kaiser_best (published)  -55.8 dB
+    //     scipy resample_poly defaults     -20.9 dB
+    //
+    // The S3 tokenizer resolves that 35 dB into different speech tokens. It is not
+    // otherwise twitchy: soxr's HQ, VHQ and MQ tiers sit 55-57 dB apart and give
+    // byte-identical tokens, as does additive noise at -80 dBFS.
+    //
+    // The fix is not to match soxr. Two reasons, and the second is the interesting
+    // one. soxr is LGPL-2.1-or-later, so it cannot ship inside an Apache package
+    // except as a dynamic dependency. And matching its *output* by fitting a filter
+    // to it produces a filter that tracks soxr and is not otherwise good: searching
+    // beta and cutoff against these fixtures reaches 1.04% token disagreement, while
+    // resampy's published kaiser_best - a better filter than scipy's by 35 dB of
+    // alias rejection - disagrees with soxr on 12.84%. Token agreement ranks
+    // similarity to a reference implementation, not quality, and optimising it is
+    // fitting. That measurement is the reason this file quotes constants instead.
+    //
+    // So both sides run one published design: resampy's kaiser_best, ISC licensed,
+    // beta 12.9846, roll 0.917347, 50 zeros, -120 dB. soxr's own header specifies HQ
+    // as passband_end 0.913 - two independent designs on the same passband edge, and
+    // Kaiser's formulas (Kaiser 1974; Oppenheim & Schafer 7.5) fix beta and length
+    // from the specification rather than from a search. Swift uses it at the four
+    // model.py call sites; `S3Gen.embed_ref` stays on scipy's filter because the
+    // reference uses scipy there and reproducing it is the requirement. The parity
+    // adapter patches the same substitution into the frozen reference tree, and the
+    // artifact sidecar records it under `resampler_16k`.
+    //
+    // What this costs: the artifact no longer reproduces upstream chatterbox, which
+    // resamples with librosa. That is a deliberate trade of fidelity-to-upstream for
+    // a design that is specified, permissively licensed and identical on both sides.
+    // Revisit it if upstream fidelity ever becomes the requirement.
 }

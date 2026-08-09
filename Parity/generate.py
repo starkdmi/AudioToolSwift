@@ -44,6 +44,7 @@ ADAPTERS = {
     ],
     "demucs": ["demucs_vocals_44k"],
     "uss": ["uss_resunet30_32k"],
+    "chatterbox": ["chatterbox_conditionals_24k", "chatterbox_conditionals_22k_long"],
 }
 
 

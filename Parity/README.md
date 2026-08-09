@@ -44,6 +44,19 @@ Then one named tensor per output, cut at the seams that matter:
 | `mossformer2_ss_*` | `speaker_N` raw, `speaker_N_normalized` as the API returns it |
 | `demucs_vocals_44k` | every stem, per channel |
 | `uss_resunet30_32k` | one output per query condition |
+| `chatterbox_conditionals_*` | `ve_speaker_emb`, both token tensors, `s3gen_prompt_feat`, `s3gen_embedding` |
+
+Chatterbox is cut differently from the rest and worth a note. Everything past
+`prepare_conditionals` samples, so the comparison stops there rather than at an
+output: the seams are the conditioning tensors, and the two token ones are compared
+for exact equality because they are codebook indices, where SNR is only the harness
+applying one metric uniformly. Two cases, because one clip cannot exercise it — a
+3 s prompt already at 24 kHz leaves both conditioning windows and the resampler
+idle, so `chatterbox_conditionals_22k_long` runs a 12 s prompt at 22050 Hz through
+the truncations and a 160/147 polyphase ratio.
+
+It is also the one case where generation found a defect in the *reference* rather
+than the port; `Tests/AudioToolParityTests/ParityThresholds.swift` has the account.
 
 A single output-level number gives pass/fail. These give *where*, without
 needing internal taps in production code.
