@@ -107,6 +107,22 @@ limit and fail the whole run.
 Model-backed suites in the other targets need weights, and skip without them - see
 below.
 
+### Benchmarks
+
+Timing suites are gated on `RUN_BENCHMARKS=1` *and* on being compiled with
+optimisation, because a debug build of numeric code measures the compiler rather than
+the code - `ResamplerBenchmarkTests` runs ~70x slower in debug and moves its two
+kernels apart by 17x instead of 3x. The suite skips rather than print that.
+
+```bash
+./Scripts/build_mlx_metallib.sh release
+RUN_BENCHMARKS=1 swift test -c release -Xswiftc -enable-testing \
+  --filter ResamplerBenchmarkTests
+```
+
+`-Xswiftc -enable-testing` is required: release builds do not enable testability, and
+`@testable import` fails without it.
+
 ### Running models from local weights
 
 Weights are fetched from HuggingFace at runtime, but every provider also takes an

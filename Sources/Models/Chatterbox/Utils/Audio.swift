@@ -1,4 +1,5 @@
 import Foundation
+import Accelerate
 import MLX
 
 /// The lowpass a polyphase resampler filters with, as a specification rather than
@@ -10,7 +11,7 @@ import MLX
 /// not by a search. Both designs below are quoted from their sources; neither was
 /// fitted here, and fitting one to match another implementation's output is how you
 /// get a filter that tracks a reference and is not otherwise good.
-public struct ResamplerDesign: Sendable, Equatable {
+public struct ResamplerDesign: Sendable, Equatable, Hashable {
     /// Sinc zero crossings either side of centre. Sets the filter length.
     public let zeroCrossings: Int
     /// Kaiser window parameter.
@@ -78,7 +79,16 @@ public func resampleAudio(
     let gcd = greatestCommonDivisor(origSR, targetSR)
     let up = targetSR / gcd
     let down = origSR / gcd
-    return resamplePolyphaseScipyEdge(audio, up: up, down: down, design: design)
+    if up == 1 && down == 1 {
+        return audio
+    }
+    let samples = audio.asArray(Float.self)
+    if samples.isEmpty {
+        return audio
+    }
+    return MLXArray(
+        resamplePolyphaseScipyEdge(samples, up: up, down: down, design: design, kernel: .vectorized)
+    )
 }
 
 public func trimSilenceLibrosa(_ audio: MLXArray, topDb: Float) -> MLXArray {
@@ -148,151 +158,308 @@ private func greatestCommonDivisor(_ a: Int, _ b: Int) -> Int {
     return a
 }
 
-private func resamplePolyphaseScipyEdge(
-    _ audio: MLXArray, up: Int, down: Int, design: ResamplerDesign
-) -> MLXArray {
+// MARK: - Polyphase resampling
+
+/// Which convolution runs in the polyphase inner loop.
+///
+/// Both compute the same thing. `scalarReference` performs the additions in scipy's
+/// own order, so it is bit-identical to the port this replaced; `vectorized` splits
+/// the accumulation four ways to break the FMA dependency chain, which reassociates.
+/// `ResamplerNumericsTests` pins both.
+enum PolyphaseKernel {
+    case vectorized
+    case scalarReference
+}
+
+/// The designed taps, keyed by everything they depend on.
+///
+/// `firwinLowpassDouble` costs one `sin` and two `besselI0Double` per tap, and
+/// `numtaps` is `2 * zeroCrossings * max(up, down) + 1` - 301 taps for 24k -> 16k
+/// but 44101 for 22.05k -> 16k, where the design is ~11% of a call once the
+/// convolution is vectorized. None of it depends on the signal, and a pipeline
+/// resamples between the same handful of rates for its whole life.
+final class DesignedFilterCache: @unchecked Sendable {
+    private struct Key: Hashable {
+        let up: Int
+        let down: Int
+        let design: ResamplerDesign
+    }
+
+    static let shared = DesignedFilterCache()
+
+    private let lock = NSLock()
+    private var entries: [(key: Key, taps: [Double])] = []
+    /// Four covers every rate pair a pipeline uses at once. The largest plausible
+    /// entry is the 22.05k -> 16k bank at 44101 taps, 345 KB; the common ones are
+    /// 301 taps, 2.4 KB.
+    private let capacity = 4
+
+    func taps(up: Int, down: Int, design: ResamplerDesign) -> [Double] {
+        let key = Key(up: up, down: down, design: design)
+
+        lock.lock()
+        if let index = entries.firstIndex(where: { $0.key == key }) {
+            let entry = entries.remove(at: index)
+            entries.append(entry)
+            lock.unlock()
+            return entry.taps
+        }
+        lock.unlock()
+
+        // Built outside the lock. Two threads racing on a cold key both compute the
+        // same taps, which is cheaper than serialising every caller behind a design.
+        let taps = Self.build(up: up, down: down, design: design)
+
+        lock.lock()
+        if !entries.contains(where: { $0.key == key }) {
+            entries.append((key, taps))
+            if entries.count > capacity {
+                entries.removeFirst()
+            }
+        }
+        lock.unlock()
+        return taps
+    }
+
+    private static func build(up: Int, down: Int, design: ResamplerDesign) -> [Double] {
+        let maxRate = max(up, down)
+        let halfLen = design.zeroCrossings * maxRate
+        var taps = firwinLowpassDouble(
+            numtaps: 2 * halfLen + 1,
+            cutoff: design.rolloff / Double(maxRate),
+            beta: design.beta
+        )
+        let gain = Double(up)
+        for i in 0..<taps.count {
+            taps[i] *= gain
+        }
+        return taps
+    }
+}
+
+/// `scipy.signal.resample_poly(..., padtype="edge")` over `[Float]`.
+///
+/// Still the same algorithm as the reference - the filter design, the pre/post pad
+/// arithmetic and the `nPreRemove` trim are scipy's, unchanged. What moved is where
+/// the work happens: the taps come from a cache, the padded and transposed filter is
+/// built in one pass instead of three arrays, and the convolution runs over unsafe
+/// buffers with a vector accumulator.
+func resamplePolyphaseScipyEdge(
+    _ audio: [Float], up: Int, down: Int, design: ResamplerDesign, kernel: PolyphaseKernel
+) -> [Float] {
     if up == 1 && down == 1 {
         return audio
     }
-    let xFloat = audio.asArray(Float.self)
-    if xFloat.isEmpty {
+    if audio.isEmpty {
         return audio
     }
-    let xDouble = xFloat.map(Double.init)
-    let nIn = xDouble.count
+
+    let nIn = audio.count
     let nOut = (nIn * up + down - 1) / down
 
     let maxRate = max(up, down)
     let halfLen = design.zeroCrossings * maxRate
-    let numtaps = 2 * halfLen + 1
-    var h = firwinLowpassDouble(
-        numtaps: numtaps,
-        cutoff: design.rolloff / Double(maxRate),
-        beta: design.beta
-    )
-    for i in 0..<h.count {
-        h[i] *= Double(up)
-    }
+    let taps = DesignedFilterCache.shared.taps(up: up, down: down, design: design)
 
     let nPrePad = down - (halfLen % down)
     var nPostPad = 0
     let nPreRemove = (halfLen + nPrePad) / down
-    while outputLen(h.count + nPrePad + nPostPad, nIn, up, down) < nOut + nPreRemove {
+    while outputLen(taps.count + nPrePad + nPostPad, nIn, up, down) < nOut + nPreRemove {
         nPostPad += 1
     }
-    var hPadded = [Double](repeating: 0.0, count: nPrePad)
-    hPadded.append(contentsOf: h)
-    if nPostPad > 0 {
-        hPadded.append(contentsOf: [Double](repeating: 0.0, count: nPostPad))
+    let hPaddedCount = nPrePad + taps.count + nPostPad
+
+    // scipy pads `h` with zeros on both sides, then transposes it into `up` phases
+    // and flips each. The pad is all zeros and the bank starts zeroed, so the padded
+    // array never has to exist: writing tap `j` to the slot `hPadded[j + nPrePad]`
+    // would have landed in produces the same bank, with two fewer allocations.
+    let padLen = hPaddedCount + ((up - (hPaddedCount % up)) % up)
+    let hPerPhase = padLen / up
+    var hTransFlip = [Double](repeating: 0.0, count: padLen)
+    hTransFlip.withUnsafeMutableBufferPointer { bank in
+        taps.withUnsafeBufferPointer { source in
+            for j in 0..<source.count {
+                let i = j + nPrePad
+                bank[(i % up) * hPerPhase + (hPerPhase - 1 - i / up)] = source[j]
+            }
+        }
     }
 
-    let y = upfirdnEdgeDouble(h: hPadded, x: xDouble, up: up, down: down)
-    let start = nPreRemove
-    let end = nPreRemove + nOut
-    let yKeep = Array(y[start..<end]).map { Float($0) }
-    return MLXArray(yKeep)
+    let lenOut = outputLen(hPaddedCount, nIn, up, down)
+    if lenOut <= 0 {
+        return []
+    }
+
+    // Float -> Double is exact, so this is the same conversion `map(Double.init)` was.
+    let xDouble = [Double](unsafeUninitializedCapacity: nIn) { buffer, initialized in
+        audio.withUnsafeBufferPointer { source in
+            vDSP_vspdp(source.baseAddress!, 1, buffer.baseAddress!, 1, vDSP_Length(nIn))
+        }
+        initialized = nIn
+    }
+
+    var y = [Double](repeating: 0.0, count: lenOut)
+    y.withUnsafeMutableBufferPointer { out in
+        xDouble.withUnsafeBufferPointer { x in
+            hTransFlip.withUnsafeBufferPointer { bank in
+                upfirdnEdgeDouble(
+                    bank: bank.baseAddress!,
+                    hPerPhase: hPerPhase,
+                    x: x.baseAddress!,
+                    lenX: nIn,
+                    up: up,
+                    down: down,
+                    out: out.baseAddress!,
+                    lenOut: lenOut,
+                    kernel: kernel
+                )
+            }
+        }
+    }
+
+    // scipy keeps y[nPreRemove ..< nPreRemove + nOut]. Go straight to Float from the
+    // slice rather than materialising the slice and then mapping it.
+    let keep = min(nOut, max(0, lenOut - nPreRemove))
+    var result = [Float](repeating: 0.0, count: nOut)
+    if keep > 0 {
+        y.withUnsafeBufferPointer { source in
+            result.withUnsafeMutableBufferPointer { destination in
+                vDSP_vdpsp(
+                    source.baseAddress! + nPreRemove, 1,
+                    destination.baseAddress!, 1,
+                    vDSP_Length(keep)
+                )
+            }
+        }
+    }
+    return result
 }
 
 private func outputLen(_ lenH: Int, _ lenX: Int, _ up: Int, _ down: Int) -> Int {
     return ((lenX * up + lenH - up - 1) / down) + 1
 }
 
-private func padHDouble(_ h: [Double], up: Int) -> ([Double], Int) {
-    let padLen = h.count + ((up - (h.count % up)) % up)
-    var hFull = [Double](repeating: 0.0, count: padLen)
-    for i in 0..<h.count {
-        hFull[i] = h[i]
-    }
-    let nPhase = padLen / up
-    var hTransFlip = [Double](repeating: 0.0, count: padLen)
-    for p in 0..<up {
-        for q in 0..<nPhase {
-            let src = p + up * q
-            let dst = p * nPhase + (nPhase - 1 - q)
-            hTransFlip[dst] = hFull[src]
-        }
-    }
-    return (hTransFlip, nPhase)
-}
-
-private func extendLeftEdgeDouble(_ x: [Double]) -> Double {
-    return x.first ?? 0.0
-}
-
-private func extendRightEdgeDouble(_ x: [Double]) -> Double {
-    return x.last ?? 0.0
-}
-
-private func upfirdnEdgeDouble(h: [Double], x: [Double], up: Int, down: Int) -> [Double] {
-    let (hTransFlip, _) = padHDouble(h, up: up)
-    let lenH = hTransFlip.count
-    let hPerPhase = lenH / up
-    let lenOut = outputLen(h.count, x.count, up, down)
-    if lenOut <= 0 {
-        return []
-    }
-    var out = [Double](repeating: 0.0, count: lenOut)
-    let lenX = x.count
+/// `scipy.signal.upfirdn` with `padtype="edge"`, over a closed-form index.
+///
+/// scipy walks `(xIdx, t)` forward with a carry. That walk has a closed form: after
+/// `k` outputs the accumulated numerator is `k * down`, so `t = (k * down) % up` and
+/// `xIdx = (k * down) / up`. Addressing each output independently is what lets the
+/// body be a single dot product with no loop-carried state.
+private func upfirdnEdgeDouble(
+    bank: UnsafePointer<Double>,
+    hPerPhase: Int,
+    x: UnsafePointer<Double>,
+    lenX: Int,
+    up: Int,
+    down: Int,
+    out: UnsafeMutablePointer<Double>,
+    lenOut: Int,
+    kernel: PolyphaseKernel
+) {
+    let leftEdge = lenX > 0 ? x[0] : 0.0
+    let rightEdge = lenX > 0 ? x[lenX - 1] : 0.0
     let paddedLen = lenX + hPerPhase - 1
-    var xIdx = 0
-    var yIdx = 0
-    var t = 0
 
-    while xIdx < lenX {
-        var hIdx = t * hPerPhase
-        var xConvIdx = xIdx - hPerPhase + 1
-        if xConvIdx < 0 {
-            for _ in xConvIdx..<0 {
-                let xVal = extendLeftEdgeDouble(x)
-                out[yIdx] += xVal * hTransFlip[hIdx]
+    for k in 0..<lenOut {
+        let numerator = k * down
+        let xIdx = numerator / up
+        // scipy stops once `xIdx` runs past the edge-extended signal and leaves the
+        // rest of the output zero.
+        if xIdx >= paddedLen {
+            out[k] = 0.0
+            continue
+        }
+
+        var hIdx = (numerator % up) * hPerPhase
+        let low = xIdx - hPerPhase + 1
+        var acc = 0.0
+
+        // The window runs ascending over [low, xIdx], which splits into at most three
+        // runs: before the signal, inside it, at or past the end. Taking them in that
+        // order is scipy's own addition sequence.
+        if low < 0 {
+            for _ in low..<0 {
+                acc += leftEdge * bank[hIdx]
                 hIdx += 1
             }
-            xConvIdx = 0
         }
-        if xConvIdx <= xIdx {
-            for idx in xConvIdx...xIdx {
-                out[yIdx] += x[idx] * hTransFlip[hIdx]
-                hIdx += 1
-            }
-        }
-        yIdx += 1
-        if yIdx >= lenOut {
-            return out
-        }
-        t += down
-        xIdx += t / up
-        t = t % up
-    }
 
-    while xIdx < paddedLen {
-        var hIdx = t * hPerPhase
-        let xConvIdx = xIdx - hPerPhase + 1
-        if xConvIdx <= xIdx {
-            for idx in xConvIdx...xIdx {
-                let xVal: Double
-                if idx >= lenX {
-                    xVal = extendRightEdgeDouble(x)
-                } else if idx < 0 {
-                    xVal = extendLeftEdgeDouble(x)
-                } else {
-                    xVal = x[idx]
+        let insideLow = max(low, 0)
+        let insideHigh = min(xIdx, lenX - 1)
+        if insideHigh >= insideLow {
+            let count = insideHigh - insideLow + 1
+            if kernel == .vectorized && count >= 8 {
+                acc += dotProductSIMD(x + insideLow, bank + hIdx, count)
+                hIdx += count
+            } else {
+                for idx in insideLow...insideHigh {
+                    acc += x[idx] * bank[hIdx]
+                    hIdx += 1
                 }
-                out[yIdx] += xVal * hTransFlip[hIdx]
+            }
+        }
+
+        let pastLow = max(low, lenX)
+        if xIdx >= pastLow {
+            for _ in pastLow...xIdx {
+                acc += rightEdge * bank[hIdx]
                 hIdx += 1
             }
         }
-        yIdx += 1
-        if yIdx >= lenOut {
-            return out
-        }
-        t += down
-        xIdx += t / up
-        t = t % up
+
+        out[k] = acc
     }
-    return out
 }
 
-private func firwinLowpassDouble(numtaps: Int, cutoff: Double, beta: Double) -> [Double] {
+/// Dot product with four independent accumulators.
+///
+/// Not `vDSP_dotprD`: one output sample is only `hPerPhase` taps - 151 for
+/// 24k -> 16k - and at that length the framework call costs more than the arithmetic
+/// it performs. Measured on 10 s at 24k -> 16k, per-sample `vDSP_dotprD` runs the
+/// conversion in 5.9 ms against 4.1 ms for this, and both against 13.6 ms for the
+/// same loop with one accumulator.
+///
+/// Four accumulators, because a single one serialises on FMA latency: one add per
+/// ~4 cycles is what pinned the scalar loop near 1 GMAC/s however the bounds checks
+/// went. Splitting the chain four ways is also the only arithmetic difference from
+/// `scalarReference`.
+@inline(__always)
+private func dotProductSIMD(
+    _ a: UnsafePointer<Double>, _ f: UnsafePointer<Double>, _ n: Int
+) -> Double {
+    var s0 = SIMD2<Double>.zero
+    var s1 = SIMD2<Double>.zero
+    var s2 = SIMD2<Double>.zero
+    var s3 = SIMD2<Double>.zero
+    var i = 0
+    while i + 8 <= n {
+        let a0 = UnsafeRawPointer(a + i).loadUnaligned(as: SIMD2<Double>.self)
+        let a1 = UnsafeRawPointer(a + i + 2).loadUnaligned(as: SIMD2<Double>.self)
+        let a2 = UnsafeRawPointer(a + i + 4).loadUnaligned(as: SIMD2<Double>.self)
+        let a3 = UnsafeRawPointer(a + i + 6).loadUnaligned(as: SIMD2<Double>.self)
+        let f0 = UnsafeRawPointer(f + i).loadUnaligned(as: SIMD2<Double>.self)
+        let f1 = UnsafeRawPointer(f + i + 2).loadUnaligned(as: SIMD2<Double>.self)
+        let f2 = UnsafeRawPointer(f + i + 4).loadUnaligned(as: SIMD2<Double>.self)
+        let f3 = UnsafeRawPointer(f + i + 6).loadUnaligned(as: SIMD2<Double>.self)
+        s0 = s0.addingProduct(a0, f0)
+        s1 = s1.addingProduct(a1, f1)
+        s2 = s2.addingProduct(a2, f2)
+        s3 = s3.addingProduct(a3, f3)
+        i += 8
+    }
+    let folded = (s0 + s1) + (s2 + s3)
+    var total = folded[0] + folded[1]
+    while i < n {
+        total += a[i] * f[i]
+        i += 1
+    }
+    return total
+}
+
+/// Internal rather than private so `ResamplerBenchmarkTests` can time the design on
+/// its own. It is the expensive half for large `max(up, down)` and the half the cache
+/// removes, so it needs to be measurable apart from the convolution.
+func firwinLowpassDouble(numtaps: Int, cutoff: Double, beta: Double) -> [Double] {
     let alpha = 0.5 * Double(numtaps - 1)
     var h = [Double](repeating: 0.0, count: numtaps)
     for n in 0..<numtaps {

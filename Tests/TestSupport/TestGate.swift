@@ -55,12 +55,24 @@ public enum TestGate {
         ProcessInfo.processInfo.environment["SKIP_MLX_TESTS"] == "1"
     }
 
+    /// Benchmarks are opted into, like everything else that takes real time.
+    ///
+    /// They report rather than assert, so running them by default would cost seconds
+    /// and buy nothing; and a machine under load produces numbers worth ignoring.
+    public static var runBenchmarks: Bool {
+        ProcessInfo.processInfo.environment["RUN_BENCHMARKS"] == "1"
+    }
+
     /// Message for `XCTSkip` when ``runIntegrationTests`` is false.
     public static let integrationDisabled =
         "integration test - set RUN_INTEGRATION_TESTS=1 to run (needs model weights and network)"
 
     /// Message for `XCTSkip` when MLX tests are off.
     public static let mlxDisabled = "MLX tests disabled via SKIP_MLX_TESTS=1"
+
+    /// Message for `XCTSkip` when ``runBenchmarks`` is false.
+    public static let benchmarksDisabled =
+        "benchmark - set RUN_BENCHMARKS=1 to run (reports timings, asserts almost nothing)"
 
     // MARK: - The sibling research checkout
 
