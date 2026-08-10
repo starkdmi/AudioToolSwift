@@ -97,7 +97,7 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMinor(from: "1.1.6")),
 
         // Resampling, STFT, and audio I/O.
-        .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.2.2"),
+        .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.3.0"),
 
         // G2P for Kokoro TTS. A fork of mlalma/MisakiSwift whose only change is the
         // manifest - the Swift source at this revision is byte-identical to upstream
