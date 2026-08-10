@@ -37,6 +37,24 @@ The awkward one, because two things happen before the model does:
 
    Artifacts generated before that date encode the old assembly and must be
    regenerated; a stale one will fail rather than mislead, which is the intent.
+
+3. `bandwidth_sub` runs once, on the assembled signal - `generate.py:132` sits
+   after the sliding-window loop, so `detect_bandwidth` sees the whole 48 kHz
+   input and returns one crossover frequency for the file.
+
+   Until 2026-08-10 this adapter called it inside the per-chunk `process_fn`,
+   the same shape `benchmark_chunking.py` uses for its throughput experiment -
+   and the same shape the Swift provider had. So this was the identical fault as
+   (2), one layer down and still uncaught: the chunk *assembly* was being checked
+   against generate.py while the substitution was being checked against Swift.
+
+   It was not a small difference. Redetecting per chunk moved the crossover over
+   187.5 Hz to 6937.5 Hz across 136 s of speech where the global answer was
+   4875 Hz, and the two assemblies differ by 24.5 dB SNR. Note also that Swift
+   detects globally but still *filters* per chunk, whereas this reference filters
+   the assembled signal in one pass; the remaining gap between them is filter
+   transients inside the discarded `give_up_length` edges, and the SNR this case
+   reports is what confirms they are negligible.
 """
 
 from __future__ import annotations
@@ -124,8 +142,8 @@ def build(ctx: Context) -> list[ParityCase]:
         model = MossFormer2_SR_48K(args)
         model.update(tree_unflatten(list(mx.load(weights_path).items())))
 
-        def upscale(chunk: np.ndarray, *, pad: bool = True) -> np.ndarray:
-            """One pass of the provider's processChunk, on 48 kHz input.
+        def generate(chunk: np.ndarray, *, pad: bool = True) -> np.ndarray:
+            """The model alone - mel, forward pass, squeeze. No bandwidth_sub.
 
             `pad` only for the chunked path, whose caller indexes up to the chunk
             length. The direct path must not pad: the model emits whole hops, so
@@ -140,17 +158,26 @@ def build(ctx: Context) -> list[ParityCase]:
                 win_size=args.win_size, fmin=args.fmin, fmax=args.fmax,
             )
             raw = mx.squeeze(model(mel))
-            out = bandwidth_sub(inputs, raw, fs=SAMPLE_RATE)
-            mx.eval(out)
-            result = np.asarray(out, dtype=np.float32)
+            mx.eval(raw)
+            result = np.asarray(raw, dtype=np.float32)
             if not pad:
                 return result
             if len(result) < len(chunk):
                 result = np.pad(result, (0, len(chunk) - len(result)))
             return result[: len(chunk)]
 
+        def substitute(upsampled_input: np.ndarray, raw: np.ndarray) -> np.ndarray:
+            """`generate.py`'s single bandwidth_sub, on the assembled signal."""
+            out = bandwidth_sub(
+                mx.array(np.ascontiguousarray(upsampled_input, dtype=np.float32)),
+                mx.array(np.ascontiguousarray(raw, dtype=np.float32)),
+                fs=SAMPLE_RATE,
+            )
+            mx.eval(out)
+            return np.asarray(out, dtype=np.float32)
+
         upsampled, upsampled_short = _swift_upsampled(ctx, audio, short, rate)
-        direct = upscale(upsampled_short, pad=False)
+        direct = substitute(upsampled_short, generate(upsampled_short, pad=False))
 
         # The independent reading of the same seam. Stored at exactly 3x the input
         # length so the Swift side can compare it sample for sample; librosa
@@ -177,10 +204,13 @@ def build(ctx: Context) -> list[ParityCase]:
         # imported when it exits, so a `chunked` call placed in the return statement
         # re-triggers that import with the reference directory no longer on the
         # path, and generation dies on ModuleNotFoundError after the model has run.
-        enhanced = chunked(
-            ctx, upsampled, SAMPLE_RATE,
-            chunk_duration=CHUNK_DURATION, overlap_ratio=OVERLAP_RATIO,
-            strategy=STRATEGY, process_fn=upscale,
+        enhanced = substitute(
+            upsampled,
+            chunked(
+                ctx, upsampled, SAMPLE_RATE,
+                chunk_duration=CHUNK_DURATION, overlap_ratio=OVERLAP_RATIO,
+                strategy=STRATEGY, process_fn=generate,
+            ),
         )
 
     shared = {

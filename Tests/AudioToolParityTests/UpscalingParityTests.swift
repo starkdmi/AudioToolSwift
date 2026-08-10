@@ -121,6 +121,56 @@ final class UpscalingParityTests: ParityTestCase {
         try expectParity(inMemory, matches: "upsampled_48k_librosa", in: artifact)
     }
 
+    /// Streaming must produce exactly the samples batch produces.
+    ///
+    /// The provider states that contract and nothing checked it. It is worth
+    /// checking now because the substitution spans chunk boundaries: a window
+    /// cannot be filtered until its successor's raw output exists, so both paths
+    /// carry a one-chunk lookahead, and they have to agree about where the first
+    /// chunk's kept region starts and where the last one's real samples end.
+    ///
+    /// The precedent is specific. These two last diverged when streaming
+    /// multiplied the opening chunk by a rising Hann window without normalising
+    /// by the accumulated weight, and every stream began with a fade-in from
+    /// silence - which took attaching a progress handler to notice, because
+    /// that is what switches the pipeline to this path.
+    ///
+    /// Equality, not a threshold: both paths run the same arithmetic in the same
+    /// order on the same device, so any difference at all is a structural bug
+    /// rather than round-off.
+    func testSuperResolutionStreamMatchesBatch() async throws {
+        let artifact = try artifact("mossformer2_sr_48k")
+        let weights = try stagedWeights("MossFormer2_SR_48K_MLX", "model_fp32.safetensors")
+        let config = try stagedWeights("MossFormer2_SR_48K_MLX", "config.json")
+        let samples = try XCTUnwrap(artifact.tensor("input"))
+        let input = AudioBuffer(samples: samples, sampleRate: 16_000, channels: 1)
+
+        let provider = MossFormer2SR48KProvider(weightsPath: weights.path, configPath: config.path)
+        try await provider.load()
+
+        let batch = try await provider.process(input)
+
+        var streamed: [Float] = []
+        for try await piece in provider.processStream(input) {
+            streamed.append(contentsOf: piece.samples)
+        }
+
+        XCTAssertEqual(
+            streamed.count, batch.samples.count,
+            "streaming and batch must agree on length"
+        )
+        let overlap = min(streamed.count, batch.samples.count)
+        var worst: (index: Int, diff: Float) = (0, 0)
+        for i in 0..<overlap {
+            let diff = abs(streamed[i] - batch.samples[i])
+            if diff > worst.diff { worst = (i, diff) }
+        }
+        XCTAssertEqual(
+            worst.diff, 0,
+            "streaming diverges from batch by \(worst.diff) at sample \(worst.index)"
+        )
+    }
+
     /// USS, query-conditioned, at fp32.
     ///
     /// `useFp16: false` is not incidental - the artifact was generated from

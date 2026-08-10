@@ -122,7 +122,27 @@ enum ParityThresholds {
         // Each one masked the next: (2) held both paths at ~50 dB, which hid (3)
         // entirely, because chunked and direct agreed to within 0.3 dB while both
         // were wrong.
-        "mossformer2_sr_48k.enhanced": 95,
+        // (4) `bandwidthSub` ran per chunk, where the reference runs it once on the
+        //     assembled signal (`generate.py:132`, after the sliding-window loop).
+        //     So the crossover between the upsampled original and the model's
+        //     reconstruction was redetected every 3 s: over 136 s of speech it
+        //     ranged 187.5 Hz to 6937.5 Hz against a single global 4875 Hz. The
+        //     adapter mirrored the same placement, so this case could not see it -
+        //     the identical fault as (2), one layer down.
+        //
+        //     Two further faults hid behind it, both found by localising the error
+        //     rather than reasoning about it. Filtering each chunk's own raw output
+        //     misses the step that assembly leaves where chunks meet, which the
+        //     reference highpasses straight across: 57.5 dB at the seams against
+        //     107-112 dB elsewhere. And the last chunk is zero-padded out to the
+        //     chunk length, so `filtfilt` reflected about a step down to silence
+        //     instead of about the last real sample - the tail of every file, and
+        //     only the tail.
+        //
+        //     Measured 107.8 dB with all three fixed, max abs diff 8.0e-06, which
+        //     is the same number the reference recipe scores against its own
+        //     artifact. Floored at 100.
+        "mossformer2_sr_48k.enhanced": 100,
         "mossformer2_sr_48k_direct.enhanced": 100,
 
         // The 16 -> 48 kHz upsample on its own, Swift's AVAudioConverter against

@@ -45,7 +45,7 @@ Then one named tensor per output, cut at the seams that matter:
 
 | Case | Seams |
 |---|---|
-| `mossformer2_sr_48k` | `upsampled_48k` (librosa's 16→48 kHz), `model_output`, `enhanced` (after `bandwidth_sub`) |
+| `mossformer2_sr_48k` | `upsampled_48k` (**Swift's** 16→48 kHz, which the reference consumes), `upsampled_48k_librosa` (librosa's, the independent reading of that seam), `enhanced` (after one `bandwidth_sub` over the assembled signal) |
 | `mossformer_gan_se_16k_coreml` | `enhanced_segment` (model + STFT), `enhanced_full` (adds stitching) |
 | `mossformer2_ss_*` | `speaker_N` raw, `speaker_N_normalized` as the API returns it |
 | `demucs_vocals_44k` | every stem, per channel |

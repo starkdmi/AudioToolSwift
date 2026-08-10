@@ -164,9 +164,9 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         guard let model = model else {
             throw AudioToolError.modelNotLoaded("MossFormer2_SR_48K")
         }
-        
+
         try validateSampleRate(input)
-        
+
         // Duration is invariant under resampling. Decide before allocating the
         // 48 kHz representation so long-form inference can convert incrementally.
         let durationSeconds = Float(input.frameCount) / Float(input.sampleRate)
@@ -174,7 +174,9 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
             return try await processWithChunking(input, model: model)
         }
 
-        // Short inputs can be converted in one allocation.
+        // Short inputs can be converted in one allocation. The chunk *is* the
+        // whole signal here, so detecting on it is detecting globally - this path
+        // keeps calling `bandwidthSub` directly and is unchanged.
         let audio48k = try await resampleTo48k(input)
         return try await processChunk(audio48k, model: model)
     }
@@ -190,6 +192,7 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         let chunkingConfig = ChunkingConfig.mossformer2SR48K(sampleRate: outputSampleRate)
         let chunkSamples = chunkingConfig.chunkSamples
         let stride = chunkingConfig.strideSamples
+        let crossover = try await detectCrossover(input)
         var source = try SuperResolutionChunkSource(
             input: input,
             targetRate: outputSampleRate
@@ -204,12 +207,47 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         output.reserveCapacity(totalLength)
         var completedChunks = 0
 
+        // One chunk of lookahead. Substituting a window needs the next chunk's
+        // raw output for its trailing `giveUp` samples, so each chunk is held
+        // back until its successor exists. Only three raw chunks are ever
+        // resident, which is what keeps this bounded for long inputs.
+        var previousRaw: [Float]?
+        var pending: (startIdx: Int, input: [Float], raw: [Float])?
+
         while let chunk = try source.nextChunk(chunkSamples: chunkSamples, stride: stride) {
             try Task.checkCancellation()
-            let processed = try await processChunk(chunk.samples, model: model)
-            output.append(contentsOf: assembler.add(processed.samples, startIdx: chunk.startIdx))
+            let raw = try await generateChunk(chunk.samples, model: model, paddedTo: chunkSamples)
+
+            if let ready = pending {
+                let window = assembledWindow(
+                    previous: previousRaw, current: ready.raw, next: raw,
+                    chunkSamples: chunkSamples, stride: stride
+                )
+                let processed = try substituteWindow(
+                    input: ready.input, assembledRaw: window,
+                    realLength: totalLength - ready.startIdx,
+                    crossover: crossover, fadeIn: ready.startIdx == 0
+                )
+                output.append(contentsOf: assembler.add(processed.samples, startIdx: ready.startIdx))
+                previousRaw = ready.raw
+            }
+            pending = (chunk.startIdx, chunk.samples, raw)
+
             completedChunks += 1
             MLXCachePolicy.trimIfNeeded(afterChunk: completedChunks)
+        }
+
+        if let ready = pending {
+            let window = assembledWindow(
+                previous: previousRaw, current: ready.raw, next: nil,
+                chunkSamples: chunkSamples, stride: stride
+            )
+            let processed = try substituteWindow(
+                input: ready.input, assembledRaw: window,
+                realLength: totalLength - ready.startIdx,
+                crossover: crossover, fadeIn: ready.startIdx == 0
+            )
+            output.append(contentsOf: assembler.add(processed.samples, startIdx: ready.startIdx))
         }
         output.append(contentsOf: assembler.finish())
         return AudioBuffer(
@@ -219,11 +257,266 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         )
     }
     
-    /// Process a single chunk
-    private func processChunk(_ samples: [Float], model: MossFormer2_SR_48K) async throws -> AudioBuffer {
+    /// Where the upsampled original hands over to the model's reconstruction.
+    ///
+    /// One frequency for the whole signal, because that is what the reference
+    /// produces: `generate.py` assembles every chunk first and calls
+    /// `bandwidth_sub` once, on the finished signal, so `detect_bandwidth` sees
+    /// all of it and returns a single answer.
+    ///
+    /// Calling `bandwidthSub` per chunk instead - which this provider did until
+    /// now, and which `Parity/adapters/mossformer2_sr.py` still mirrored, so the
+    /// suite could not see it - redetects that handover every `stride` samples.
+    /// Measured over 136 s of speech it ranged from 187.5 Hz to 6937.5 Hz against
+    /// a single global 4875 Hz, and the assembled output differed from the
+    /// reference algorithm by 24.5 dB SNR. Two seams apart it would source the
+    /// 2-5 kHz band from the model on one side and from the upsampled original on
+    /// the other.
+    ///
+    /// The low end of that range is worse than a mismatch. `filtfilt`'s float32
+    /// recurrence degrades as the cutoff falls - a narrower Butterworth puts its
+    /// poles nearer z=1, so round-off is amplified harder - and at 187.5 Hz it
+    /// sits 14 dB from the same filter computed in float64. A near-silent chunk
+    /// was enough to drive it there. Detecting globally keeps the cutoff in the
+    /// kilohertz range, where the same filter measures 100-125 dB.
+    /// Internal rather than private so ``SuperResolutionCrossoverTests`` can hold
+    /// the bounded accumulation against whole-signal `detectBandwidth`. That
+    /// equivalence is the whole basis for streaming it, so it needs a test that
+    /// names it rather than inference from an end-to-end number.
+    struct Crossover {
+        /// The signal already reaches Nyquist, so there is nothing to substitute
+        /// and the model output passes through untouched. Mirrors the guard in
+        /// AudioUtils' `bandwidthSub`.
+        let passthrough: Bool
+        let fHigh: Float
+    }
+
+    /// Detect the crossover on the whole 48 kHz signal, once, before chunking -
+    /// without ever holding that signal.
+    ///
+    /// `detectBandwidth` reduces its spectrogram to one number per frequency bin,
+    /// `sum(psd, axis: 1)`, and reads both edges off the cumulative sum of those
+    /// 129 values. Nothing else about the STFT survives, so the reduction can be
+    /// accumulated block by block over the streamed resample.
+    ///
+    /// That matters because the obvious version does not scale. Materializing the
+    /// full 48 kHz array and calling `detectBandwidth` on it makes `stft` build
+    /// full-length real and imaginary tensors - for an hour of audio roughly
+    /// 0.7 GB for the signal and about 1.4 GB more for the spectrogram - which
+    /// grows linearly with duration and defeats the whole point of
+    /// ``SuperResolutionChunkSource``. Here the resident set is one block: a few
+    /// megabytes, whatever the duration.
+    ///
+    /// Accumulating in `Double` is deliberate. Summing millions of per-block
+    /// float32 totals in sequence drifts, where MLX's whole-array reduction gets
+    /// to use a tree; the wider accumulator removes the difference rather than
+    /// hoping it stays below a bin boundary.
+    func detectCrossover(_ input: AudioBuffer) async throws -> Crossover {
+        let nFFT = 256
+        let hop = 128
+        let winLength = 256
+        let padAmount = nFFT / 2
+        let bins = nFFT / 2 + 1
+        let framesPerBlock = 2048
+
+        // Hann, periodic: false - the window detectBandwidth builds.
+        let indices = MLXArray(0..<winLength).asType(.float32)
+        let window = 0.5 * (1 - MLX.cos(2 * Float.pi * indices / Float(winLength - 1)))
+        eval(window)
+
+        var energy = [Double](repeating: 0, count: bins)
+        var buffer: [Float] = []
+
+        /// Consume every whole frame the buffer can supply, keeping the
+        /// remainder. Frames sit at fixed absolute offsets, so draining greedily
+        /// cannot shift them.
+        func drain(flush: Bool) {
+            while buffer.count >= winLength {
+                let available = (buffer.count - winLength) / hop + 1
+                let take = min(available, framesPerBlock)
+                guard take > 0 else { break }
+                let span = (take - 1) * hop + winLength
+                let block = MLXArray(Array(buffer[0..<span])).expandedDimensions(axis: 0)
+                let (real, imag) = stft(
+                    block, nFFT: nFFT, hopLength: hop,
+                    winLength: winLength, window: window, center: false
+                )
+                let psd = real[0] * real[0] + imag[0] * imag[0]
+                let perBin = MLX.sum(psd, axis: 1)
+                eval(perBin)
+                let values = perBin.asArray(Float.self)
+                for i in 0..<min(bins, values.count) { energy[i] += Double(values[i]) }
+                buffer.removeFirst(take * hop)
+                if !flush && available <= framesPerBlock { break }
+            }
+        }
+
+        let stream = try SuperResolutionResampler.Stream(
+            input.samples, from: input.sampleRate, to: outputSampleRate
+        )
+        var head: [Float] = []
+        var tail: [Float] = []
+        var startedBody = false
+        var totalRead = 0
+
+        func begin() {
+            // Left pad: signal[1 ..< padAmount + 1], reversed. STFT's `center`
+            // reflects without repeating the edge sample.
+            let end = min(padAmount + 1, head.count)
+            if end > 1 { buffer.append(contentsOf: head[1..<end].reversed()) }
+            buffer.append(contentsOf: head)
+            startedBody = true
+        }
+
+        while let piece = try stream.next(maxFrames: 65_536) {
+            try Task.checkCancellation()
+            totalRead += piece.count
+            if !startedBody {
+                head.append(contentsOf: piece)
+                guard head.count >= padAmount + 1 else { continue }
+                begin()
+            } else {
+                buffer.append(contentsOf: piece)
+            }
+            tail.append(contentsOf: piece)
+            if tail.count > padAmount + 1 { tail.removeFirst(tail.count - padAmount - 1) }
+            drain(flush: false)
+        }
+        // A signal shorter than the pad never triggered `begin`.
+        if !startedBody {
+            tail = head
+            begin()
+        }
+
+        // Right pad: signal[len - padAmount - 1 ..< len - 1], reversed.
+        if tail.count > 1 { buffer.append(contentsOf: tail[0..<(tail.count - 1)].reversed()) }
+        drain(flush: true)
+
+        let total = energy.reduce(0, +)
+        let nyquist = Float(outputSampleRate) / 2.0
+        // detectBandwidth's own guard: silence has no bandwidth to detect, and it
+        // reports Nyquist, which lands on the passthrough below.
+        guard total >= 1e-10 else {
+            return Crossover(passthrough: true, fHigh: nyquist)
+        }
+
+        let binHz = Float(outputSampleRate) / Float(nFFT)
+        var cumulative = 0.0
+        var fHigh = Float(bins - 1) * binHz
+        for i in 0..<bins {
+            cumulative += energy[i]
+            if cumulative / total >= 0.99 {
+                fHigh = Float(i) * binHz
+                break
+            }
+        }
+
+        // Matches AudioUtils' bandwidthSub: at Nyquist there is no high band to
+        // graft on, and filtering there is what the margin exists to avoid.
+        let nyquistMarginHz: Float = 100
+        return Crossover(passthrough: fHigh >= nyquist - nyquistMarginHz, fHigh: fHigh)
+    }
+
+    /// The substitution itself, with the crossover already decided.
+    ///
+    /// Transcribes AudioUtils' `replaceBandwidth` and `smoothTransition` rather
+    /// than calling `bandwidthSub`, which would redetect. The only difference is
+    /// where `fHigh` comes from.
+    ///
+    /// `modelOutput` must be a window of the *assembled* signal, not one chunk's
+    /// raw output. Those are not interchangeable: assembly leaves a small step
+    /// wherever two chunks meet, and the reference highpasses straight across it.
+    /// Filtering each chunk's own output instead never sees that step, which
+    /// sounds harmless and is not - it read 107-112 dB everywhere except the
+    /// seams, where it collapsed to 57.5 dB and dragged the case to 72.9 dB
+    /// overall. The window has to carry its neighbours' contribution so the
+    /// filter crosses the same discontinuity the reference does.
+    ///
+    /// `fadeIn` is the reference's 100 ms crossfade out of the unprocessed input.
+    /// It belongs at sample 0 of the *signal*, not of every window, so only the
+    /// first one gets it.
+    private func substitute(
+        input: MLXArray,
+        modelOutput: MLXArray,
+        crossover: Crossover,
+        fadeIn: Bool
+    ) throws -> MLXArray {
+        guard !crossover.passthrough else { return modelOutput }
+
+        let fs = Float(outputSampleRate)
+        let effectiveBand = try lowpassFilter(input, cutoff: crossover.fHigh, fs: fs)
+        let highBand = try highpassFilter(modelOutput, cutoff: crossover.fHigh, fs: fs)
+        let length = min(effectiveBand.shape[0], highBand.shape[0])
+        let substituted = highBand[0..<length] + effectiveBand[0..<length]
+
+        guard fadeIn else { return substituted }
+
+        // transitionBand = 100 ms, as in AudioUtils' smoothTransition. Literals
+        // must be Float: untyped `0, 1` infer Int and yield an int64 ramp that
+        // truncates to zeros except the final element.
+        let fadeLength = min(100 * outputSampleRate / 1000, length)
+        let fade = MLX.linspace(Float(0), Float(1), count: fadeLength)
+        let head = (1 - fade) * input[0..<fadeLength] + fade * substituted[0..<fadeLength]
+        guard fadeLength < length else { return head }
+        return MLX.concatenated([head, substituted[fadeLength..<length]], axis: 0)
+    }
+
+    /// The assembled raw signal over one chunk's span.
+    ///
+    /// Positions below `giveUp` belong to the previous chunk and those at or
+    /// above `chunkSamples - giveUp` to the next, which is exactly how
+    /// ``IncrementalDiscardEdges`` splices them. Where a neighbour is missing -
+    /// the first and last chunks - the chunk's own samples stand, as they do in
+    /// the assembler.
+    ///
+    /// The point is the two joins this reintroduces. They are what the reference
+    /// filters across, and the kept region is `giveUp` samples away from either
+    /// window edge, so the window's own edge transients never reach it: measured,
+    /// a 4th-order Butterworth here settles within about 500 samples against the
+    /// 24000 of margin.
+    private nonisolated func assembledWindow(
+        previous: [Float]?,
+        current: [Float],
+        next: [Float]?,
+        chunkSamples: Int,
+        stride: Int
+    ) -> [Float] {
+        let giveUp = (chunkSamples - stride) / 2
+        var window = current
+        if let previous {
+            for i in 0..<min(giveUp, window.count) where i + stride < previous.count {
+                window[i] = previous[i + stride]
+            }
+        }
+        if let next {
+            for i in max(0, chunkSamples - giveUp)..<min(chunkSamples, window.count)
+            where i - stride >= 0 && i - stride < next.count {
+                window[i] = next[i - stride]
+            }
+        }
+        return window
+    }
+
+    /// Mel, forward pass, squeeze - the model alone, padded to `length`.
+    private func generateChunk(
+        _ samples: [Float],
+        model: MossFormer2_SR_48K,
+        paddedTo length: Int
+    ) async throws -> [Float] {
+        var raw = try await rawModelOutput(samples, model: model).asArray(Float.self)
+        if raw.count < length {
+            raw.append(contentsOf: repeatElement(0, count: length - raw.count))
+        }
+        return Array(raw.prefix(length))
+    }
+
+    /// Mel spectrogram and one forward pass. No substitution.
+    private func rawModelOutput(
+        _ samples: [Float],
+        model: MossFormer2_SR_48K
+    ) async throws -> MLXArray {
         let inputs = MLXArray(samples)
-        let inputLen = inputs.shape[0]
-        
+
         // Config values
         let hopSize = args["hop_size"] as? Int ?? 256
         let nFFT = args["n_fft"] as? Int ?? 1024
@@ -231,11 +524,9 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         let winSize = args["win_size"] as? Int ?? 1024
         let fmin = args["fmin"] as? Float ?? 0
         let fmax = args["fmax"] as? Float ?? 8000
-        
-        // Compute mel spectrogram
-        let inputs2D = inputs.expandedDimensions(axis: 0)
+
         let melSpec = try melSpectrogram(
-            inputs2D,
+            inputs.expandedDimensions(axis: 0),
             nFFT: nFFT,
             numMels: numMels,
             samplingRate: 48000,
@@ -245,21 +536,66 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
             fmax: fmax
         )
         eval(melSpec)
-        
-        // Run model
+
         let output = model(melSpec)
         eval(output)
-        
-        var outputs = output.squeezed()
-        
-        // Apply bandwidth substitution
-        outputs = try bandwidthSub(inputs, outputs, fs: 48000)
+        return output.squeezed()
+    }
+
+    /// Substitute over one window, given the raw signal already assembled across
+    /// it. Used by the chunked paths, which supply the neighbours' contribution.
+    ///
+    /// `realLength` trims the window to the samples the signal actually has. It
+    /// matters only for the last chunk, and it matters a lot: the source
+    /// zero-pads that chunk out to `chunkSamples`, so filtering the padded window
+    /// makes `filtfilt` reflect about a step down to silence, where the reference
+    /// - whose assembled array simply ends - reflects about the last real sample.
+    /// Leaving the pad in place cost the tail of every file, and only the tail,
+    /// which is why it survived a seam-by-seam reading of the error.
+    private func substituteWindow(
+        input: [Float],
+        assembledRaw: [Float],
+        realLength: Int,
+        crossover: Crossover,
+        fadeIn: Bool
+    ) throws -> AudioBuffer {
+        let usable = max(0, min(realLength, min(input.count, assembledRaw.count)))
+        guard usable > 0 else {
+            return AudioBuffer(samples: [], sampleRate: outputSampleRate, channels: 1)
+        }
+        let inputs = MLXArray(Array(input.prefix(usable)))
+        let outputs = try substitute(
+            input: inputs,
+            modelOutput: MLXArray(Array(assembledRaw.prefix(usable))),
+            crossover: crossover,
+            fadeIn: fadeIn
+        )
         eval(outputs)
-        
-        // Trim to original length
+        let trimmed = outputs[0..<min(outputs.shape[0], input.count)]
+        return AudioBuffer(
+            samples: trimmed.asArray(Float.self),
+            sampleRate: outputSampleRate,
+            channels: 1
+        )
+    }
+
+    /// The direct path: the chunk is the whole signal, so `bandwidthSub`
+    /// detecting on it *is* detecting globally. Unchanged.
+    private func processChunk(
+        _ samples: [Float],
+        model: MossFormer2_SR_48K
+    ) async throws -> AudioBuffer {
+        let inputs = MLXArray(samples)
+        let inputLen = inputs.shape[0]
+        let raw = try await rawModelOutput(samples, model: model)
+        var outputs = try bandwidthSub(inputs, raw, fs: 48000)
+        eval(outputs)
         outputs = outputs[0..<inputLen]
-        
-        return AudioBuffer(samples: outputs.asArray(Float.self), sampleRate: outputSampleRate, channels: 1)
+        return AudioBuffer(
+            samples: outputs.asArray(Float.self),
+            sampleRate: outputSampleRate,
+            channels: 1
+        )
     }
     
     /// Resample input to 48 kHz - the first step of inference, not plumbing.
@@ -322,6 +658,10 @@ extension MossFormer2SR48KProvider: StreamableOutput {
         let chunkingConfig = ChunkingConfig.mossformer2SR48K(sampleRate: outputSampleRate)
         let chunkSamples = chunkingConfig.chunkSamples
         let stride = chunkingConfig.strideSamples
+        // Detected before the first chunk is yielded, on the whole signal, so a
+        // stream produces the samples the batch path produces. The input is a
+        // complete buffer, not a live feed, so this is available up front.
+        let crossover = try await detectCrossover(input)
         var source = try SuperResolutionChunkSource(input: input, targetRate: outputSampleRate)
         let totalLength = source.totalLength
 
@@ -340,23 +680,52 @@ extension MossFormer2SR48KProvider: StreamableOutput {
         )
         var completedChunks = 0
 
-        while let chunk = try source.nextChunk(chunkSamples: chunkSamples, stride: stride) {
-            try Task.checkCancellation()
-            let processed = try await processChunk(chunk.samples, model: model)
+        // Same one-chunk lookahead as the batch path, and for the same reason:
+        // a window cannot be substituted until its successor's raw output exists.
+        // Streaming therefore lags by one chunk. It still emits progressively -
+        // this is a delay, not a buffer-everything - and the alternative is
+        // yielding samples the batch path would not produce.
+        var previousRaw: [Float]?
+        var pending: (startIdx: Int, input: [Float], raw: [Float])?
 
-            let ready = assembler.add(processed.samples, startIdx: chunk.startIdx)
-            if !ready.isEmpty {
+        func emit(_ ready: (startIdx: Int, input: [Float], raw: [Float]), next: [Float]?) throws {
+            let window = assembledWindow(
+                previous: previousRaw, current: ready.raw, next: next,
+                chunkSamples: chunkSamples, stride: stride
+            )
+            let processed = try substituteWindow(
+                input: ready.input, assembledRaw: window,
+                realLength: totalLength - ready.startIdx,
+                crossover: crossover, fadeIn: ready.startIdx == 0
+            )
+            let out = assembler.add(processed.samples, startIdx: ready.startIdx)
+            if !out.isEmpty {
                 if case .terminated = continuation.yield(AudioBuffer(
-                    samples: ready,
+                    samples: out,
                     sampleRate: outputSampleRate,
                     channels: 1
                 )) {
                     throw CancellationError()
                 }
             }
+        }
+
+        while let chunk = try source.nextChunk(chunkSamples: chunkSamples, stride: stride) {
+            try Task.checkCancellation()
+            let raw = try await generateChunk(chunk.samples, model: model, paddedTo: chunkSamples)
+
+            if let ready = pending {
+                try emit(ready, next: raw)
+                previousRaw = ready.raw
+            }
+            pending = (chunk.startIdx, chunk.samples, raw)
 
             completedChunks += 1
             MLXCachePolicy.trimIfNeeded(afterChunk: completedChunks)
+        }
+
+        if let ready = pending {
+            try emit(ready, next: nil)
         }
 
         let tail = assembler.finish()
