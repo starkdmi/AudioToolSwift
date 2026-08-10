@@ -95,13 +95,21 @@ public final class ModelCatalog: @unchecked Sendable {
                 category: .speechEnhancement,
                 description: "High-quality speech enhancement for 48kHz audio with advanced noise reduction",
                 variants: [
+                    // requiredFiles is narrower than files here, and for every
+                    // `standard` variant below except super-resolution: those
+                    // providers read the safetensors and nothing else, so a
+                    // snapshot without the config is loadable and must not be
+                    // reported as missing. Letting it default to `files` made the
+                    // catalog disagree with the loader about what "installed"
+                    // means. See ModelFiles.standardRequired.
                     ModelVariant(
                         id: "mossformer2_se_fp32",
                         name: "MossFormer2 SE (FP32)",
                         quantization: .fp32,
                         sizeBytes: 180_000_000,
                         repo: ModelRepository.mossFormer2SE48K,
-                        files: ModelFiles.standard(.fp32)
+                        files: ModelFiles.standard(.fp32),
+                        requiredFiles: ModelFiles.standardRequired(.fp32)
                     ),
                     ModelVariant(
                         id: "mossformer2_se_fp16",
@@ -109,7 +117,8 @@ public final class ModelCatalog: @unchecked Sendable {
                         quantization: .fp16,
                         sizeBytes: 90_000_000,
                         repo: ModelRepository.mossFormer2SE48K,
-                        files: ModelFiles.standard(.fp16)
+                        files: ModelFiles.standard(.fp16),
+                        requiredFiles: ModelFiles.standardRequired(.fp16)
                     ),
                 ]
             ),
@@ -126,7 +135,8 @@ public final class ModelCatalog: @unchecked Sendable {
                         quantization: .fp32,
                         sizeBytes: 150_000_000,
                         repo: ModelRepository.frcrnSE16K,
-                        files: ModelFiles.standard(.fp32)
+                        files: ModelFiles.standard(.fp32),
+                        requiredFiles: ModelFiles.standardRequired(.fp32)
                     ),
                 ]
             ),
@@ -147,7 +157,8 @@ public final class ModelCatalog: @unchecked Sendable {
                         quantization: .fp32,
                         sizeBytes: 200_000_000,
                         repo: ModelRepository.mossFormer2SS2Spk16K,
-                        files: ModelFiles.standard(.fp32)
+                        files: ModelFiles.standard(.fp32),
+                        requiredFiles: ModelFiles.standardRequired(.fp32)
                     ),
                     ModelVariant(
                         id: "mossformer2_ss_3spk_8k_fp32",
@@ -155,7 +166,8 @@ public final class ModelCatalog: @unchecked Sendable {
                         quantization: .fp32,
                         sizeBytes: 200_000_000,
                         repo: ModelRepository.mossFormer2SS3Spk8K,
-                        files: ModelFiles.standard(.fp32)
+                        files: ModelFiles.standard(.fp32),
+                        requiredFiles: ModelFiles.standardRequired(.fp32)
                     ),
                     ModelVariant(
                         id: "mossformer2_ss_2spk_whamr_8k_fp32",
@@ -163,7 +175,8 @@ public final class ModelCatalog: @unchecked Sendable {
                         quantization: .fp32,
                         sizeBytes: 200_000_000,
                         repo: ModelRepository.mossFormer2SS2SpkWHAMR8K,
-                        files: ModelFiles.standard(.fp32)
+                        files: ModelFiles.standard(.fp32),
+                        requiredFiles: ModelFiles.standardRequired(.fp32)
                     ),
                 ]
             ),

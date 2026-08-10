@@ -93,6 +93,45 @@ final class ModelCatalogAgreementTests: XCTestCase {
                           "\(variantID) should list '\(precision.weightsFilename)', lists \(entry.files)")
         }
 
+        // What must be present to *load* is narrower than what gets downloaded,
+        // for every one of these but super-resolution. Their providers build their
+        // configuration in code and read nothing but the safetensors, so a snapshot
+        // without the config.json is loadable and must not be reported as missing.
+        //
+        // This is pinned rather than left to the default because the default is
+        // `files`, and taking it made the catalog and the loaders disagree about
+        // the word "installed": a machine holding the weights was told it had
+        // nothing, and every load paid a repository round-trip to fetch a file it
+        // would never open. Offline, it failed outright.
+        for (variantID, precision) in [("mossformer2_se_fp32", ModelPrecision.fp32),
+                                       ("mossformer2_se_fp16", .fp16),
+                                       ("frcrn_se_fp32", .fp32),
+                                       ("mossformer2_ss_2spk_16k_fp32", .fp32),
+                                       ("mossformer2_ss_3spk_8k_fp32", .fp32),
+                                       ("mossformer2_ss_2spk_whamr_8k_fp32", .fp32)] {
+            let entry = try variant(variantID)
+            XCTAssertEqual(
+                entry.requiredFiles, ModelFiles.standardRequired(precision),
+                "\(variantID) loads the safetensors alone; requiredFiles is \(entry.requiredFiles)"
+            )
+            XCTAssertFalse(
+                entry.requiredFiles.contains("config.json"),
+                "\(variantID)'s provider never opens a config.json"
+            )
+            XCTAssertTrue(
+                entry.files.contains("config.json"),
+                "\(variantID) should still fetch the config when it downloads, so a "
+                    + "snapshot arrives complete"
+            )
+        }
+
+        // Super-resolution is the exception, and the reason the two lists exist:
+        // MossFormer2SR48KProvider reads its architecture out of config.json, so a
+        // snapshot without one genuinely cannot load.
+        let sr = try variant("mossformer2_sr_fp32")
+        XCTAssertEqual(sr.requiredFiles, ModelFiles.standard(.fp32))
+        XCTAssertTrue(sr.requiredFiles.contains("config.json"))
+
         // USS names its checkpoints after the architecture.
         let uss = try variant("uss_fp32")
         XCTAssertEqual(uss.files, ["resunet30_fp32.safetensors"],

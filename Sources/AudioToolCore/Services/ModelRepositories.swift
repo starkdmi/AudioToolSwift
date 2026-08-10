@@ -78,9 +78,35 @@ public enum ModelFiles {
     /// Repos following the single-repo, precision-suffixed convention:
     /// `model_fp32.safetensors`, `model_fp16.safetensors`, and a shared config.
     ///
+    /// This is the **download** manifest. For deciding whether a snapshot on disk
+    /// is loadable, use ``standardRequired(_:)`` - see the note there.
+    ///
     /// - Parameter precision: which weights to fetch.
     public static func standard(_ precision: ModelPrecision) -> [String] {
         [precision.weightsFilename, "config.json"]
+    }
+
+    /// What a `standard` repo's model must have on disk before it can load.
+    ///
+    /// The weights, and nothing else. Of the providers using this layout, only
+    /// `MossFormer2SR48KProvider` opens the `config.json`: `MossFormer2SE48KProvider`
+    /// builds its `PipelineConfiguration` in code, `MossFormer2SSProvider` hardcodes
+    /// its `MossFormer2Config`, and `FRCRNSE16KProvider` calls `loadWeights` and
+    /// nothing more. SR keeps ``standard(_:)`` for both purposes.
+    ///
+    /// Load paths used ``standard(_:)`` for the presence check as well as the
+    /// download, and `localPath(for:matching:)` requires *every* glob to match. So
+    /// a machine holding the safetensors but not the config was treated as having
+    /// nothing: every load took a repository round-trip to fetch a file it would
+    /// never open, and would have failed outright with no network. Measured on a
+    /// cache holding only `model_fp32.safetensors` - SE 48K reported uncached,
+    /// then loaded in 0.6 s and transferred nothing.
+    ///
+    /// This is the same split ``ModelVariant/requiredFiles`` already draws against
+    /// ``ModelVariant/files``, and whose documentation uses this exact repository
+    /// as its example. The concept was there; the load paths were not using it.
+    public static func standardRequired(_ precision: ModelPrecision) -> [String] {
+        [precision.weightsFilename]
     }
 
     /// USS names its checkpoints after the architecture rather than "model".

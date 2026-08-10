@@ -124,18 +124,19 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         if let path = weightsPath {
             resolvedPath = path
         } else {
-            let requiredFiles = ModelFiles.standard(precision)
-            // Check if already downloaded
+            // Present-to-load is the weights alone: the MossFormer2Config above is
+            // constructed here, not read from a config.json. The download manifest
+            // stays complete. See ModelFiles.standardRequired.
             if let cached = ModelDownloader.shared.localPath(
                 for: modelType.huggingFaceRepo,
-                matching: requiredFiles
+                matching: ModelFiles.standardRequired(precision)
             ) {
                 resolvedPath = cached.appendingPathComponent(precision.weightsFilename).path
             } else {
                 // Auto-download from HuggingFace
                 let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
                     repo: modelType.huggingFaceRepo,
-                    matching: requiredFiles
+                    matching: ModelFiles.standard(precision)
                 )
                 resolvedPath = modelDir.appendingPathComponent(precision.weightsFilename).path
             }

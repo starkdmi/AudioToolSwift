@@ -87,23 +87,26 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
         if let path = weightsPath {
             resolvedPath = path
         } else {
-            let requiredFiles = ModelFiles.standard(precision)
-            // Check if already downloaded
+            // Two different questions, two different lists. What must be present
+            // to load is the weights alone - this pipeline's configuration is
+            // built above, not read from a config.json. What to fetch when a
+            // download is needed stays the full manifest, so a snapshot arrives
+            // complete. See ModelFiles.standardRequired.
             if let cached = ModelDownloader.shared.localPath(
                 for: Self.repo,
-                matching: requiredFiles
+                matching: ModelFiles.standardRequired(precision)
             ) {
                 resolvedPath = cached.appendingPathComponent(precision.weightsFilename).path
             } else {
                 // Auto-download from HuggingFace
                 let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
                     repo: Self.repo,
-                    matching: requiredFiles
+                    matching: ModelFiles.standard(precision)
                 )
                 resolvedPath = modelDir.appendingPathComponent(precision.weightsFilename).path
             }
         }
-        
+
         try candidate.loadWeights(from: resolvedPath)
         try Task.checkCancellation()
         pipeline = candidate
@@ -429,17 +432,19 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     private func resolveWeightsPath() async throws -> String {
         if let path = weightsPath { return path }
 
+        // Present-to-load is the weights alone; `load()` above calls nothing but
+        // `loadWeights`. The download manifest stays complete. See
+        // ModelFiles.standardRequired.
         let filename = precision.weightsFilename
-        let requiredFiles = ModelFiles.standard(precision)
         if let cached = ModelDownloader.shared.localPath(
             for: Self.repo,
-            matching: requiredFiles
+            matching: ModelFiles.standardRequired(precision)
         ) {
             return cached.appendingPathComponent(filename).path
         }
         let modelDir = try await ModelDownloader.shared.downloadAndGetPath(
             repo: Self.repo,
-            matching: requiredFiles
+            matching: ModelFiles.standard(precision)
         )
         return modelDir.appendingPathComponent(filename).path
     }
