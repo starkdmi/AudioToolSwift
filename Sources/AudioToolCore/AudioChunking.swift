@@ -376,8 +376,16 @@ public extension ChunkingConfig {
     /// also cost throughput: halving the stride is 1.5x the model calls, and every
     /// output sample was a weighted sum of two model runs instead of one. End to
     /// end the correction is worth less than that - about 1.10x on a 30 s file -
-    /// because roughly 80% of this provider's time is the 16 -> 48 kHz resample and
-    /// `bandwidthSub`, neither of which chunking touches.
+    /// because the model call dominates and chunking only changes how many of them
+    /// there are.
+    ///
+    /// This comment used to claim roughly 80% of the provider's time was the
+    /// 16 -> 48 kHz resample and `bandwidthSub`. That was wrong by an order of
+    /// magnitude and sent one round of optimisation at the wrong stage. Measured
+    /// per 4 s chunk on an M1 Pro: model forward 1503 ms, `bandwidthSub` 108 ms,
+    /// `melSpectrogram` 1.2 ms, with the resample about 870 ms for a whole 136 s
+    /// file. Resample plus `bandwidthSub` is nearer 7%, so deleting both outright
+    /// would not buy what chunking already does.
     static func mossformer2SR48K(sampleRate: Int = 48000) -> ChunkingConfig {
         ChunkingConfig(
             chunkDuration: 4.0,
