@@ -16,7 +16,7 @@ import MossFormer2SR
 // MARK: - MossFormer2 SR 48K Provider (Super Resolution)
 
 /// MLX MossFormer2 Super Resolution - upsamples audio to 48kHz
-/// Chunking: 4s chunks, 50% overlap, Hann window (from benchmarks)
+/// Chunking: 4s chunks, 25% overlap, discard-edges - the reference's numbers.
 public actor MossFormer2SR48KProvider: AudioUpscaler {
     
     /// HuggingFace repository for model weights
@@ -53,7 +53,34 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     private let configPath: String?
     private let precision: ModelPrecision
     
-    /// Max audio without chunking (seconds at 48kHz)
+    /// Max audio processed in one pass, in seconds.
+    ///
+    /// The reference's equivalent is `one_time_decode_length = 20.0`, and this
+    /// deliberately does not match it. Measured on an M1 Pro, 16 GB, with the
+    /// process MLX caps this package applies (3 GB cache, 8.8 GB memory):
+    ///
+    /// | direct input | RTF  | peak footprint |
+    /// | ------------ | ---- | -------------- |
+    /// |  6 s         | 2.6x | 5.6 GB         |
+    /// | 10 s         | 2.6x | 8.2 GB         |
+    /// | 12 s         | 2.7x | 8.8 GB         |
+    /// | 19 s         | 2.7x | 8.9 GB         |
+    ///
+    /// The direct path's throughput is flat - all of its advantage is simply not
+    /// chunking - while its peak grows about linearly and reaches the memory limit
+    /// by twelve seconds. At the reference's twenty it is past it, and on this
+    /// machine that means swapping rather than failing, which is worse.
+    ///
+    /// So the divergence here is a memory decision and is not the same kind of
+    /// thing as the chunking strategy that used to sit alongside it: 50% Hann
+    /// overlap-add differed from the reference for no recorded reason and cost
+    /// throughput, and has been corrected. This costs throughput to stay inside a
+    /// budget, on purpose.
+    ///
+    /// Chunked processing holds a flat 4.9 GB at any length, so the trade is
+    /// roughly 2.7x at up to `maxDirectDuration` against 1.4x and bounded memory
+    /// beyond it. Raising this is safe on a machine with more headroom; it wants
+    /// to become a parameter rather than a constant before anyone does that.
     private let maxDirectDuration: Float = 4.0
     
     /// Initialize with precision (auto-downloads from HuggingFace)
@@ -145,8 +172,13 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         return try await processChunk(audio48k, model: model)
     }
     
-    /// Process with chunking using MLXOverlap
-    /// Uses Hann weighted overlap-add for smooth blending
+    /// Process with chunking, discarding overlap rather than blending it.
+    ///
+    /// Matches `generate.py`'s `give_up_length` assembly: each chunk contributes
+    /// its centre, the overlap either side is context for the model and is thrown
+    /// away, and the first chunk keeps its leading edge. See
+    /// ``ChunkingConfig/mossformer2SR48K(sampleRate:)`` for why this replaced a
+    /// Hann overlap-add.
     private func processWithChunking(_ input: AudioBuffer, model: MossFormer2_SR_48K) async throws -> AudioBuffer {
         let chunkingConfig = ChunkingConfig.mossformer2SR48K(sampleRate: outputSampleRate)
         let chunkSamples = chunkingConfig.chunkSamples
@@ -156,11 +188,9 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
             targetRate: outputSampleRate
         )
         let totalLength = source.totalLength
-        let window = MLXOverlap.hannWindow(length: chunkSamples).asArray(Float.self)
-        var assembler = IncrementalOverlapAdd(
+        var assembler = IncrementalDiscardEdges(
             chunkSamples: chunkSamples,
             stride: stride,
-            window: window,
             totalLength: totalLength
         )
         var output: [Float] = []
@@ -285,24 +315,20 @@ extension MossFormer2SR48KProvider: StreamableOutput {
         let chunkingConfig = ChunkingConfig.mossformer2SR48K(sampleRate: outputSampleRate)
         let chunkSamples = chunkingConfig.chunkSamples
         let stride = chunkingConfig.strideSamples
-        let window = MLXOverlap.hannWindow(length: chunkSamples).asArray(Float.self)
         var source = try SuperResolutionChunkSource(input: input, targetRate: outputSampleRate)
         let totalLength = source.totalLength
-        
-        // Streaming must produce the samples batch would. `IncrementalOverlapAdd`
-        // is the same weighted overlap-add as `MLXOverlap.reassembleOverlapAdd`,
-        // fed chunk by chunk.
-        //
-        // What was here before multiplied the first chunk by the rising half of the
-        // Hann window and never divided by the accumulated weight, so every stream
-        // opened with a `stride`-long fade-in from silence - a second and a half at
-        // 48 kHz - and the middle chunks were weighted but unnormalized too.
-        // Attaching a progress handler was enough to get that instead of the real
-        // output.
-        var assembler = IncrementalOverlapAdd(
+
+        // Streaming must produce the samples batch would, so it uses the same
+        // assembler. That contract is what previously went wrong here in a
+        // different way: an earlier version multiplied the first chunk by the
+        // rising half of a Hann window and never divided by the accumulated
+        // weight, so every stream opened with a `stride`-long fade-in from silence
+        // and attaching a progress handler was enough to get that instead of the
+        // real output. Discard-edges has no weights to normalize, which removes
+        // that class of bug rather than fixing an instance of it.
+        var assembler = IncrementalDiscardEdges(
             chunkSamples: chunkSamples,
             stride: stride,
-            window: window,
             totalLength: totalLength
         )
         var completedChunks = 0

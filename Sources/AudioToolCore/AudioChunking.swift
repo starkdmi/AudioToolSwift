@@ -362,12 +362,27 @@ public extension ChunkingConfig {
         )
     }
     
-    /// MossFormer2 SR 48K: 4s chunks, 50% overlap, Hann window
+    /// MossFormer2 SR 48K: 4s chunks, 25% overlap, discard-edges.
+    ///
+    /// These are the reference's numbers, not a local choice. `generate.py` in
+    /// `starkdmi/MossFormer2_SR_48K_MLX` sets `decode_window = 4.0`, advances by
+    /// `stride = int(window * 0.75)` - so a 25% overlap - and assembles with
+    /// `give_up_length = (window - stride) // 2`, discarding half the overlap at
+    /// each edge with no blending at all.
+    ///
+    /// This was 50% overlap with a Hann overlap-add until it was checked against
+    /// that file. Nothing recorded why, the comment said only "from benchmarks",
+    /// and it made SR the only model here using a strategy no reference uses. It
+    /// also cost throughput: halving the stride is 1.5x the model calls, and every
+    /// output sample was a weighted sum of two model runs instead of one. End to
+    /// end the correction is worth less than that - about 1.10x on a 30 s file -
+    /// because roughly 80% of this provider's time is the 16 -> 48 kHz resample and
+    /// `bandwidthSub`, neither of which chunking touches.
     static func mossformer2SR48K(sampleRate: Int = 48000) -> ChunkingConfig {
         ChunkingConfig(
             chunkDuration: 4.0,
-            overlapRatio: 0.50,
-            blendingStrategy: .hann,
+            overlapRatio: 0.25,
+            blendingStrategy: .discardEdges,
             sampleRate: sampleRate
         )
     }

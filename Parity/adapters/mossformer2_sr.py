@@ -24,8 +24,19 @@ The awkward one, because two things happen before the model does:
    librosa's output on the same 16 kHz samples, kept precisely so the seam can be
    checked against an implementation that is not the one under test.
 
-2. Above four seconds the 48 kHz signal is chunked with a Hann-weighted
-   overlap-add at 50%, which is a different strategy from every other model here.
+2. Above four seconds the 48 kHz signal is chunked at 25% with give_up_length
+   discard-edges assembly - `stride = int(window * 0.75)` and
+   `give_up_length = (window - stride) // 2`, exactly as the published
+   `generate.py` does it.
+
+   This said 50% and "hann_blend" until 2026-08-10, mirroring what the Swift
+   provider did rather than what the reference does. That is the wrong direction
+   for an adapter to face: it made the suite compare Swift against a Python
+   reimplementation of Swift, which passes by construction and cannot report a
+   divergence in the algorithm itself. Both sides now follow generate.py.
+
+   Artifacts generated before that date encode the old assembly and must be
+   regenerated; a stale one will fail rather than mislead, which is the intent.
 """
 
 from __future__ import annotations
@@ -42,8 +53,8 @@ SAMPLE_RATE = 48_000
 MAX_DIRECT_SECONDS = 4.0  # MLXSuperResolutionProvider.maxDirectDuration
 DIRECT_SECONDS = 3.0
 CHUNK_DURATION = 4.0      # ChunkingConfig.mossformer2SR48K
-OVERLAP_RATIO = 0.50
-STRATEGY = "hann_blend"
+OVERLAP_RATIO = 0.25
+STRATEGY = "discard_edges"
 
 
 def _swift_upsampled(ctx, audio, short, rate):

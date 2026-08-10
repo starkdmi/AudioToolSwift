@@ -208,10 +208,13 @@ struct ChunkingConfigTests {
         #expect(se48k.overlapRatio == 0.25)
         print("MossFormer2 SE 48K: 4s, 25%, discard-edges ✓")
         
+        // Matches generate.py's `stride = int(window * 0.75)` and
+        // `give_up_length`, not the 50%/Hann this used to assert.
         let sr48k = ChunkingConfig.mossformer2SR48K()
         #expect(sr48k.chunkDuration == 4.0)
-        #expect(sr48k.overlapRatio == 0.5)
-        print("MossFormer2 SR 48K: 4s, 50%, hann ✓")
+        #expect(sr48k.overlapRatio == 0.25)
+        #expect(sr48k.blendingStrategy == .discardEdges)
+        print("MossFormer2 SR 48K: 4s, 25%, discard-edges ✓")
         
         let ss = ChunkingConfig.mossformer2SS()
         #expect(ss.chunkDuration == 4.0)

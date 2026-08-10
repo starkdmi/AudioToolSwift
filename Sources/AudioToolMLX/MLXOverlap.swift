@@ -602,3 +602,91 @@ public struct IncrementalOverlapAdd: Sendable {
         return ready
     }
 }
+
+// MARK: - Discard-edges assembly
+
+/// Chunk assembly by discarding overlap rather than blending it.
+///
+/// The strategy the MossFormer2 references use, spelled `give_up_length` in
+/// `generate.py`:
+///
+/// ```python
+/// stride = int(window * 0.75)                  # 25% overlap
+/// give_up_length = (window - stride) // 2      # half the overlap, each side
+/// ```
+///
+/// Each chunk contributes exactly `stride` samples - its centre - and the
+/// `give_up_length` at either end is thrown away. Consecutive contributions are
+/// therefore *disjoint and contiguous*: there is no crossfade, no accumulator and
+/// no divide. The overlap exists only so the model sees context either side of the
+/// region it is trusted for.
+///
+/// The first chunk is the sole exception. It keeps its leading edge, because
+/// nothing precedes it to have supplied that context.
+///
+/// Distinct from ``IncrementalOverlapAdd``, which blends. Both are correct
+/// assemblies; which one a model wants is a property of the model, and for the
+/// MossFormer2 family the reference answer is this one. Expressing it as a
+/// rectangular window through the overlap-add path would very nearly work and
+/// would then divide by a zero weight across the first `give_up_length`, so it is
+/// written out rather than encoded as a window.
+public struct IncrementalDiscardEdges: Sendable {
+
+    private let chunkSamples: Int
+    private let stride: Int
+    private let giveUp: Int
+    private let totalLength: Int
+    private var emittedCount = 0
+
+    /// Samples emitted so far. Equals `totalLength` once ``finish()`` has run.
+    public var emittedSamples: Int { emittedCount }
+
+    /// - Parameters:
+    ///   - chunkSamples: Length of each processed chunk.
+    ///   - stride: Hop between consecutive chunk starts. `chunkSamples - stride`
+    ///     is the overlap, and half of it is discarded at each edge.
+    ///   - totalLength: Length of the finished output, used to trim padding.
+    public init(chunkSamples: Int, stride: Int, totalLength: Int) {
+        precondition(chunkSamples > 0, "Chunk length must be positive")
+        precondition(totalLength >= 0, "Total length must not be negative")
+        self.chunkSamples = chunkSamples
+        self.stride = max(1, stride)
+        self.giveUp = max(0, (chunkSamples - max(1, stride)) / 2)
+        self.totalLength = totalLength
+    }
+
+    /// Take one processed chunk and return the part of it that is final.
+    ///
+    /// - Parameters:
+    ///   - chunk: Processed samples for the chunk beginning at `startIdx`.
+    ///   - startIdx: Index of the chunk's first sample in the output.
+    /// - Returns: The chunk's centre, trimmed so the total never exceeds
+    ///   `totalLength`. Empty once the output is complete.
+    public mutating func add(_ chunk: [Float], startIdx: Int) -> [Float] {
+        guard emittedCount < totalLength else { return [] }
+        let keepStart = startIdx == 0 ? 0 : giveUp
+        let keepEnd = min(max(keepStart, chunkSamples - giveUp), chunk.count)
+        guard keepEnd > keepStart else { return [] }
+
+        var ready = Array(chunk[keepStart..<keepEnd])
+        let remaining = totalLength - emittedCount
+        if ready.count > remaining {
+            ready.removeLast(ready.count - remaining)
+        }
+        emittedCount += ready.count
+        return ready
+    }
+
+    /// Pad to `totalLength` if the chunks ran out early.
+    ///
+    /// The reference has the same shape: it zero-fills its output buffer up front
+    /// and the final `give_up_length` is never written, so a signal whose padded
+    /// length lands within half an overlap of the trim point ends in silence. This
+    /// reproduces that rather than inventing samples the reference does not have.
+    public mutating func finish() -> [Float] {
+        guard emittedCount < totalLength else { return [] }
+        let padding = [Float](repeating: 0, count: totalLength - emittedCount)
+        emittedCount = totalLength
+        return padding
+    }
+}

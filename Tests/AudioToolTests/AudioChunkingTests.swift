@@ -154,8 +154,12 @@ struct AudioChunkingTests {
         #expect(ganSE.chunkDuration == 1.594)
         #expect(ganSE.overlapRatio == 0.0)
         
+        // 25%, not 50%: `generate.py` advances by `int(window * 0.75)`. The 0.75
+        // is the stride, so the overlap is the remaining quarter. This asserted
+        // 0.5 while the reference said 0.25, which is how the divergence survived.
         let sr48k = ChunkingConfig.mossformer2SR48K()
         #expect(sr48k.chunkDuration == 4.0)
-        #expect(sr48k.overlapRatio == 0.5)
+        #expect(sr48k.overlapRatio == 0.25)
+        #expect(sr48k.blendingStrategy == .discardEdges)
     }
 }
