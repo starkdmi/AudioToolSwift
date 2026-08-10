@@ -113,6 +113,7 @@ def _swift_upsampled(ctx, audio, short, rate):
 
 def build(ctx: Context) -> list[ParityCase]:
     reference_dir = ctx.reference("python/mossformer2_sr_mlx")
+    original_dir = ctx.reference("python/mossformer2_sr_orig")
     source = ctx.fixture("AudioToolFluidAudioTests/Fixtures/sr_input_16k.wav")
 
     audio, rate = load_audio(source, mono=True)
@@ -120,13 +121,15 @@ def build(ctx: Context) -> list[ParityCase]:
         raise ValueError(f"{NAME} takes {INPUT_SAMPLE_RATE} Hz; {source.name} is {rate} Hz")
     short = audio[: int(DIRECT_SECONDS * INPUT_SAMPLE_RATE)]
 
+    with ctx.on_path(original_dir):
+        from bandwidth_sub import bandwidth_sub as original_bandwidth_sub
+
     with ctx.on_path(reference_dir):
         import librosa
         import mlx.core as mx
         from huggingface_hub import hf_hub_download
         from mlx.utils import tree_unflatten
 
-        from bandwidth_sub import bandwidth_sub
         from mel_spec import mel_spectrogram
         from mossformer2_sr_wrapper import AttrDict, MossFormer2_SR_48K
 
@@ -167,14 +170,30 @@ def build(ctx: Context) -> list[ParityCase]:
             return result[: len(chunk)]
 
         def substitute(upsampled_input: np.ndarray, raw: np.ndarray) -> np.ndarray:
-            """`generate.py`'s single bandwidth_sub, on the assembled signal."""
-            out = bandwidth_sub(
-                mx.array(np.ascontiguousarray(upsampled_input, dtype=np.float32)),
-                mx.array(np.ascontiguousarray(raw, dtype=np.float32)),
-                fs=SAMPLE_RATE,
+            """`generate.py`'s single bandwidth_sub, on the assembled signal.
+
+            Taken from `mossformer2_sr_orig`, which calls scipy directly, rather
+            than from the MLX port next to the model. The port reimplements
+            `butter` and `filtfilt` and approximates both: measured against the
+            original on identical samples it reaches 7.1 dB (lowpass) and
+            -1.5 dB (highpass) at a 187.5 Hz cutoff - a negative figure meaning
+            the error exceeds the signal - and 82.8 / 61.2 dB at the 3750 Hz
+            cutoff this case actually selects. Scoring Swift against that would
+            be scoring it against a broken filter.
+
+            `detect_bandwidth` is not one of the divergences; the port
+            reproduces the original's crossover exactly. Only the filters
+            differ, so only they are taken from here. The model stays compared
+            against the MLX port, which is what the Swift model was ported from.
+            """
+            return np.asarray(
+                original_bandwidth_sub(
+                    np.ascontiguousarray(upsampled_input, dtype=np.float32),
+                    np.ascontiguousarray(raw, dtype=np.float32),
+                    fs=SAMPLE_RATE,
+                ),
+                dtype=np.float32,
             )
-            mx.eval(out)
-            return np.asarray(out, dtype=np.float32)
 
         upsampled, upsampled_short = _swift_upsampled(ctx, audio, short, rate)
         direct = substitute(upsampled_short, generate(upsampled_short, pad=False))
@@ -218,7 +237,7 @@ def build(ctx: Context) -> list[ParityCase]:
         "reference_files": [
             reference_dir / "generate.py",
             reference_dir / "mossformer2_sr_wrapper.py",
-            reference_dir / "bandwidth_sub.py",
+            original_dir / "bandwidth_sub.py",
         ],
         "extra_common": None,
     }

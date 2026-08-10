@@ -127,23 +127,35 @@ enum ParityThresholds {
         //     So the crossover between the upsampled original and the model's
         //     reconstruction was redetected every 3 s: over 136 s of speech it
         //     ranged 187.5 Hz to 6937.5 Hz against a single global 4875 Hz. The
-        //     adapter mirrored the same placement, so this case could not see it -
-        //     the identical fault as (2), one layer down.
+        //     adapter mirrored the same placement, so this case could not see it.
+        //     Two more hid behind it - filtering each chunk's own raw output
+        //     misses the step assembly leaves where chunks meet (57.5 dB at the
+        //     seams), and the zero-padded final chunk made `filtfilt` reflect
+        //     about a step down to silence, costing the tail of every file.
         //
-        //     Two further faults hid behind it, both found by localising the error
-        //     rather than reasoning about it. Filtering each chunk's own raw output
-        //     misses the step that assembly leaves where chunks meet, which the
-        //     reference highpasses straight across: 57.5 dB at the seams against
-        //     107-112 dB elsewhere. And the last chunk is zero-padded out to the
-        //     chunk length, so `filtfilt` reflected about a step down to silence
-        //     instead of about the last real sample - the tail of every file, and
-        //     only the tail.
+        // (5) The substitution is now compared against `mossformer2_sr_orig`,
+        //     which calls scipy directly, rather than against the MLX port that
+        //     sits next to the model. The port reimplements `butter` and
+        //     `filtfilt` and approximates both badly: measured against the
+        //     original on identical samples it reaches 7.1 dB (lowpass) and
+        //     -1.5 dB (highpass) at a 187.5 Hz cutoff - negative, so the error
+        //     exceeds the signal - and 82.8 / 61.2 dB at the 3750 Hz cutoff this
+        //     case selects. Two defects in SwiftAudio were found by that
+        //     comparison and fixed in 1.4.0 and 1.5.0: a Float32 coefficient
+        //     design that was ill-conditioned at both ends of the range, and a
+        //     fabricated `lfilter_zi` that reduced to zero, so `filtfilt` never
+        //     started in steady state.
         //
-        //     Measured 107.8 dB with all three fixed, max abs diff 8.0e-06, which
-        //     is the same number the reference recipe scores against its own
-        //     artifact. Floored at 100.
-        "mossformer2_sr_48k.enhanced": 100,
-        "mossformer2_sr_48k_direct.enhanced": 100,
+        //     `detect_bandwidth` is not one of the divergences - the port
+        //     reproduces the original's crossover exactly - so only the filters
+        //     are taken from there. The model stays compared against the MLX
+        //     port, which is what the Swift model was ported from.
+        //
+        //     Measured 114.8 dB chunked and 116.4 dB direct against the
+        //     original, both round-off. Against the port the same code reads
+        //     96.4 dB, and that gap is the port. Floored at 110.
+        "mossformer2_sr_48k.enhanced": 110,
+        "mossformer2_sr_48k_direct.enhanced": 110,
 
         // The 16 -> 48 kHz upsample on its own, Swift's AVAudioConverter against
         // librosa's soxr_hq. Measured 45.3 dB, floored at 40.
