@@ -10,6 +10,7 @@ import Testing
 import AudioToolTestSupport
 import MLX
 @testable import AudioToolMLX
+@testable import USSMLXSwift
 
 /// Streaming reassembly against the batch reassembly it is supposed to match.
 ///
@@ -274,5 +275,48 @@ struct MLXCachePolicyTests {
             cacheMemory: .max,
             chunkInterval: 0
         ))
+    }
+}
+
+@Suite("MLX process memory policy")
+struct MLXProcessLimitsTests {
+
+    /// The cap and the hard trim ceiling are the same number by construction.
+    ///
+    /// They were 3 GB and 2 GB, so the "hard ceiling" the trimming code aimed at
+    /// sat *below* the cap and could never be the binding constraint. Tying them
+    /// means the periodic trim and MLX's own reclaim agree about what full means.
+    @Test("Hard trim ceiling equals the cache cap")
+    func ceilingMatchesCap() {
+        #expect(MLXCachePolicy.hardCeilingBytes == MLXCachePolicy.cacheLimitBytes)
+        // The periodic threshold has to stay strictly under the ceiling, or every
+        // trim would take the hard-ceiling branch and the interval would be dead.
+        #expect(MLXCachePolicy.defaultThresholdBytes < MLXCachePolicy.hardCeilingBytes)
+    }
+
+    /// A limit large enough to load with, small enough to leave the host a machine.
+    @Test("Memory limit is bounded by the device, not by MLX's default")
+    func memoryLimitIsDeviceSized() {
+        let limit = MLXCachePolicy.memoryLimitBytes
+        let info = GPU.deviceInfo()
+
+        #expect(limit >= 2 * 1024 * 1024 * 1024, "must not floor below a loadable size")
+        #expect(limit <= info.memorySize, "must not exceed physical memory")
+        if info.maxRecommendedWorkingSetSize > 0 {
+            #expect(limit <= Int(info.maxRecommendedWorkingSetSize))
+        }
+        // MLX's own default is 1.5x the recommended working set. Being at or above
+        // that would mean this policy is not doing anything.
+        #expect(limit < Int(Double(info.maxRecommendedWorkingSetSize) * 1.5))
+    }
+
+    /// `USSMLXSwift` sits below `AudioToolMLX`, so the two cannot share a constant
+    /// and each sets the process-global limits itself. Nothing but this test stops
+    /// them drifting, and drift means the limit in force depends on which module
+    /// happened to touch MLX first.
+    @Test("USSInference mirrors the same limits")
+    func ussMirrorsTheLimits() {
+        #expect(USSInference.mlxCacheLimitBytes == MLXCachePolicy.cacheLimitBytes)
+        #expect(USSInference.mlxMemoryLimitBytes == MLXCachePolicy.memoryLimitBytes)
     }
 }

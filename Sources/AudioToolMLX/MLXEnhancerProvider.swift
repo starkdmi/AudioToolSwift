@@ -76,6 +76,13 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     
     /// Load model weights (downloads if not cached)
     public func load() async throws {
+        // Before the first allocation, not at the first chunk boundary.
+        // `trimIfNeeded` used to be the only thing that applied these, so a
+        // provider ran its load and its opening chunks under MLX's own default
+        // ceiling and the cache had already grown past the cap by the time the
+        // cap arrived. Measured on Demucs: 5.1 GB peak applying it late against
+        // 3.2 GB applying it here.
+        MLXCachePolicy.applyProcessLimits()
         // Disable normalization to match Python behavior - critical for clean background extraction
         let config = Mossformer2MLXSwift.PipelineConfiguration(
             enableFloat16: precision == .fp16,
@@ -414,6 +421,13 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
 
     /// Load model weights (downloads if not cached)
     public func load() async throws {
+        // Before the first allocation, not at the first chunk boundary.
+        // `trimIfNeeded` used to be the only thing that applied these, so a
+        // provider ran its load and its opening chunks under MLX's own default
+        // ceiling and the cache had already grown past the cap by the time the
+        // cap arrived. Measured on Demucs: 5.1 GB peak applying it late against
+        // 3.2 GB applying it here.
+        MLXCachePolicy.applyProcessLimits()
         let resolvedPath = try await resolveWeightsPath()
         let candidate = FRCRN_SE_16K()
         try candidate.loadWeights(from: resolvedPath)

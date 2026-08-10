@@ -10,18 +10,44 @@ public class USSInference {
     /// serializes unrelated inference and defeats allocator reuse, so long-running
     /// USS jobs only trim periodically once cached allocations are substantial.
     private static let cacheTrimInterval = 8
-    private static let cacheTrimThresholdBytes = 512 * 1024 * 1024
+    /// A quarter of `mlxCacheLimitBytes`, scaled with it. See the note there.
+    private static let cacheTrimThresholdBytes = 128 * 1024 * 1024
 
     /// The interval is a politeness measure, not a bound - past this, trim at the
     /// next segment regardless of where the interval falls.
     private static let cacheTrimHardCeilingBytes = 4 * cacheTrimThresholdBytes
 
-    /// MLX's default cache ceiling is the device's recommended working set, which on
-    /// a 16 GB Mac is about 10.6 GB. Without an explicit cap a segmented job's
-    /// resident size tracks the machine rather than the work. This is a process-global
-    /// setting; `MLXCachePolicy.cacheLimitBytes` mirrors it, because `USSMLXSwift`
-    /// sits below `AudioToolMLX` and the two cannot share a constant.
-    static let mlxCacheLimitBytes = 3 * 1024 * 1024 * 1024
+    /// MLX's default cache ceiling is the memory limit, which is itself 1.5x the
+    /// device's recommended working set - so without an explicit cap a segmented
+    /// job's resident size tracks the machine rather than the work.
+    ///
+    /// 512 MB, down from 3 GB. Measured across a 24x sweep of this value, on both a
+    /// direct forward pass and a chunked one, throughput did not move outside noise
+    /// - so the larger cache was retaining memory the host could not use and buying
+    /// nothing. See `MLXCachePolicy.cacheLimitBytes` for the numbers.
+    ///
+    /// Process-global, and mirrored by `MLXCachePolicy.cacheLimitBytes` because
+    /// `USSMLXSwift` sits below `AudioToolMLX` and the two cannot share a constant.
+    /// Change both together.
+    static let mlxCacheLimitBytes = 512 * 1024 * 1024
+
+    /// Ceiling on total MLX allocation, mirroring `MLXCachePolicy.memoryLimitBytes`.
+    ///
+    /// Applied here as well as there because a host that links only `AudioToolUSS`
+    /// never runs `MLXCachePolicy`, and would otherwise keep MLX's default of 1.5x
+    /// the recommended working set with nothing applying backpressure.
+    ///
+    /// Backpressure rather than a wall: `relaxed` defaults to true, so past the
+    /// limit MLX waits on scheduled work and then allocates anyway.
+    static let mlxMemoryLimitBytes: Int = {
+        let info = GPU.deviceInfo()
+        var limit = info.memorySize / 5 * 3
+        let recommended = Int(info.maxRecommendedWorkingSetSize)
+        if recommended > 0 {
+            limit = min(limit, recommended)
+        }
+        return max(limit, 2 * 1024 * 1024 * 1024)
+    }()
 
 
     private let model: ResUNet30
@@ -294,13 +320,14 @@ public class USSInference {
         GPU.clearCache()
     }
 
-    /// Idempotent. See `mlxCacheLimitBytes`.
+    /// Idempotent. See `mlxCacheLimitBytes` and `mlxMemoryLimitBytes`.
     static func applyMLXCacheLimit() {
-        _ = cacheLimitApplied
+        _ = limitsApplied
     }
 
-    private static let cacheLimitApplied: Void = {
+    private static let limitsApplied: Void = {
         GPU.set(cacheLimit: mlxCacheLimitBytes)
+        GPU.set(memoryLimit: mlxMemoryLimitBytes)
     }()
     
     

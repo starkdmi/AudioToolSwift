@@ -109,6 +109,13 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     
     /// Load model weights (downloads if not cached)
     public func load() async throws {
+        // Before the first allocation, not at the first chunk boundary.
+        // `trimIfNeeded` used to be the only thing that applied these, so a
+        // provider ran its load and its opening chunks under MLX's own default
+        // ceiling and the cache had already grown past the cap by the time the
+        // cap arrived. Measured on Demucs: 5.1 GB peak applying it late against
+        // 3.2 GB applying it here.
+        MLXCachePolicy.applyProcessLimits()
         let config = MossFormer2Config(
             encoder_embedding_dim: 512,
             mossformer_sequence_dim: 512,
@@ -399,6 +406,13 @@ public actor DemucsProvider: MusicSeparator {
 
     /// Load all four source models
     public func loadAll() async throws {
+        // Before the first allocation, not at the first chunk boundary.
+        // `trimIfNeeded` used to be the only thing that applied these, so a
+        // provider ran its load and its opening chunks under MLX's own default
+        // ceiling and the cache had already grown past the cap by the time the
+        // cap arrived. Measured on Demucs: 5.1 GB peak applying it late against
+        // 3.2 GB applying it here.
+        MLXCachePolicy.applyProcessLimits()
         let directory = try await resolveWeightsDirectory(for: Stem.allCases)
         var candidates: [Stem: HTDemucs] = [:]
         for stem in Stem.allCases {
@@ -435,6 +449,13 @@ public actor DemucsProvider: MusicSeparator {
 
     /// Load a specific source model, fetching its weights if needed
     public func load(stem: Stem) async throws {
+        // Before the first allocation, not at the first chunk boundary.
+        // `trimIfNeeded` used to be the only thing that applied these, so a
+        // provider ran its load and its opening chunks under MLX's own default
+        // ceiling and the cache had already grown past the cap by the time the
+        // cap arrived. Measured on Demucs: 5.1 GB peak applying it late against
+        // 3.2 GB applying it here.
+        MLXCachePolicy.applyProcessLimits()
         let directory = try await resolveWeightsDirectory(for: [stem])
         try loadSync(stem: stem, weightsDirectory: directory)
     }
@@ -741,6 +762,13 @@ extension DemucsProvider: ManagedModel {
     /// only need vocals. Residency-managed loading deliberately requires all four
     /// stems because `ManagedModel` treats this provider as one loadable unit.
     public func load() async throws {
+        // Before the first allocation, not at the first chunk boundary.
+        // `trimIfNeeded` used to be the only thing that applied these, so a
+        // provider ran its load and its opening chunks under MLX's own default
+        // ceiling and the cache had already grown past the cap by the time the
+        // cap arrived. Measured on Demucs: 5.1 GB peak applying it late against
+        // 3.2 GB applying it here.
+        MLXCachePolicy.applyProcessLimits()
         try await loadAll()
     }
 

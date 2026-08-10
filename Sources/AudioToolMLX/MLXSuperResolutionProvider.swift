@@ -99,6 +99,13 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     
     /// Load model with config and weights (downloads if not cached)
     public func load() async throws {
+        // Before the first allocation, not at the first chunk boundary.
+        // `trimIfNeeded` used to be the only thing that applied these, so a
+        // provider ran its load and its opening chunks under MLX's own default
+        // ceiling and the cache had already grown past the cap by the time the
+        // cap arrived. Measured on Demucs: 5.1 GB peak applying it late against
+        // 3.2 GB applying it here.
+        MLXCachePolicy.applyProcessLimits()
         let resolvedWeightsPath: String
         let resolvedConfigPath: String
         
