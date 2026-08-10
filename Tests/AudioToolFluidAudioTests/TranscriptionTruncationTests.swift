@@ -28,13 +28,9 @@ final class TranscriptionTruncationTests: IntegrationTestCase {
     /// of context from the previous chunk to provide proper mel spectrogram
     /// left context for subsequent chunks.
     func testHarryPotterTranscriptionNotTruncated() async throws {
-        // Load harry_potter.wav (136s audio)
-        let testPath = "/path/to/ProjectTwo/Docs/harry_potter.wav"
-        let testURL = URL(fileURLWithPath: testPath)
-        
-        guard FileManager.default.fileExists(atPath: testPath) else {
-            throw XCTSkip("harry_potter.wav not found at \(testPath)")
-        }
+        // This exact-content regression remains in the optional private pool;
+        // standalone/public clones skip it cleanly.
+        let testURL = try reference("Docs/harry_potter.wav")
         
         print("\n=== Transcription Truncation Regression Test ===\n")
         
@@ -107,9 +103,9 @@ final class TranscriptionTruncationTests: IntegrationTestCase {
     /// Test that short audio (< 15s, single chunk) still works correctly
     /// This verifies the mel context logic doesn't break the first chunk
     func testShortAudioTranscription() async throws {
-        // Use watson_30s.wav fixture if available, or skip
+        // Use the redistributable dialogue fixture if available, or skip.
         guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("watson_30s.wav fixture not found")
+            throw XCTSkip("speech_dialogue.wav fixture not found")
         }
         
         let loader = AudioLoader(config: AudioLoader.Configuration(

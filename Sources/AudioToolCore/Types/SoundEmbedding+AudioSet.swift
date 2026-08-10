@@ -8,7 +8,7 @@
 import Foundation
 
 // Generated from AudioSet's class_labels_indices.csv. The ontology is published by
-// Google under CC BY 4.0; see Docs/licenses.md for the attribution that ships with it.
+// Google under CC BY-SA 4.0; see Docs/licenses.md for attribution and ShareAlike details.
 //
 // Held as data rather than a bundle resource, matching the presets: no I/O, no
 // Bundle.module, works identically in a test, an app and a command line tool.

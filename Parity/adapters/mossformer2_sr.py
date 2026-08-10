@@ -16,8 +16,13 @@ The awkward one, because two things happen before the model does:
    So the 48 kHz input is not re-derived here: `Parity/inputs/sr_upsampled_48k*.wav`
    is Swift's own resampler output, exported by ParityInputExportTests and loaded
    below. Both sides now start from identical samples and what is left in the
-   comparison is the model. `upsampled_48k` in the artifact is that same signal,
-   so the Swift side can check its resampler against it separately.
+   comparison is the model.
+
+   That moves the resampler out of the comparison, so it needs its own yardstick
+   or it is simply untested. `upsampled_48k` is the shared input - Swift's - and
+   comparing Swift against it measures nothing at all. `upsampled_48k_librosa` is
+   librosa's output on the same 16 kHz samples, kept precisely so the seam can be
+   checked against an implementation that is not the one under test.
 
 2. Above four seconds the 48 kHz signal is chunked with a Hann-weighted
    overlap-add at 50%, which is a different strategy from every other model here.
@@ -136,6 +141,37 @@ def build(ctx: Context) -> list[ParityCase]:
         upsampled, upsampled_short = _swift_upsampled(ctx, audio, short, rate)
         direct = upscale(upsampled_short, pad=False)
 
+        # The independent reading of the same seam. Stored at exactly 3x the input
+        # length so the Swift side can compare it sample for sample; librosa
+        # returns that already for an integer ratio, and an off-by-one here would
+        # be a length mismatch reported as a content difference.
+        def _librosa_upsampled(signal: np.ndarray) -> np.ndarray:
+            resampled = librosa.resample(
+                signal, orig_sr=rate, target_sr=SAMPLE_RATE, res_type="soxr_hq"
+            )
+            expected = len(signal) * (SAMPLE_RATE // rate)
+            if len(resampled) != expected:
+                raise ValueError(
+                    f"librosa returned {len(resampled)} samples for {len(signal)} at "
+                    f"{rate} -> {SAMPLE_RATE} Hz; expected {expected}"
+                )
+            return np.asarray(resampled, dtype=np.float32)
+
+        librosa_upsampled = _librosa_upsampled(audio)
+        librosa_upsampled_short = _librosa_upsampled(short)
+
+        # Inside the path context, not in the return below. `bandwidth_sub` reaches
+        # `mlx_filters.detect_bandwidth`, which does `from stft import ...` lazily -
+        # on the first chunk, not at import time. `on_path` drops what the block
+        # imported when it exits, so a `chunked` call placed in the return statement
+        # re-triggers that import with the reference directory no longer on the
+        # path, and generation dies on ModuleNotFoundError after the model has run.
+        enhanced = chunked(
+            ctx, upsampled, SAMPLE_RATE,
+            chunk_duration=CHUNK_DURATION, overlap_ratio=OVERLAP_RATIO,
+            strategy=STRATEGY, process_fn=upscale,
+        )
+
     shared = {
         "source_audio": source,
         "reference_files": [
@@ -154,20 +190,20 @@ def build(ctx: Context) -> list[ParityCase]:
             tensors={
                 "input": audio,
                 "upsampled_48k": upsampled,
-                "enhanced": chunked(
-                    ctx, upsampled, SAMPLE_RATE,
-                    chunk_duration=CHUNK_DURATION, overlap_ratio=OVERLAP_RATIO,
-                    strategy=STRATEGY, process_fn=upscale,
-                ),
+                "upsampled_48k_librosa": librosa_upsampled,
+                "enhanced": enhanced,
             },
             notes=(
                 f"Chunked at {CHUNK_DURATION}s / {OVERLAP_RATIO:.0%} / {STRATEGY}, matching "
-                "ChunkingConfig.mossformer2SR48K. Contains the resampler as well as "
-                "the model; `upsampled_48k` is librosa's output for isolating it."
+                "ChunkingConfig.mossformer2SR48K. The resampler is not in this "
+                "comparison: both sides start from `upsampled_48k`, which is Swift's "
+                "own 48 kHz output. `upsampled_48k_librosa` is librosa's, for checking "
+                "that seam against something other than the code under test."
             ),
             extra={
                 "input_sample_rate": INPUT_SAMPLE_RATE, "repo": repo,
                 "resampler": "Swift AVAudioConverter (Mastering/.max), via Parity/inputs",
+                "resampler_reference": "librosa.resample soxr_hq, in upsampled_48k_librosa",
                 "chunk_duration": CHUNK_DURATION, "overlap_ratio": OVERLAP_RATIO,
                 "strategy": STRATEGY,
             },
@@ -179,16 +215,19 @@ def build(ctx: Context) -> list[ParityCase]:
             tensors={
                 "input": short,
                 "upsampled_48k": upsampled_short,
+                "upsampled_48k_librosa": librosa_upsampled_short,
                 "enhanced": direct,
             },
             notes=(
                 f"{DIRECT_SECONDS:g}s in, {DIRECT_SECONDS:g}s out - under the provider's "
                 f"{MAX_DIRECT_SECONDS:g}s maxDirectDuration, so neither side chunks. "
-                "Still contains the resampler."
+                "The resampler is not in this comparison either; "
+                "`upsampled_48k_librosa` is where it gets measured."
             ),
             extra={
                 "input_sample_rate": INPUT_SAMPLE_RATE, "repo": repo,
                 "resampler": "Swift AVAudioConverter (Mastering/.max), via Parity/inputs",
+                "resampler_reference": "librosa.resample soxr_hq, in upsampled_48k_librosa",
                 "seconds": DIRECT_SECONDS, "chunked": False,
             },
             **shared,

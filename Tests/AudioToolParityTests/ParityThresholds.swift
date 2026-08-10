@@ -32,7 +32,12 @@ enum ParityThresholds {
     /// cases is worse than no suite. Cases still under investigation are listed at
     /// the bottom and deliberately left out.
     static let minimumSNR: [String: Double] = [
-        // USS. Measured 102.5 and 131.1 dB - the port is float32-exact.
+        // USS. Measured 139.3 and 119.3 dB - the port is float32-exact.
+        //
+        // The two swapped rank when the case moved to speech_music_32k: on the old
+        // clip speech read 102.5 and music 131.1. Which condition separates more
+        // cleanly is a property of the input, not of the port, so the floors are
+        // left where the first run put them.
         "uss_resunet30_32k.separated_speech": 90,
         "uss_resunet30_32k.separated_music": 110,
 
@@ -75,8 +80,10 @@ enum ParityThresholds {
         "mossformer2_se_48k_direct.enhanced": 70,
 
         // MossFormer2 SS, all three configurations, chunked at 4s/25%/triangular.
-        // Measured 91.5 to 107.5 dB. Previously 11.7 to 36.2 dB against whole-file
-        // references - every one of those was the harness, not the port.
+        // Measured 103.5 to 125.9 dB on the CC0 mixtures, 91.5 to 107.5 dB on the
+        // WSJ0-derived ones these cases used first. Previously 11.7 to 36.2 dB
+        // against whole-file references - every one of those was the harness, not
+        // the port.
         "mossformer2_ss_2spk_16k.speaker_1_normalized": 85,
         "mossformer2_ss_2spk_16k.speaker_2_normalized": 85,
         "mossformer2_ss_2spk_16k_direct.speaker_1_normalized": 85,
@@ -118,15 +125,29 @@ enum ParityThresholds {
         "mossformer2_sr_48k.enhanced": 95,
         "mossformer2_sr_48k_direct.enhanced": 100,
 
+        // The 16 -> 48 kHz upsample on its own, Swift's AVAudioConverter against
+        // librosa's soxr_hq. Measured 45.3 dB, floored at 40.
+        //
+        // The odd one out in this file: every other threshold is round-off between
+        // two implementations of one algorithm, and this is two different resampler
+        // designs, which agree to about 45 dB and always will. It is here because
+        // the two `enhanced` numbers above deliberately exclude the resampler - the
+        // reference consumes Swift's own 48 kHz signal - so without this the seam
+        // is covered by nothing. The floor is set to catch it breaking, not to
+        // claim the two filters are the same: defect (1) read 18.7 dB, and the wav
+        // round-trip path it replaced still reads 30.3.
+        "mossformer2_sr_48k_direct.upsampled_48k_librosa": 40,
+
         // Chatterbox conditioning, two cases. Every token tensor is bit-identical and
-        // the continuous ones measure 116.3/131.9/104.8 dB short and 120.5/134.7/109.4
+        // the continuous ones measure 116.7/137.1/103.5 dB short and 122.6/138.2/107.7
         // long - float32 round-off throughout. Exact equality is the only result worth
         // accepting for codebook indices, so the token floors sit at 120: one flipped
         // token reads about 19 dB and fails loudly.
         //
         // The short case was 43.6 dB and 11 of 75 tokens wrong before both sides were
-        // put on one specified resampler. See the note below, kept because the
-        // reasoning is not recoverable from the code.
+        // put on one specified resampler. That was measured on watson_short.wav,
+        // which the case no longer uses; the defect and the reasoning stand, and the
+        // note below is kept because neither is recoverable from the code.
         //
         // The long case is the one with teeth: 12 s at 22050 Hz, past both the 6 s and
         // 10 s conditioning windows, so the truncations run and the token tensors are

@@ -14,40 +14,39 @@ import MLX
 
 final class VADThresholdTests: IntegrationTestCase {
     
-    /// Test music.wav (35s trim from 25-60s) with different thresholds and settings
-    func testMusicWithVADSettings() async throws {
-        print("\n=== VAD Test: music_35s.wav ===")
-        print("Testing speech detection in music with singing\n")
+    /// Test the CC0 speech-over-music mixture with different VAD settings.
+    func testSpeechOverMusicWithVADSettings() async throws {
+        print("\n=== VAD Test: speech_music.wav ===")
+        print("Testing speech detection over instrumental music\n")
         
-        guard let testURL = Bundle.module.url(forResource: "music", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("music_35s.wav not found - run: ffmpeg -i music.mp3 -ss 25 -to 60 music_35s.wav")
+        guard let testURL = Bundle.module.url(forResource: "speech_music", withExtension: "wav", subdirectory: "Fixtures") else {
+            throw XCTSkip("speech_music.wav not found")
         }
         
         let results = try await runVADSettingsTest(url: testURL)
         
-        // Assertions for music file - should detect singing as speech with low threshold
+        // The Voice-Zero speech remains detectable over the CC0 instrumental bed.
         let lowThresholdResult = results.first { $0.description == "Very low threshold" }
         XCTAssertNotNil(lowThresholdResult, "Should have results for very low threshold")
         
         if let result = lowThresholdResult {
-            // Music with singing should have detectable speech at low thresholds
             XCTAssertGreaterThan(result.segments.count, 0, 
-                "Music with singing should have some detected segments at low threshold")
+                "Speech over music should have detected segments at low threshold")
         }
     }
     
-    /// Test billions.wav with different thresholds and duration settings
-    func testBillionsWithVADSettings() async throws {
-        print("\n=== VAD Test: billions.wav ===")
-        print("Testing speech detection in music/singing with different settings\n")
+    /// Test the stereo multi-speaker fixture with different VAD settings.
+    func testMultiSpeakerWithVADSettings() async throws {
+        print("\n=== VAD Test: multi_speaker.wav ===")
+        print("Testing two-speaker speech with different settings\n")
         
         guard let testURL = Bundle.module.url(forResource: "multi_speaker", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("billions.wav not found")
+            throw XCTSkip("multi_speaker.wav not found")
         }
         
         let results = try await runVADSettingsTest(url: testURL)
         
-        // Assertions for billions.wav - speech should be detected in the second half
+        // Speech should be detected under the default configuration.
         let defaultResult = results.first { $0.description == "Default" }
         XCTAssertNotNil(defaultResult, "Should have results for default threshold")
         

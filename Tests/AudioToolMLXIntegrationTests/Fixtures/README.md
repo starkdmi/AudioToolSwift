@@ -35,7 +35,9 @@ RUN_MLX_TESTS=1 xcodebuild test \
 
 ## Running MLX CLI Commands (Generate)
 
-**Important:** MLX code requires xcodebuild, NOT `swift run`, due to Metal shader resource bundling.
+**Important:** Xcode and `xcodebuild` compile and bundle MLX's Metal shaders
+automatically. Bare `swift run` does not. This is inherited from `mlx-swift`,
+not an additional requirement imposed by `mlx-swift-lm`.
 
 ```bash
 # Build the CLI with xcodebuild
@@ -59,6 +61,6 @@ xcodebuild build \
 # - chatterbox, cb      - ChatterBox TTS
 ```
 
-**Note:** `swift run` will fail with "Failed to load the default metallib" error.
-This is a known MLX Swift issue with SPM Metal resource bundling.
-
+**Note:** a bare `swift run` build will fail on its first MLX operation with
+“Failed to load the default metallib.” If command-line SwiftPM is intentional,
+build first and use `Scripts/build_mlx_metallib.sh`; otherwise use `xcodebuild`.

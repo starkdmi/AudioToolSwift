@@ -21,18 +21,18 @@ final class VADAccuracyTests: IntegrationTestCase {
         try await vad.load()
     }
     
-    /// Test VAD on billions.wav - speech should be in the last half
-    func testVADBillions() async throws {
-        print("\n=== VAD Test: billions.wav ===")
-        print("Expected: Speech in the last half of audio")
+    /// Test VAD on the spatialised stereo multi-speaker fixture.
+    func testVADMultiSpeaker() async throws {
+        print("\n=== VAD Test: multi_speaker.wav ===")
+        print("Expected: speech from two spatially separated speakers")
         
         guard let testURL = Bundle.module.url(forResource: "multi_speaker", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("billions.wav not found")
+            throw XCTSkip("multi_speaker.wav not found")
         }
         
         let result = try await runVADTest(url: testURL)
         
-        // Billions.wav should have speech segments
+        // The fixture should contain valid speech segments.
         // For difficult audio, VAD may not detect segments - that's acceptable behavior
         XCTAssertLessThanOrEqual(result.speechPercent, 100.0, 
             "Speech percentage should be valid")
@@ -44,18 +44,18 @@ final class VADAccuracyTests: IntegrationTestCase {
         }
     }
     
-    /// Test VAD on watson_30s.wav - interview with multiple speech segments
-    func testVADWatson() async throws {
-        print("\n=== VAD Test: watson_30s.wav ===")
-        print("Expected: Multiple speech segments from interview")
+    /// Test VAD on the mostly sequential two-speaker dialogue.
+    func testVADDialogue() async throws {
+        print("\n=== VAD Test: speech_dialogue.wav ===")
+        print("Expected: multiple speech segments with pauses")
         
         guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("watson_30s.wav not found")
+            throw XCTSkip("speech_dialogue.wav not found")
         }
         
         let result = try await runVADTest(url: testURL)
         
-        // Watson interview should have substantial speech
+        // The dialogue should have substantial speech.
         XCTAssertGreaterThan(result.segments.count, 0, 
             "Interview audio should have speech segments")
         XCTAssertGreaterThan(result.speechPercent, 20.0, 

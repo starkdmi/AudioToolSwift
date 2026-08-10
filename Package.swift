@@ -90,7 +90,7 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMinor(from: "1.1.6")),
 
         // Resampling, STFT, and audio I/O.
-        .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.2.1"),
+        .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.2.2"),
 
         // G2P for Kokoro TTS. A fork of mlalma/MisakiSwift whose only change is the
         // manifest - the Swift source at this revision is byte-identical to upstream
@@ -426,7 +426,7 @@ let package = Package(
             ],
             path: "Tests/AudioToolFluidAudioTests",
             // Declared so SwiftPM emits a resource bundle and Bundle.module exists.
-            // The audio itself is gitignored - see Fixtures/README.md.
+            // Fixture licensing and provenance are documented in Fixtures/README.md.
             resources: [
                 .copy("Fixtures")
             ],
@@ -446,7 +446,7 @@ let package = Package(
             ],
             path: "Tests/AudioToolUSSTests",
             // Declared so SwiftPM emits a resource bundle and Bundle.module exists.
-            // The audio itself is gitignored - see Fixtures/README.md.
+            // Fixture licensing and provenance are documented in Fixtures/README.md.
             resources: [
                 .copy("Fixtures")
             ],

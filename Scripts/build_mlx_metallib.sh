@@ -4,16 +4,21 @@
 #
 # Why this exists
 # ---------------
-# SwiftPM cannot compile .metal sources. mlx-swift ships Metal kernels under
-# Source/Cmlx/mlx-generated/metal but its Package.swift declares no resource,
-# plugin or binary target that turns them into a .metallib - that step only
-# happens in Xcode's build system. So `swift build` succeeds (the C++ and Swift
-# compile fine) and then every Metal operation fails at runtime with "Failed to
-# load the default metallib", because the library was never produced.
+# Bare command-line SwiftPM cannot compile MLX's .metal sources. mlx-swift ships
+# generated kernels under Source/Cmlx/mlx-generated/metal; Xcode's build system
+# turns them into default.metallib and bundles it automatically, while
+# `swift build`, `swift test` and `swift run` do not. The Swift/C++ build can
+# therefore succeed and the first Metal operation can still abort at runtime.
 #
-# This is upstream and unresolved: ml-explore/mlx-swift#349 is open, unassigned
-# and has no maintainer response, and its reporter proposes exactly what is
-# missing - that default.metallib be declared as a SwiftPM resource.
+# This is documented by mlx-swift itself:
+#   github.com/ml-explore/mlx-swift#swiftpm
+#   github.com/ml-explore/mlx-swift/issues/36
+#
+# It is inherited by mlx-swift-lm because that package runs on mlx-swift. It does
+# NOT require an extra step in an Xcode or xcodebuild workflow. This script is
+# only a local workaround for intentionally using bare SwiftPM (notably CI).
+# mlx-swift#349 is a separate Tuist resource-bundle issue and is not the basis
+# for this workaround.
 #
 # How the fix works
 # -----------------

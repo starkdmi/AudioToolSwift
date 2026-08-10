@@ -18,23 +18,26 @@ final class UpscalingParityTests: ParityTestCase {
 
     /// MossFormer2 SR, 16 kHz in -> 48 kHz out.
     ///
-    /// This is the one comparison with a resampler inside it. The reference
-    /// upsamples 16 -> 48 kHz with `librosa.resample` before the mel front-end, so
-    /// `enhanced` folds the resampler and the model into one number, and a
-    /// resampler difference is indistinguishable from a model difference here.
+    /// The resampler is deliberately *not* in this number. SR's first step is a
+    /// 16 -> 48 kHz upsample, Swift's `AVAudioConverter` and librosa's `soxr_hq`
+    /// agree at only about 45 dB, and SR amplifies that until the case reads 22 dB
+    /// while everything else sits at round-off. So the reference consumes Swift's
+    /// own 48 kHz signal (`Parity/inputs`, written by ``ParityInputExportTests``)
+    /// and both sides start from identical samples. What this compares is the
+    /// model.
     ///
-    /// That is why the artifact also carries `upsampled_48k`, librosa's output on
-    /// its own. Feeding the provider a pre-upsampled tensor would separate the two
-    /// cleanly, but there is no entry point for it today - the provider resamples
-    /// internally. Worth adding one; until then this number is the composite and
-    /// `upsampled_48k` is sitting there ready for a test of the seam alone.
+    /// The provider still resamples internally here, from the 16 kHz `input` - it
+    /// has no pre-upsampled entry point - so this passing depends on Swift
+    /// reproducing the exported signal, which is deterministic. The resampler
+    /// itself is measured separately, in
+    /// ``testSuperResolutionResamplerMatchesReference``, against librosa rather
+    /// than against Swift's own output.
     func testSuperResolutionMatchesReference() async throws {
         try await assertUpscaling(case: "mossformer2_sr_48k")
     }
 
     /// A 3-second clip, under the 4-second `maxDirectDuration`, so neither side
-    /// chunks. Still contains both resamplers, so a gap between this and the
-    /// chunked case separates the seams from the resampler.
+    /// chunks. A gap between this and the chunked case is the cost of the seams.
     func testSuperResolutionDirectMatchesReference() async throws {
         try await assertUpscaling(case: "mossformer2_sr_48k_direct")
     }
@@ -62,15 +65,25 @@ final class UpscalingParityTests: ParityTestCase {
     /// Isolate the 16 -> 48 kHz upsample, which is the first step of SR inference.
     ///
     /// SR is the only case that stayed wrong after its reference was chunked to
-    /// match - and it is wrong in the *direct* case too, where nothing chunks. So
-    /// the fault is upstream of the model. This reproduces
-    /// `MLXSuperResolutionProvider.resampleTo48k` exactly - float32 wav out,
-    /// AudioLoader back in at 48 kHz - and compares it against librosa's output,
-    /// which the artifact carries for this purpose.
+    /// match - and it was wrong in the *direct* case too, where nothing chunks. So
+    /// the fault was upstream of the model.
+    ///
+    /// The reference here is `upsampled_48k_librosa`, not `upsampled_48k`. The
+    /// latter is the signal Swift exported for the reference to consume, so
+    /// measuring Swift against it compares the resampler with itself and reports
+    /// `inf` - which is exactly what this test did until 2026-08-10, while its
+    /// comment claimed librosa. Since the SR cases hand the reference Swift's own
+    /// upsample, this is the only place the resampler is checked against an
+    /// implementation that is not the one under test.
+    ///
+    /// 45 dB is not round-off, and it is not supposed to be: two different
+    /// resampler designs agree to about that. The floor exists to catch the
+    /// resampler *breaking* - the tail loss and the int64 crossfade both read far
+    /// below it - not to claim the two implementations are the same filter.
     func testSuperResolutionResamplerMatchesReference() async throws {
         let artifact = try artifact("mossformer2_sr_48k_direct")
         let input = try XCTUnwrap(artifact.tensor("input"))
-        let reference = try XCTUnwrap(artifact.tensor("upsampled_48k"))
+        let reference = try XCTUnwrap(artifact.tensor("upsampled_48k_librosa"))
 
         // The old path, reproduced: float32 wav out, AudioLoader back in. Kept so
         // the improvement is measured rather than asserted.
@@ -101,6 +114,11 @@ final class UpscalingParityTests: ParityTestCase {
             inMemory.count, input.count * 3,
             "an integer-ratio upsample must be exact - this is the 2688-sample tail loss"
         )
+
+        // The assertion, not the diagnostics above: Swift's resampler against
+        // librosa's, held to a recorded floor. Without this the seam the SR cases
+        // deliberately removed from their own comparison is covered by nothing.
+        try expectParity(inMemory, matches: "upsampled_48k_librosa", in: artifact)
     }
 
     /// USS, query-conditioned, at fp32.

@@ -11,6 +11,12 @@ variants at 8 kHz, and WHAMR skips the mask multiplication entirely.
 Speakers are stored as separate named tensors. Which speaker lands in which
 slot is itself part of the port's behaviour: a permutation would be silent under
 any single combined metric and obvious here.
+
+Inputs are the committed CC0 mixtures, not the WSJ0/WHAMR-derived `mix*.wav` in
+the research checkout these cases first used. An artifact stores its input
+samples rather than a path, so a case built from restricted audio carries that
+audio wherever the artifact goes - and these are published alongside the
+weights. Same three overlapping mixtures, each at its model's own rate.
 """
 
 from __future__ import annotations
@@ -30,17 +36,17 @@ STRATEGY = "triangular_blend"
 CONFIGS = {
     "mossformer2_ss_2spk_16k": {
         "model": "2spk",
-        "fixture": "mosforrmer2_ss_mlx_swift/mix.wav",
+        "fixture": "AudioToolFluidAudioTests/Fixtures/mix_16k.wav",
         "sample_rate": 16_000,
     },
     "mossformer2_ss_2spk_whamr_8k": {
         "model": "2spk-whamr",
-        "fixture": "mosforrmer2_ss_mlx_swift/mix_8k.wav",
+        "fixture": "AudioToolFluidAudioTests/Fixtures/mix_8k.wav",
         "sample_rate": 8_000,
     },
     "mossformer2_ss_3spk_8k": {
         "model": "3spk",
-        "fixture": "mosforrmer2_ss_mlx_swift/mix3_8k.wav",
+        "fixture": "AudioToolFluidAudioTests/Fixtures/mix3_8k.wav",
         "sample_rate": 8_000,
     },
 }
@@ -61,7 +67,7 @@ def build(ctx: Context) -> list[ParityCase]:
     cases: list[ParityCase] = []
 
     for case_name, spec in CONFIGS.items():
-        source = ctx.reference(spec["fixture"])
+        source = ctx.fixture(spec["fixture"])
         rate_expected = spec["sample_rate"]
         audio, rate = load_audio(source, mono=True)
         if rate != rate_expected:

@@ -1,15 +1,20 @@
 # Running MLX Code from CLI
 
-**IMPORTANT**: MLX Swift code requires special handling due to Metal shader resource bundling.
+**IMPORTANT**: MLX Swift code built with the bare command-line SwiftPM workflow
+requires special handling for Metal shader resource bundling. Xcode and
+`xcodebuild` handle this automatically.
 
 ## The Problem
 
-When running MLX binaries built with Swift Package Manager:
+When running MLX binaries built with bare `swift build`, `swift test`, or
+`swift run`:
 ```
 MLX error: Failed to load the default metallib. library not found
 ```
 
-This happens because Metal `.metallib` shaders aren't bundled correctly with SPM.
+This happens because the command-line SwiftPM build does not compile and bundle
+MLX's Metal shaders. It is an `mlx-swift` limitation inherited by
+`mlx-swift-lm`, not a separate setup requirement for that higher-level package.
 
 ## Environment Variables
 
@@ -26,7 +31,7 @@ Instead of running the binary directly, use **xcodebuild test** or **run from Xc
 ### Option 1: Run Tests via xcodebuild (Recommended)
 
 ```bash
-cd ~/Downloads/clear_voice_research/AudioTool
+cd ~/Downloads/clear_voice_research/AudioToolSwift
 
 # Run all MLX integration tests
 xcodebuild test \

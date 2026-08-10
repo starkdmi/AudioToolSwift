@@ -35,6 +35,12 @@ soundfile and through AVFoundation can differ in the last bit or two, and a
 harness that reports that as model divergence is worse than none. Swift reads
 float32 samples straight out of the artifact.
 
+That has a licensing consequence, and it is the reason every case now reads a
+committed fixture rather than something convenient in the research checkout: an
+artifact *contains* its input audio, so it can only be published if that audio
+can be. Clearing `Tests/**/Fixtures` does nothing for an artifact generated
+before the clearing. `Docs/licenses.md` has the per-case record.
+
 Then one named tensor per output, cut at the seams that matter:
 
 | Case | Seams |

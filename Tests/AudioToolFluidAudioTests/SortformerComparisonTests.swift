@@ -154,14 +154,14 @@ final class SortformerComparisonTests: IntegrationTestCase {
     
     // MARK: - Individual Test Cases
     
-    /// Compare diarization on watson_30s.wav (interview, 2-3 speakers, clean)
-    func testCompare_Watson30s() async throws {
+    /// Compare diarization on the redistributable two-speaker dialogue.
+    func testCompare_Dialogue() async throws {
         guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("watson_30s.wav not found")
+            throw XCTSkip("speech_dialogue.wav not found")
         }
         
         let (pyannote, sortformer) = try await runComparison(
-            testName: "Watson Interview (30s)",
+            testName: "CC0 two-speaker dialogue",
             audioURL: testURL
         )
         
@@ -173,7 +173,7 @@ final class SortformerComparisonTests: IntegrationTestCase {
             XCTAssertGreaterThanOrEqual(p.speakerCount, 1)
         }
         
-        print("✓ Watson comparison test passed")
+        print("✓ Dialogue comparison test passed")
     }
     
     /// Compare diarization on mix_8k.wav (multi-speaker mixture)
@@ -221,35 +221,35 @@ final class SortformerComparisonTests: IntegrationTestCase {
         print("✓ Test comparison passed")
     }
     
-    /// Compare diarization on harry_potter.wav (movie trailer, ~10 speakers, music)
-    func testCompare_HarryPotter() async throws {
+    /// Compare diarization on the longer three-speaker CC0 sequence.
+    func testCompare_LongSpeech() async throws {
         guard let testURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("harry_potter.wav not found")
+            throw XCTSkip("speech_long.wav not found")
         }
         
         let (pyannote, sortformer) = try await runComparison(
-            testName: "Harry Potter Trailer (2:16, ~10 speakers, music)",
+            testName: "CC0 long speech (25.5s, three speakers)",
             audioURL: testURL
         )
         
         XCTAssertGreaterThanOrEqual(sortformer.segmentCount, 0)
         
-        // Note: Sortformer is limited to 4 speakers, Pyannote may detect more
+        // Sortformer supports up to four speakers; this fixture contains three.
         if let p = pyannote {
             print("Note: Pyannote detected \(p.speakerCount) speakers, Sortformer capped at \(sortformer.speakerCount)")
         }
         
-        print("✓ Harry Potter comparison test passed")
+        print("✓ Long-speech comparison test passed")
     }
     
-    /// Sortformer-only test on Harry Potter (for speed)
-    func testSortformerOnly_HarryPotter() async throws {
+    /// Sortformer-only test on the longer CC0 sequence (for speed).
+    func testSortformerOnly_LongSpeech() async throws {
         guard let testURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("harry_potter.wav not found")
+            throw XCTSkip("speech_long.wav not found")
         }
         
         let (_, sortformer) = try await runComparison(
-            testName: "Harry Potter Trailer (Sortformer Only)",
+            testName: "CC0 long speech (Sortformer only)",
             audioURL: testURL,
             skipPyannote: true
         )
@@ -257,7 +257,7 @@ final class SortformerComparisonTests: IntegrationTestCase {
         XCTAssertGreaterThanOrEqual(sortformer.segmentCount, 0)
         XCTAssertGreaterThan(sortformer.rtf, 1.0)
         
-        print("✓ Sortformer-only Harry Potter test passed")
+        print("✓ Sortformer-only long-speech test passed")
     }
     
     // MARK: - Performance Comparison Summary
@@ -270,10 +270,10 @@ final class SortformerComparisonTests: IntegrationTestCase {
         
         var results: [(name: String, pyannote: DiarizationResult?, sortformer: DiarizationResult)] = []
         
-        // Watson 30s
+        // Two-speaker dialogue
         if let url = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") {
-            let result = try await runComparison(testName: "Watson 30s", audioURL: url)
-            results.append(("Watson 30s", result.pyannote, result.sortformer))
+            let result = try await runComparison(testName: "CC0 Dialogue", audioURL: url)
+            results.append(("CC0 Dialogue", result.pyannote, result.sortformer))
         }
         
         // Test
@@ -288,10 +288,10 @@ final class SortformerComparisonTests: IntegrationTestCase {
             results.append(("Mix 8k", result.pyannote, result.sortformer))
         }
         
-        // Harry Potter (skip Pyannote for speed in full suite)
+        // Longer speech fixture (skip Pyannote for speed in full suite)
         if let url = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") {
-            let result = try await runComparison(testName: "Harry Potter", audioURL: url, skipPyannote: true)
-            results.append(("Harry Potter", result.pyannote, result.sortformer))
+            let result = try await runComparison(testName: "CC0 Long Speech", audioURL: url, skipPyannote: true)
+            results.append(("CC0 Long", result.pyannote, result.sortformer))
         }
         
         // Print summary table

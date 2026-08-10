@@ -32,34 +32,12 @@ final class WordTimingIntegrationTests: IntegrationTestCase {
     func testHarryPotterWordTiming() async throws {
         print("\n=== Harry Potter Word Timing Integration Test ===\n")
         
-        // Load test audio from Fixtures
-        guard let audioURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("harry_potter.wav not found in Fixtures")
-        }
+        // This test is tied to the private Harry Potter annotations below. The
+        // redistributable `speech_long.wav` fixture deliberately is not a
+        // substitute for that exact reference recording.
+        let audioURL = try reference("Docs/harry_potter.wav")
         
-        // Load reference annotations from Docs (use hardcoded path since #file resolution varies)
-        // Try multiple potential locations
-        let possiblePaths = [
-            "/path/to/ProjectTwo/Docs/harry_potter.json",
-            URL(fileURLWithPath: #file)
-                .deletingLastPathComponent() // Tests/AudioToolFluidAudioTests
-                .deletingLastPathComponent() // Tests
-                .deletingLastPathComponent() // AudioTool
-                .deletingLastPathComponent() // ProjectTwo
-                .appendingPathComponent("Docs/harry_potter.json").path
-        ]
-        
-        var docsPath: URL?
-        for path in possiblePaths {
-            if FileManager.default.fileExists(atPath: path) {
-                docsPath = URL(fileURLWithPath: path)
-                break
-            }
-        }
-        
-        guard let jsonPath = docsPath else {
-            throw XCTSkip("harry_potter.json not found at expected locations")
-        }
+        let jsonPath = try reference("Docs/harry_potter.json")
         
         let referenceData = try Data(contentsOf: jsonPath)
         let referenceSegments = try JSONDecoder().decode([ReferenceSegment].self, from: referenceData)
@@ -168,9 +146,7 @@ final class WordTimingIntegrationTests: IntegrationTestCase {
     
     /// Test that word segments cover the full audio duration
     func testWordSegmentsCoverage() async throws {
-        guard let audioURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("harry_potter.wav not found in Fixtures")
-        }
+        let audioURL = try reference("Docs/harry_potter.wav")
         
         let loader = AudioLoader(config: AudioLoader.Configuration(targetSampleRate: 16000))
         let audio = try loader.loadMono(from: audioURL)
@@ -208,9 +184,7 @@ final class WordTimingIntegrationTests: IntegrationTestCase {
     
     /// Test confidence scores are reasonable
     func testWordConfidenceScores() async throws {
-        guard let audioURL = Bundle.module.url(forResource: "speech_long", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("harry_potter.wav not found in Fixtures")
-        }
+        let audioURL = try reference("Docs/harry_potter.wav")
         
         let loader = AudioLoader(config: AudioLoader.Configuration(targetSampleRate: 16000))
         let audio = try loader.loadMono(from: audioURL)

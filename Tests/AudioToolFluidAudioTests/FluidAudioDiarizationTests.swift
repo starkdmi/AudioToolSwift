@@ -14,13 +14,13 @@ import MLX
 
 final class FluidAudioDiarizationTests: IntegrationTestCase {
     
-    /// Test diarization on watson_30s.wav (interview with 2+ speakers)
-    func testDiarizeWatson() async throws {
+    /// Test diarization on the redistributable two-speaker dialogue fixture.
+    func testDiarizeDialogue() async throws {
         print("\n=== Pyannote Diarization Test ===\n")
         
         // Load test audio
         guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("watson_30s.wav not found")
+            throw XCTSkip("speech_dialogue.wav not found")
         }
         
         // Load at 16kHz for diarization

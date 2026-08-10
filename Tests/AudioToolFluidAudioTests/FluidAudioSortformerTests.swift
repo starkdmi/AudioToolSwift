@@ -92,13 +92,13 @@ final class FluidAudioSortformerTests: IntegrationTestCase {
         print("✓ Sortformer model loading test passed")
     }
     
-    /// Test Sortformer diarization on watson_30s.wav (interview with 2+ speakers)
-    func testSortformerDiarizeWatson() async throws {
+    /// Test Sortformer diarization on the redistributable two-speaker dialogue.
+    func testSortformerDiarizeDialogue() async throws {
         print("\n=== Sortformer Diarization Test ===\n")
         
         // Load test audio
         guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("watson_30s.wav not found")
+            throw XCTSkip("speech_dialogue.wav not found")
         }
         
         // Load at 16kHz for diarization

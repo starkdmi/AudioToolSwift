@@ -58,7 +58,7 @@ final class SpeakerSeparationPipelineTests: IntegrationTestCase {
             return url
         }
         
-        // Fixtures are gitignored, so fall back to the sibling research checkout.
+        // A private long-form reference remains an optional fallback.
         guard let fallback = TestGate.reference("Docs/harry_potter.wav") else {
             throw XCTSkip("no long-speech fixture: neither Fixtures/speech_long.wav nor \(TestGate.missingReference("Docs/harry_potter.wav"))")
         }

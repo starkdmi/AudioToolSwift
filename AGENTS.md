@@ -11,21 +11,23 @@ super-resolution, TTS, transcription, and diarization. Uses MLX for GPU accelera
 
 ### Metal/MLX: the build paths that work
 
-MLX needs a compiled Metal shader library. SwiftPM cannot build one: mlx-swift ships
-its kernels under `Source/Cmlx/mlx-generated/metal` but its `Package.swift` declares
-no resource, plugin or binary target that turns them into a `.metallib` — only
-Xcode's build system does that step. So `swift build` *compiles* fine and then any
+MLX needs a compiled Metal shader library. Bare command-line SwiftPM cannot build
+one: mlx-swift ships its kernels under `Source/Cmlx/mlx-generated/metal`, and
+Xcode's build system compiles and bundles them automatically while `swift build`,
+`swift test` and `swift run` do not. So `swift build` *compiles* fine and then any
 GPU operation fails at runtime with:
 
 ```
 MLX error: Failed to load the default metallib. library not found
 ```
 
-This is upstream and unresolved
-([ml-explore/mlx-swift#349](https://github.com/ml-explore/mlx-swift/issues/349) is
-open with no maintainer response). mlx-swift's own README answers it with
-`xcodebuild`, and mlx-swift-examples ships an `mlx-run` wrapper that resolves
-`BUILT_PRODUCTS_DIR` and runs the binary from there.
+This is documented by mlx-swift itself
+([README SwiftPM note](https://github.com/ml-explore/mlx-swift#swiftpm),
+[issue #36](https://github.com/ml-explore/mlx-swift/issues/36)) and is inherited
+by mlx-swift-lm. It is not an extra step for an Xcode or `xcodebuild` workflow.
+mlx-swift's own README answers it with `xcodebuild`, and mlx-swift-examples ships
+an `mlx-run` wrapper that resolves `BUILT_PRODUCTS_DIR` and runs the binary from
+there. (mlx-swift#349 is a separate Tuist resource-bundle issue, not this.)
 
 #### Primary: xcodebuild (upstream's answer)
 

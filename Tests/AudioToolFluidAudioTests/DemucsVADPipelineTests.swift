@@ -36,8 +36,9 @@ final class DemucsVADPipelineTests: IntegrationTestCase {
         try await demucs.load(stem: .vocals)
         print("  Demucs loaded for vocals\n")
         
-        // Test files
-        let testFiles = ["billions", "music_35s", "watson_30s"]
+        // Redistributable fixtures: dialogue, instrumental music, and their
+        // mixed-media counterpart.
+        let testFiles = ["speech_dialogue", "music", "speech_music"]
         
         for filename in testFiles {
             guard let testURL = Bundle.module.url(forResource: filename, withExtension: "wav", subdirectory: "Fixtures") else {

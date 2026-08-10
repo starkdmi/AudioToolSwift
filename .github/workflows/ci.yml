@@ -57,11 +57,12 @@ jobs:
       - name: Build
         run: swift build --build-tests
 
-      # MLX ships Metal kernels that SwiftPM cannot compile, so `swift test` has no
-      # shader library and every MLX operation aborts the process with "Failed to
-      # load the default metallib" - a hard abort, not a test failure, so it cannot
-      # be caught and reported per test. See Scripts/build_mlx_metallib.sh and
-      # ml-explore/mlx-swift#349.
+      # This job deliberately uses bare `swift test`. Command-line SwiftPM cannot
+      # compile MLX's Metal kernels, although Xcode/xcodebuild does so automatically.
+      # Without a custom build, every MLX operation aborts with "Failed to load the
+      # default metallib" - a hard abort that cannot be reported per test. See
+      # Scripts/build_mlx_metallib.sh, the mlx-swift README's SwiftPM note, and
+      # ml-explore/mlx-swift#36. (mlx-swift#349 is a separate Tuist issue.)
       #
       # Non-fatal on purpose. If the runner has no Metal Toolchain, the MLX-backed
       # suites skip via SKIP_MLX_TESTS and everything else still gates the PR. A

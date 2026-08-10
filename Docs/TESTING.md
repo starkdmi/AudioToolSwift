@@ -10,9 +10,10 @@ Basic unit tests that don't require Metal/GPU:
 swift test
 ```
 
-### MLX Integration Tests (Xcodebuild Required)
+### MLX Integration Tests
 
-MLX-based tests require Metal hardware and must be run via `xcodebuild`:
+MLX-based tests require Metal hardware. The normal path is `xcodebuild`, which
+compiles and bundles MLX's Metal library automatically:
 
 ```bash
 # Full test suite
@@ -66,13 +67,31 @@ xcodebuild test \
 
 ## Why xcodebuild?
 
-SPM's `swift test` doesn't properly initialize Metal resources needed by MLX. Use `xcodebuild` for any tests that:
+This is an underlying `mlx-swift` build-system constraint, not a special
+`mlx-swift-lm` setup step. Bare command-line SwiftPM can compile the Swift and
+C++ targets but cannot compile MLX's Metal shaders; the first MLX operation then
+fails because `default.metallib` is absent. Xcode and `xcodebuild` perform that
+build and resource-bundling step, which is why ordinary Xcode projects work
+without a custom script.
 
-- Use MLX/Metal operations
-- Load CoreML models
-- Perform GPU-accelerated audio processing
+Use `xcodebuild` for tests that execute MLX/Metal operations. If CI deliberately
+uses bare `swift test`, run `Scripts/build_mlx_metallib.sh` after building the
+test bundle; that script is the repository's SwiftPM-only workaround. Pure
+CoreML execution is a separate path and does not, by itself, require MLX's
+metallib.
+
+Upstream reference: [mlx-swift installation notes](https://github.com/ml-explore/mlx-swift#swiftpm).
 
 ## Test Fixtures
 
-Place test audio files in `Tests/AudioToolMLXIntegrationTests/Fixtures/`:
-- `noisy.wav` - Noisy speech sample for enhancement tests
+Redistributable fixtures live in
+`Tests/AudioToolFluidAudioTests/Fixtures/` and
+`Tests/AudioToolUSSTests/Fixtures/`. They are CC0 or CC BY 4.0, and their exact
+sources, transformations, hashes and model coverage are recorded in the fixture
+README and `Docs/licenses.md`. Regenerate the derived files with
+`Scripts/fetch-fixtures.sh`; it fetches individual small files, not datasets.
+
+Exact-content regression media that cannot be redistributed stays in the
+sibling research checkout. Tests reach it through `TestGate.reference(...)` and
+skip cleanly in a standalone public clone. Do not copy private-pool media into a
+package `Fixtures/` directory.

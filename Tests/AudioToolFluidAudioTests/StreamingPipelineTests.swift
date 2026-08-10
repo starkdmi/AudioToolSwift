@@ -46,7 +46,7 @@ final class StreamingPipelineTests: IntegrationTestCase {
             return url
         }
         
-        // Fixtures are gitignored, so fall back to the sibling research checkout.
+        // A private long-form reference remains an optional fallback.
         guard let fallback = TestGate.reference("Docs/harry_potter.wav") else {
             throw XCTSkip("no long-speech fixture: neither Fixtures/speech_long.wav nor \(TestGate.missingReference("Docs/harry_potter.wav"))")
         }
@@ -561,31 +561,31 @@ final class StreamingPipelineTests: IntegrationTestCase {
         print("\n--- Writing manifests ---")
         
         try writeManifest(SegmentManifest(
-            sourceFile: "harry_potter.wav",
+            sourceFile: url.lastPathComponent,
             totalDuration: duration,
             segments: nonSpeechMusicSegments
         ), to: "manifest_nonspeech_music.json")
         
         try writeManifest(SegmentManifest(
-            sourceFile: "harry_potter.wav",
+            sourceFile: url.lastPathComponent,
             totalDuration: duration,
             segments: nonSpeechAnimalSegments
         ), to: "manifest_nonspeech_animal.json")
         
         try writeManifest(SegmentManifest(
-            sourceFile: "harry_potter.wav",
+            sourceFile: url.lastPathComponent,
             totalDuration: duration,
             segments: speechEnhancedSegments
         ), to: "manifest_enhanced_speech.json")
         
         try writeManifest(SegmentManifest(
-            sourceFile: "harry_potter.wav",
+            sourceFile: url.lastPathComponent,
             totalDuration: duration,
             segments: backgroundMusicSegments
         ), to: "manifest_background_music.json")
         
         try writeManifest(SegmentManifest(
-            sourceFile: "harry_potter.wav",
+            sourceFile: url.lastPathComponent,
             totalDuration: duration,
             segments: backgroundAnimalSegments
         ), to: "manifest_background_animal.json")
@@ -668,7 +668,7 @@ final class StreamingPipelineTests: IntegrationTestCase {
     // MARK: - Multi-Type USS Tests
     
     func testMultiTypeUSS_NonSpeech_HarryPotter() async throws {
-        print("\n=== USS Non-Speech Separation (Harry Potter) ===")
+        print("\n=== USS Non-Speech Separation (long-speech fixture) ===")
         
         let url = try harryPotterURL()
         let audio16k = try loadAudio(at: url, sampleRate: 16000)
@@ -713,7 +713,7 @@ final class StreamingPipelineTests: IntegrationTestCase {
     }
     
     func testMultiTypeUSS_SEBackground_HarryPotter() async throws {
-        print("\n=== USS SE Background Separation (Harry Potter) ===")
+        print("\n=== USS SE Background Separation (long-speech fixture) ===")
         
         let url = try harryPotterURL()
         let audio16k = try loadAudio(at: url, sampleRate: 16000)
@@ -770,7 +770,7 @@ final class StreamingPipelineTests: IntegrationTestCase {
     }
     
     func testUSSEmbeddingSwitching_HarryPotter() async throws {
-        print("\n=== USS Embedding Switching (Harry Potter) ===")
+        print("\n=== USS Embedding Switching (long-speech fixture) ===")
         
         let url = try harryPotterURL()
         let audio32k = try loadAudio(at: url, sampleRate: 32000)
@@ -811,7 +811,7 @@ final class StreamingPipelineTests: IntegrationTestCase {
     }
     
     func testUSSProcessMultiple_HarryPotter() async throws {
-        print("\n=== USS processMultiple (Harry Potter) ===")
+        print("\n=== USS processMultiple (long-speech fixture) ===")
         
         let url = try harryPotterURL()
         let audio32k = try loadAudio(at: url, sampleRate: 32000)
@@ -845,7 +845,7 @@ final class StreamingPipelineTests: IntegrationTestCase {
     // MARK: - Diarization Comparison
     
     func testDiarizationComparison_HarryPotter() async throws {
-        print("\n=== Diarization Comparison (Harry Potter) ===")
+        print("\n=== Diarization Comparison (long-speech fixture) ===")
         
         let url = try harryPotterURL()
         let audio16k = try loadAudio(at: url, sampleRate: 16000)
@@ -887,7 +887,7 @@ final class StreamingPipelineTests: IntegrationTestCase {
     // MARK: - Performance Benchmark
     
     func testPipelinePerformanceBenchmark_HarryPotter() async throws {
-        print("\n=== Pipeline Performance Benchmark (Harry Potter) ===")
+        print("\n=== Pipeline Performance Benchmark (long-speech fixture) ===")
         
         let url = try harryPotterURL()
         let audio = try loadAudioAtRates(url: url)

@@ -15,13 +15,13 @@ import MLX
 
 final class USSMLXProviderTests: IntegrationTestCase {
     
-    /// Test speech separation on watson_30s.wav
+    /// Test speech separation on the redistributable two-speaker dialogue.
     func testSpeechSeparation() async throws {
         print("\n=== USS Speech Separation Test ===")
         
         // Load test audio
         guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("watson_30s.wav not found in test fixtures")
+            throw XCTSkip("speech_dialogue.wav not found in test fixtures")
         }
         
         // Load at 32kHz for USS

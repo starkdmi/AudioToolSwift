@@ -25,9 +25,12 @@ NAME = "uss_resunet30_32k"
 SAMPLE_RATE = 32_000
 SEGMENT_SECONDS = 2.0
 SECONDS = 4.0  # exactly two segments, so padding is not silently part of the case
-# test_speech.wav opens on six seconds of silence and test_music.wav has a gap at
-# 4-6 s. This window has signal in both; see MIN_INPUT_RMS in harness.py.
-OFFSET_SECONDS = 6.0
+# The case separates by AudioSet condition, so the window has to hold both speech
+# and music. speech_music_32k is a CC0 voice over a CC0 instrumental; 5-9 s has
+# both throughout. Previously `uss_mlx_swift/test_music.wav` from the research
+# checkout, whose terms are not recorded and which an artifact would carry with
+# it. See MIN_INPUT_RMS in harness.py for why a silent window is refused.
+OFFSET_SECONDS = 5.0
 CONDITIONS = ["speech", "music"]
 
 
@@ -36,7 +39,7 @@ def build(ctx: Context) -> ParityCase:
     reference_dir = ctx.reference("python/uss_mlx")
     weights = ctx.reference("uss_mlx_swift/USSSwift/Models/resunet30_fp32.safetensors")
     embeddings_dir = ctx.reference("uss_mlx_swift/USSSwift/Embeddings")
-    source = ctx.reference("uss_mlx_swift/test_music.wav")
+    source = ctx.fixture("AudioToolFluidAudioTests/Fixtures/speech_music_32k.wav")
 
     audio, rate = load_audio(source, mono=True, seconds=SECONDS, offset=OFFSET_SECONDS)
     if rate != SAMPLE_RATE:

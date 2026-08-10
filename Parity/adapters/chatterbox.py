@@ -55,7 +55,7 @@ EXAGGERATION = 0.5  # `generate`'s default, so the case pins the shipped path.
 
 # Two cases, because one clip cannot exercise this model's conditioning.
 #
-#   24k    watson_short.wav, 3 s of 24 kHz mono. The source rate is already S3Gen's,
+#   24k    speech_24k.wav, 3 s of 24 kHz mono. The source rate is already S3Gen's,
 #          so the 24 kHz leg resamples nothing and both conditioning windows are
 #          no-ops. What it does cover is the shipped 24 kHz path end to end.
 #
@@ -63,13 +63,17 @@ EXAGGERATION = 0.5  # `generate`'s default, so the case pins the shipped path.
 #          axis the first case leaves flat: past both the 6 s encoder and 10 s
 #          decoder windows, so the truncations run and the two token tensors stop
 #          being the same tensor; and 22050 shares only gcd 150 with 24000, giving
-#          up/down of 160/147 where watson_short gets 1/1. A polyphase filter with
+#          up/down of 160/147 where speech_24k gets 1/1. A polyphase filter with
 #          147 phases is a different piece of arithmetic from one with none.
+#
+# Both are committed CC0 fixtures. The 24 kHz case previously read
+# `chatterbox_swift/watson_short.wav` from the research checkout, whose terms are
+# not recorded anywhere; an artifact carries its input samples, so that clip
+# would have shipped inside a published safetensors.
 CASES = (
-    ("chatterbox_conditionals_24k", "chatterbox_swift/watson_short.wav", None),
-    ("chatterbox_conditionals_22k_long", None, 12.0),
+    ("chatterbox_conditionals_24k", "AudioToolFluidAudioTests/Fixtures/speech_24k.wav", None),
+    ("chatterbox_conditionals_22k_long", "AudioToolFluidAudioTests/Fixtures/speech_long.wav", 12.0),
 )
-LONG_FIXTURE = "AudioToolFluidAudioTests/Fixtures/speech_long.wav"
 
 
 def build(ctx: Context) -> list[ParityCase]:
@@ -113,22 +117,19 @@ def build(ctx: Context) -> list[ParityCase]:
             mx.eval(value)
             return np.asarray(value, dtype=np.float32)
 
-        for name, reference_clip, tile_seconds in CASES:
-            if reference_clip is not None:
-                source = ctx.reference(reference_clip)
-            else:
-                source = ctx.fixture(LONG_FIXTURE)
+        for name, clip, window_seconds in CASES:
+            source = ctx.fixture(clip)
             audio, rate = load_audio(source, mono=True)
 
-            if tile_seconds is not None:
-                # Tiled rather than shipped as a new fixture: the point is a prompt
-                # past both conditioning windows, and repeating an existing clip
-                # gets there without adding a binary to the repository. The seam it
-                # introduces lands inside the 10 s window, where the truncation can
-                # see it.
-                wanted = int(tile_seconds * rate)
+            if window_seconds is not None:
+                # The point is a prompt past both conditioning windows. speech_long
+                # is 25.5 s, so this is a truncation; the tile is kept for the case
+                # where a shorter fixture has to reach 12 s, and either way the
+                # speaker change it lands on sits inside the 10 s window where the
+                # truncation can see it.
+                wanted = int(window_seconds * rate)
                 repeats = -(-wanted // len(audio))
-                audio = np.tile(audio, repeats)[:wanted]
+                audio = np.tile(audio, repeats)[:wanted] if repeats > 1 else audio[:wanted]
 
             conds = model.prepare_conditionals(
                 mx.array(audio), ref_sr=rate, exaggeration=EXAGGERATION
@@ -185,7 +186,7 @@ def build(ctx: Context) -> list[ParityCase]:
                         "exaggeration": EXAGGERATION,
                         "resampler_16k": resampler_provenance,
                         "source_seconds": round(len(audio) / rate, 3),
-                        "source_tiled": tile_seconds is not None,
+                        "source_windowed": window_seconds is not None,
                         "enc_cond_seconds": 6,
                         "dec_cond_seconds": 10,
                         # Recorded rather than left implicit: on a short prompt the

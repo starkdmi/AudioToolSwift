@@ -1,5 +1,5 @@
 {
-  "originHash" : "e32903a7af714f3f789388735a32a4af9e90043535460bf34e561bec36538740",
+  "originHash" : "12e0cb6bf7408904b06ee758494c279a084e32369e75e1f45b2ad0dceaf677d5",
   "pins" : [
     {
       "identity" : "fluidaudio",
@@ -103,8 +103,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/starkdmi/SwiftAudio",
       "state" : {
-        "revision" : "544088a82ff5b52b9123b79aaa561a8e21b6b11b",
-        "version" : "1.2.1"
+        "revision" : "c38a8358a208b605d39dd7785239fccd3501086d",
+        "version" : "1.2.2"
       }
     },
     {

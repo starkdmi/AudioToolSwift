@@ -14,13 +14,13 @@ import MLX
 
 final class FluidAudioTranscriberTests: IntegrationTestCase {
     
-    /// Test transcription on watson_30s.wav
-    func testTranscribeWatson() async throws {
+    /// Test transcription on the redistributable two-speaker dialogue fixture.
+    func testTranscribeDialogue() async throws {
         print("\n=== Parakeet v3 Transcription Test ===\n")
         
         // Load test audio
         guard let testURL = Bundle.module.url(forResource: "speech_dialogue", withExtension: "wav", subdirectory: "Fixtures") else {
-            throw XCTSkip("watson_30s.wav not found")
+            throw XCTSkip("speech_dialogue.wav not found")
         }
         
         // Load at 16kHz for ASR
