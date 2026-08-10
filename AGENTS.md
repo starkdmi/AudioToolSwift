@@ -111,10 +111,55 @@ below.
 
 ### Benchmarks
 
-Timing suites are gated on `RUN_BENCHMARKS=1` *and* on being compiled with
-optimisation, because a debug build of numeric code measures the compiler rather than
-the code - `ResamplerBenchmarkTests` runs ~70x slower in debug and moves its two
-kernels apart by 17x instead of 3x. The suite skips rather than print that.
+Two layers, answering different questions.
+
+#### Whole models: `audio-tool-bench`
+
+What each model costs on this machine - load time, RTF, peak memory, CPU time -
+written as JSON plus a markdown summary that carries the machine and the settings,
+so runs from different machines are comparable. See `Docs/BENCHMARKING.md`.
+
+```bash
+xcodebuild build -scheme audio-tool-bench -configuration Release \
+  -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
+.build/DerivedData/Build/Products/Release/audio-tool-bench --prefetch   # once per machine
+.build/DerivedData/Build/Products/Release/audio-tool-bench --list
+.build/DerivedData/Build/Products/Release/audio-tool-bench -t "$(git rev-parse --short HEAD)"
+```
+
+Run it from the products directory, same metallib reason as `audio-tool`.
+
+Every case runs in **its own child process, one at a time**, with a cooldown
+between them. That is not ceremony: MLX's allocator is process-global and its cache
+survives `unload()`, so two models measured in one process share a high-water mark
+and the second inherits the first's. It also means a model that exhausts memory
+kills one case rather than the run. `--in-process` turns it off and the report
+notes that the memory columns no longer mean anything.
+
+Two MLX caps are applied before any model loads, because MLX's defaults scale with
+the machine rather than the work - the cache limit defaults to the *memory* limit,
+which is ~16 GB on a 16 GB Mac. The benchmark defaults to the same limits the
+package applies in production - a 512 MB cache and a memory limit of 60% of RAM
+(`MLXCachePolicy`, mirrored by `USSInference` and `MemoryBudget`, pinned together
+by `MLXProcessLimitsTests`). `--gpu-cache-limit` and `--gpu-memory-limit` override,
+but only until a provider's `load()` reinstalls the production values - the report
+records both the requested and the effective figure.
+
+Scope is MLX and CoreML. FluidAudio-backed providers are excluded on purpose - they
+measure a third-party pipeline - and TTS is excluded because its RTF has a
+different denominator. Both are small additions to `BenchmarkCatalog`.
+
+Case ids are an interface. Renaming one breaks comparison with every report already
+recorded; bump `BenchmarkReport.currentSchemaVersion` when a field changes meaning.
+
+#### Below a model: gated test suites
+
+`ResamplerBenchmarkTests` and `USSPrewarmBenchmarkTests` measure a resampling
+kernel and an embedding-swap strategy - things that need `@testable` access and a
+fixture. Gated on `RUN_BENCHMARKS=1` *and* on being compiled with optimisation,
+because a debug build of numeric code measures the compiler rather than the code:
+`ResamplerBenchmarkTests` runs ~70x slower in debug and moves its two kernels apart
+by 17x instead of 3x. The suite skips rather than print that.
 
 ```bash
 ./Scripts/build_mlx_metallib.sh release
@@ -335,6 +380,8 @@ AudioToolSwift/
 │   ├── AudioToolTranslation/     # Apple Translation framework
 │   ├── AudioToolMLXTranslation/  # TranslateGemma
 │   ├── AudioToolCLI/        # `audio-tool` executable
+│   ├── AudioToolBenchmark/     # Benchmark harness: profile, probes, catalog, report
+│   ├── AudioToolBenchmarkCLI/  # `audio-tool-bench` executable
 │   └── Models/              # Vendored model implementations, source only
 │       ├── MossFormer2SE/ MossFormer2SS/ MossFormer2SR/
 │       ├── FRCRN/ Demucs/ USS/ Kokoro/ Chatterbox/

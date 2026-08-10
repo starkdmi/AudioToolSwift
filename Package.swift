@@ -78,6 +78,13 @@ let package = Package(
             name: "audio-tool",
             targets: ["AudioToolCLI"]
         ),
+        // Same hyphenation rule as `audio-tool`, for the same reason: a product
+        // whose name folds case-insensitively onto a library target confuses
+        // Xcode's module layout. `audio-tool-bench` collides with nothing.
+        .executable(
+            name: "audio-tool-bench",
+            targets: ["AudioToolBenchmarkCLI"]
+        ),
     ],
     dependencies: [
         // MLX for neural engine operations
@@ -370,6 +377,45 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             path: "Sources/AudioToolMLXTranslation",
+            swiftSettings: commonSwiftSettings
+        ),
+
+        // MARK: - Benchmarking
+
+        // The harness: system profiling, resource sampling, the case catalog and
+        // the report format. A library rather than part of the executable so the
+        // report types can be read by anything that wants to diff two runs.
+        //
+        // Depends on every backend it measures, which is what keeps the catalog
+        // honest - a provider that stops compiling cannot quietly drop out of the
+        // benchmark. Scope is MLX and CoreML; see the note in BenchmarkCatalog for
+        // why the FluidAudio-backed providers are not here.
+        .target(
+            name: "AudioToolBenchmark",
+            dependencies: [
+                "AudioTool",
+                "AudioToolCore",
+                "AudioToolMLX",
+                "AudioToolCoreML",
+                "AudioToolUSS",
+                .product(name: "AudioUtils", package: "SwiftAudio"),
+                .product(name: "MLX", package: "mlx-swift"),
+            ],
+            path: "Sources/AudioToolBenchmark",
+            swiftSettings: commonSwiftSettings
+        ),
+
+        // Build: xcodebuild build -scheme audio-tool-bench -configuration Release -destination 'platform=macOS' -derivedDataPath .build/DerivedData -quiet
+        // Run:   .build/DerivedData/Build/Products/Release/audio-tool-bench --list
+        //
+        // Re-executes itself once per case so each model gets a clean process.
+        // That only works when the binary can find itself, which it can - but it
+        // still has to be run from the products directory, because that is where
+        // MLX's metallib lives.
+        .executableTarget(
+            name: "AudioToolBenchmarkCLI",
+            dependencies: ["AudioToolBenchmark"],
+            path: "Sources/AudioToolBenchmarkCLI",
             swiftSettings: commonSwiftSettings
         ),
 

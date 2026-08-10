@@ -95,3 +95,12 @@ Exact-content regression media that cannot be redistributed stays in the
 sibling research checkout. Tests reach it through `TestGate.reference(...)` and
 skip cleanly in a standalone public clone. Do not copy private-pool media into a
 package `Fixtures/` directory.
+
+## Performance
+
+Correctness is here; cost is in [BENCHMARKING.md](BENCHMARKING.md).
+`audio-tool-bench` measures whole models through their public API - load time,
+RTF, peak memory - one model per process, and writes a report carrying the
+machine it ran on. The two gated timing suites in the test targets
+(`ResamplerBenchmarkTests`, `USSPrewarmBenchmarkTests`) stay here because they
+measure things below a model and need `@testable` access.
