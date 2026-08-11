@@ -64,10 +64,22 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// Model ID for lifecycle manager
     public nonisolated var modelId: String { "uss_mlx" }
     
-    /// Estimated memory: ~53MB FP16 weights + ~14KB embeddings cache
-    public nonisolated var estimatedMemoryBytes: Int {
-        useFp16 ? 55_000_000 : 110_000_000
-    }
+    /// Estimated memory footprint in bytes (VRAM + RAM).
+    ///
+    /// This read `useFp16 ? 55_000_000 : 110_000_000`, which is the *checkpoint*
+    /// size - 53 MB and 106 MB on disk - not the footprint. `ModelResidency`
+    /// budgets evictions against this, so it believed twenty USS instances fit in
+    /// 2 GB when one costs 1.2 GB.
+    ///
+    /// Measured peak footprint on an M1 Pro, 30 s at 32 kHz, three runs each: 1203
+    /// MiB at fp32 and 1259 MiB at fp16. The weights are a rounding error in that;
+    /// what dominates is the segmented forward pass, which is why fp16 barely moves
+    /// it - and why fp16 costs *more*, since fp16 weights meeting fp32 activations
+    /// promote per operation.
+    ///
+    /// One number for both precisions, rounded up past the fp16 measurement. A
+    /// split here would only encode that fp16 is worse.
+    public nonisolated var estimatedMemoryBytes: Int { 1_300_000_000 }
     
     // MARK: - Private Properties
     
@@ -94,12 +106,29 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// - Parameters:
     ///   - embeddingType: Initial sound type to separate (default: .speech)
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0)
-    ///   - useFp16: Use FP16 weights (default: true, 53MB vs 106MB)
+    ///   - useFp16: Use FP16 weights. Default `false` - see the note below.
     ///   - compile: Enable MLX compilation (default: true)
+    ///
+    /// ### On `useFp16`
+    ///
+    /// It defaulted to `true` on the strength of "53 MB versus 106 MB", which is
+    /// true and is the only thing it buys. There is no fp16 compute path here: the
+    /// flag selects a weights file and nothing else, `enableFloat16` on the audio
+    /// loader is `false` on every path, and fp16 weights meeting fp32 activations
+    /// promote per operation.
+    ///
+    /// Measured on an M1 Pro, 30 s at 32 kHz, two runs in each order to rule out
+    /// warm-up: fp16 is 5% slower (1.177 s against 1.114 s), peaks 56 MiB *higher*
+    /// (1259 MiB against 1203 MiB), and costs 68.0 dB SI-SDR on speech and 57.3 on
+    /// music against the fp32 output. Worse on every axis except disk.
+    ///
+    /// Kept rather than removed: on a download-constrained target 51 MB may still
+    /// be worth those costs, and that is a caller's decision. It is no longer the
+    /// silent one.
     public init(
         embeddingType: EmbeddingLoader.EmbeddingType = .speech,
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true,
+        useFp16: Bool = false,
         compile: Bool = true
     ) {
         self.initialEmbeddingType = embeddingType
@@ -122,7 +151,7 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         weightsPath: String,
         embeddingType: EmbeddingLoader.EmbeddingType = .speech,
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true,
+        useFp16: Bool = false,
         compile: Bool = true
     ) {
         self.initialEmbeddingType = embeddingType
