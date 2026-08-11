@@ -467,9 +467,14 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
                 found: "feature type \(feature.type.rawValue)"
             )
         }
-        guard multiArray.dataType == .float32 else {
+        // Float16 as well as Float32, because precision on this backend is baked
+        // into the compiled `.mlpackage` rather than chosen at load: the FP16
+        // conversion of this graph returns `MLMultiArrayDataTypeFloat16` (65552),
+        // and requiring Float32 rejected the model outright with a message about a
+        // raw type code. The model was fine; only this reader was not.
+        guard multiArray.dataType == .float32 || multiArray.dataType == .float16 else {
             throw AudioToolError.incompatibleModelVersion(
-                expected: "float32 enhanced_spectrogram",
+                expected: "float32 or float16 enhanced_spectrogram",
                 found: "MLMultiArray data type \(multiArray.dataType.rawValue)"
             )
         }
@@ -487,8 +492,8 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         }
         
         // Output is [1, 2, T, F]
-        let T = shape[2]
-        let F = shape[3]
+        let timeFrames = shape[2]
+        let bins = shape[3]
 
         // Read through the array's own strides rather than assuming the backing
         // buffer is packed.
@@ -518,37 +523,41 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
                 found: "strides \(strides)"
             )
         }
-        let totalCount = 2 * T * F
-        var flatData = [Float](repeating: 0, count: totalCount)
-        let srcPointer = multiArray.dataPointer.assumingMemoryBound(to: Float.self)
+        let totalCount = 2 * timeFrames * bins
 
-        if strides == [totalCount, T * F, F, 1] {
-            flatData.withUnsafeMutableBufferPointer { dstPtr in
-                dstPtr.baseAddress!.update(from: srcPointer, count: totalCount)
-            }
-        } else {
-            flatData.withUnsafeMutableBufferPointer { dstPtr in
+        // One de-striding routine over both element types. Generic rather than
+        // duplicated: the padding described above is a property of how CoreML lays
+        // the array out, not of the element width, so an fp16 reader that did not
+        // repeat the stride handling would reproduce the sheared-spectrogram bug
+        // this comment exists to explain - and would look correct until someone
+        // measured it.
+        func gather<T: BinaryFloatingPoint>(_ type: T.Type) -> [Float] {
+            var flat = [Float](repeating: 0, count: totalCount)
+            let src = multiArray.dataPointer.assumingMemoryBound(to: T.self)
+            flat.withUnsafeMutableBufferPointer { dstPtr in
                 guard let destination = dstPtr.baseAddress else { return }
+                if strides == [totalCount, timeFrames * bins, bins, 1] {
+                    for i in 0..<totalCount { destination[i] = Float(src[i]) }
+                    return
+                }
                 for part in 0..<2 {
-                    for frame in 0..<T {
+                    for frame in 0..<timeFrames {
                         let row = part * strides[1] + frame * strides[2]
-                        let offset = (part * T + frame) * F
-                        if strides[3] == 1 {
-                            // Rows are contiguous even though the array is not:
-                            // copy each one whole rather than bin by bin.
-                            destination.advanced(by: offset)
-                                .update(from: srcPointer.advanced(by: row), count: F)
-                        } else {
-                            for bin in 0..<F {
-                                destination[offset + bin] = srcPointer[row + bin * strides[3]]
-                            }
+                        let offset = (part * timeFrames + frame) * bins
+                        for bin in 0..<bins {
+                            destination[offset + bin] = Float(src[row + bin * strides[3]])
                         }
                     }
                 }
             }
+            return flat
         }
 
-        let mlxData = MLXArray(flatData).reshaped([1, 2, T, F])
+        let flatData = multiArray.dataType == .float16
+            ? gather(Float16.self)
+            : gather(Float.self)
+
+        let mlxData = MLXArray(flatData).reshaped([1, 2, timeFrames, bins])
         
         // Extract real/imag and transpose to [1, F, T]
         let realT = mlxData[0..., 0, 0..., 0...]  // [1, T, F]
@@ -681,7 +690,14 @@ extension MossFormerGANCoreMLProvider: ManagedModel {
     public nonisolated var modelId: String { "mossformer_gan_se_16k" }
 
     /// ~30 MB: CoreML FP16, and the ANE holds much of it outside our accounting.
-    public nonisolated var estimatedMemoryBytes: Int { 30_000_000 }
+    /// Measured peak 1631 MiB, 30 s at 16 kHz on an M1 Pro, against the 30 MB
+    /// this declared for a 13 MB `.mlpackage`.
+    ///
+    /// Nearly all of it is outside CoreML: `mlxPeakDuringRunBytes` is 5 MiB, because
+    /// the STFT/ISTFT and the segment stitching either side of the model run in MLX
+    /// and the model itself is small. An estimate drawn from the `.mlpackage` was
+    /// never going to describe this provider.
+    public nonisolated var estimatedMemoryBytes: Int { 1_700_000_000 }
 
     public func checkIfLoaded() async -> Bool { model != nil }
 
