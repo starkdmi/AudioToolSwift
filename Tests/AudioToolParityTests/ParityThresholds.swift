@@ -41,6 +41,17 @@ enum ParityThresholds {
         "uss_resunet30_32k.separated_speech": 90,
         "uss_resunet30_32k.separated_music": 110,
 
+        // The same mixture at fp16, against an fp16 reference. Measured 141.3 dB on
+        // speech and 120.6 on music - above the fp32 case's own 139.4 and 119.3, so
+        // the fp16 path is no less faithful a port than the fp32 one.
+        //
+        // The dtype error is common to both sides and cancels, so these are port
+        // numbers like every other row here and not a measure of what fp16 costs.
+        // What it costs is 68.0 dB on speech and 57.3 on music against fp32 - a
+        // different comparison, in the fp16 test's comment.
+        "uss_resunet30_32k_fp16.separated_speech": 90,
+        "uss_resunet30_32k_fp16.separated_music": 90,
+
         // Demucs, per-stem checkpoints, stereo in and mono out. Measured 91.3,
         // 86.9, 74.7 and 132.3 dB.
         //
@@ -64,6 +75,22 @@ enum ParityThresholds {
         "mossformer_gan_se_16k_coreml.enhanced_segment": 110,
         "mossformer_gan_se_16k_coreml.enhanced_full": 110,
 
+        // The FP16 conversion of the same graph, against that same fp32 MLX
+        // reference. Measured 61.4 dB on the segment and 61.8 on the whole clip.
+        //
+        // The one row here that is *not* held to a round-off bound, and the reason
+        // is structural rather than a concession: there is no fp16 reference to
+        // compare against, because the Python side runs MLX rather than a CoreML
+        // conversion. So this measures conversion loss and port error together, and
+        // 61 dB is what a well-behaved fp16 conversion looks like - the same
+        // territory as MossFormer2 SE's int8 at 59.2 dB.
+        //
+        // It is still a tight enough bound to be worth having. The failure it
+        // guards against is `parseModelOutputToMLX` mis-reading Float16 strides,
+        // which produces a sheared spectrogram measuring around -1 dB, not 50.
+        "mossformer_gan_se_16k_coreml.fp16_enhanced_segment": 55,
+        "mossformer_gan_se_16k_coreml.fp16_enhanced_full": 55,
+
         // FRCRN, chunked at 4s/25%/discard-edges. Measured 119.8 dB.
         //
         // Read 41.1 dB against a whole-file reference, with 65% of the error in the
@@ -78,6 +105,25 @@ enum ParityThresholds {
         // ~2000x below the signal.
         "mossformer2_se_48k.enhanced": 55,
         "mossformer2_se_48k_direct.enhanced": 70,
+
+        // The same model's other precisions, direct. Measured 79.3 dB at fp16, 81.3
+        // at int8, 81.8 at int6, 77.4 at int4 - against 79.3 for fp32 on the same
+        // clip, so every one lands in the fp32 case's own round-off band and two
+        // land above it.
+        //
+        // That is why they are held to the fp32 bound rather than a looser one:
+        // both sides load identical packed bytes and dequantize through the same
+        // kernels, so quantization error is common and cancels, and what is left is
+        // port difference. If a quantized case ever needs a lower threshold than
+        // fp32, the Swift quantization path has diverged from Python's - a defect to
+        // find, not a number to relax.
+        //
+        // None of these say what quantization costs in quality. That is the
+        // trade-off report's question, measured against Swift's own fp32 output.
+        "mossformer2_se_48k_direct_fp16.enhanced": 70,
+        "mossformer2_se_48k_direct_int8.enhanced": 70,
+        "mossformer2_se_48k_direct_int6.enhanced": 70,
+        "mossformer2_se_48k_direct_int4.enhanced": 70,
 
         // MossFormer2 SS, all three configurations, chunked at 4s/25%/triangular.
         // Measured 103.5 to 125.9 dB on the CC0 mixtures, 91.5 to 107.5 dB on the
@@ -157,6 +203,21 @@ enum ParityThresholds {
         "mossformer2_sr_48k.enhanced": 110,
         "mossformer2_sr_48k_direct.enhanced": 110,
 
+        // The locally converted integer widths, direct. Measured 117.3 dB at int8,
+        // 117.0 at int6, 116.5 at int4 - inside the fp32 case's own band, because
+        // both sides load identical packed bytes and the quantization error cancels.
+        //
+        // There is no fp16 row and there should not be one. The fp16 conversion of
+        // this model returns NaN for every one of 143872 samples, while its
+        // checkpoint holds no non-finite weight at all: the forward pass overflows,
+        // not the weights. The integer widths escape it by packing only the `Linear`
+        // weights and leaving every activation in fp32. A parity case would be
+        // asserting NaN against NaN, so the fact is recorded here and in
+        // `MossFormer2SR48KProvider.supportedPrecisions` instead.
+        "mossformer2_sr_48k_direct_int8.enhanced": 110,
+        "mossformer2_sr_48k_direct_int6.enhanced": 110,
+        "mossformer2_sr_48k_direct_int4.enhanced": 110,
+
         // The 16 -> 48 kHz upsample on its own, Swift's AVAudioConverter against
         // librosa's soxr_hq. Measured 45.3 dB, floored at 40.
         //
@@ -196,6 +257,41 @@ enum ParityThresholds {
         "chatterbox_conditionals_22k_long.s3gen_prompt_token": 120,
         "chatterbox_conditionals_22k_long.s3gen_prompt_feat": 110,
         "chatterbox_conditionals_22k_long.s3gen_embedding": 90,
+
+        // The 24 kHz case with each published checkpoint loaded, on the fp32 bounds.
+        //
+        // The integer rows are on the fp32 bounds because they reproduce the fp32
+        // numbers exactly - ve and s3gen.speaker_encoder contain no quantized
+        // modules, so the conditioning path is full precision at every integer
+        // width. Measured 116.7 dB / 3.465e-07 on ve_speaker_emb at fp32, 4bit,
+        // 6bit and 8bit alike. These entries guard the load path, not quantization;
+        // the quantized modules are t3 and s3gen.flow and neither is reached here.
+        //
+        // fp16 is the one real comparison of the five: a dtype narrows every weight,
+        // ve included, and it measures 118.6 dB rather than repeating 116.7.
+        "chatterbox_conditionals_24k_fp16.ve_speaker_emb": 100,
+        "chatterbox_conditionals_24k_fp16.t3_cond_prompt_tokens": 120,
+        "chatterbox_conditionals_24k_fp16.s3gen_prompt_token": 120,
+        "chatterbox_conditionals_24k_fp16.s3gen_prompt_feat": 110,
+        "chatterbox_conditionals_24k_fp16.s3gen_embedding": 90,
+
+        "chatterbox_conditionals_24k_8bit.ve_speaker_emb": 100,
+        "chatterbox_conditionals_24k_8bit.t3_cond_prompt_tokens": 120,
+        "chatterbox_conditionals_24k_8bit.s3gen_prompt_token": 120,
+        "chatterbox_conditionals_24k_8bit.s3gen_prompt_feat": 110,
+        "chatterbox_conditionals_24k_8bit.s3gen_embedding": 90,
+
+        "chatterbox_conditionals_24k_6bit.ve_speaker_emb": 100,
+        "chatterbox_conditionals_24k_6bit.t3_cond_prompt_tokens": 120,
+        "chatterbox_conditionals_24k_6bit.s3gen_prompt_token": 120,
+        "chatterbox_conditionals_24k_6bit.s3gen_prompt_feat": 110,
+        "chatterbox_conditionals_24k_6bit.s3gen_embedding": 90,
+
+        "chatterbox_conditionals_24k_4bit.ve_speaker_emb": 100,
+        "chatterbox_conditionals_24k_4bit.t3_cond_prompt_tokens": 120,
+        "chatterbox_conditionals_24k_4bit.s3gen_prompt_token": 120,
+        "chatterbox_conditionals_24k_4bit.s3gen_prompt_feat": 110,
+        "chatterbox_conditionals_24k_4bit.s3gen_embedding": 90,
     ]
 
     // MARK: - Chatterbox: why the resampler is what it is

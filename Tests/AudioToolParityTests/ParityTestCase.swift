@@ -102,10 +102,16 @@ class ParityTestCase: XCTestCase {
     /// Under `PARITY_RECORD=1` this reports instead of asserting, because the
     /// first run against a new case has nothing to assert against and a threshold
     /// invented before measuring is not a threshold.
+    /// - Parameter keyPrefix: Prepended to the threshold key, leaving the tensor
+    ///   name alone. One artifact can then hold the reference for several
+    ///   configurations that are legitimately held to different bounds - the CoreML
+    ///   GAN's fp16 conversion is compared against the same fp32 reference as the
+    ///   fp32 package, and cannot be expected to match it as closely.
     func expectParity(
         _ candidate: [Float],
         matches tensorName: String,
         in artifact: ParityArtifact,
+        keyPrefix: String = "",
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws {
@@ -117,7 +123,7 @@ class ParityTestCase: XCTestCase {
             return
         }
 
-        let label = "\(artifact.name).\(tensorName)"
+        let label = "\(artifact.name).\(keyPrefix)\(tensorName)"
         dumpForListening(candidate, reference: reference, label: label, artifact: artifact)
 
         guard reference.count == candidate.count else {

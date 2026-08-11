@@ -34,10 +34,9 @@ OFFSET_SECONDS = 5.0
 CONDITIONS = ["speech", "music"]
 
 
-def build(ctx: Context) -> ParityCase:
+def build(ctx: Context) -> list[ParityCase]:
     package_dir = ctx.reference("python")
     reference_dir = ctx.reference("python/uss_mlx")
-    weights = ctx.reference("uss_mlx_swift/USSSwift/Models/resunet30_fp32.safetensors")
     embeddings_dir = ctx.reference("uss_mlx_swift/USSSwift/Embeddings")
     source = ctx.fixture("AudioToolFluidAudioTests/Fixtures/speech_music_32k.wav")
 
@@ -45,6 +44,28 @@ def build(ctx: Context) -> ParityCase:
     if rate != SAMPLE_RATE:
         raise ValueError(f"{NAME} is a {SAMPLE_RATE} Hz model; {source.name} is {rate} Hz")
 
+    # Both checkpoints live in `USSSwift/Models`, not `USSSwiftTests`. The test
+    # directory's fp16 entry is a 1152-byte macOS alias that nothing below Finder
+    # can follow - see `LocalWeights.Layout.uss`, which pointed at it and sent every
+    # fp16 benchmark to a repository that does not exist.
+    #
+    # fp16 is a dtype, not a quantization: no module surgery, so the ordinary loader
+    # takes it. It earns a case because it is the provider's *default*
+    # (`useFp16: true`) and measurement does not support that default - 5% slower
+    # and 55 MiB more peak than fp32 on an M1 Pro. Whether it also costs accuracy is
+    # this case's question.
+    cases: list[ParityCase] = []
+    for precision in ("fp32", "fp16"):
+        weights = ctx.reference(f"uss_mlx_swift/USSSwift/Models/resunet30_{precision}.safetensors")
+        cases.append(
+            _case(ctx, package_dir, reference_dir, embeddings_dir, source, audio, weights, precision)
+        )
+    return cases
+
+
+def _case(
+    ctx: Context, package_dir, reference_dir, embeddings_dir, source, audio, weights, precision: str
+) -> ParityCase:
     tensors: dict[str, np.ndarray] = {"input": audio}
     used_embeddings = {}
 
@@ -75,7 +96,7 @@ def build(ctx: Context) -> ParityCase:
             tensors[f"separated_{condition_name}"] = np.asarray(separated, dtype=np.float32)
 
     return ParityCase(
-        name=NAME,
+        name=NAME if precision == "fp32" else f"{NAME}_{precision}",
         sample_rate=SAMPLE_RATE,
         tensors=tensors,
         weights={"model": weights, **used_embeddings},
@@ -88,6 +109,7 @@ def build(ctx: Context) -> ParityCase:
             "from each other."
         ),
         extra={
+            "precision": precision,
             "segment_seconds": SEGMENT_SECONDS,
             "offset_seconds": OFFSET_SECONDS,
             "conditions": CONDITIONS,

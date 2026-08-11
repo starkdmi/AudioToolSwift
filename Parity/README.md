@@ -86,6 +86,34 @@ variant was chosen. Both sides of the GAN case run the *same* `.mlpackage`
 through the *same* MLX STFT, so its target is round-off like the rest. A 24 dB
 result there means the Swift wrapper's framing or stitching is wrong.
 
+## Precision, and what parity cannot tell you
+
+MossFormer2 SE publishes fp32, fp16, int8, int6 and int4, and there is a case
+per precision. They are held to the *same* threshold as fp32, not a looser one:
+both sides load identical packed bytes and dequantize through the same MLX
+kernels, so quantization error is common to both and cancels. Measured 79.3 dB
+at fp32 and fp16, 81.3 at int8, 81.8 at int6, 77.4 at int4 - one band.
+
+That is the whole point, and also the limit. A green quantized case says the
+Swift port agrees with the reference at that precision. It says **nothing** about
+whether the precision is worth shipping - a group size read from the wrong place
+or a different set of quantized layers would still degrade smoothly against
+Swift's own fp32 and look plausible, which is why the cross-language comparison
+is the one that catches it, and why a passing run is not a recommendation.
+
+For the other question - what a precision costs - use:
+
+```bash
+Scripts/quantization-report.py --bench BenchmarkResults/bench-*.json
+```
+
+It reads size from the checkpoints, speed and memory from an `audio-tool-bench`
+report, and quality from these artifacts, measuring each precision against the
+model's *own* fp32 output. On MossFormer2 SE the answer is that fp16 wins on
+every axis but disk: only the `Linear` layers quantize, the convolutions stay
+float, so int4 is 0.30x the size rather than the 0.125x
+`ModelVariant.memoryMultiplier` predicts, and it is slower than fp16 as well.
+
 ## Reference
 
 MLX Python, under `Models/python/` - the implementation the Swift was ported

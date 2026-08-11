@@ -71,6 +71,14 @@ SAMPLE_RATE = 48_000
 MAX_DIRECT_SECONDS = 4.0  # MLXSuperResolutionProvider.maxDirectDuration
 DIRECT_SECONDS = 3.0
 CHUNK_DURATION = 4.0      # ChunkingConfig.mossformer2SR48K
+
+# Locally converted precisions, in `Parity/weights`. Only fp32 is published; these
+# were produced from it at group size 64, the same as SE's. On this model they buy
+# almost nothing - the Generator is convolutions and only 168 `Linear` modules
+# quantize, so int4 is 0.65x the fp32 size against SE's 0.30x, and fp16 at 0.50x is
+# smaller than every integer width.
+PRECISION_VARIANTS = ("fp16", "int8", "int6", "int4")
+GROUP_SIZE = 64
 OVERLAP_RATIO = 0.25
 STRATEGY = "discard_edges"
 
@@ -127,6 +135,7 @@ def build(ctx: Context) -> list[ParityCase]:
     with ctx.on_path(reference_dir):
         import librosa
         import mlx.core as mx
+        import mlx.nn as nn
         from huggingface_hub import hf_hub_download
         from mlx.utils import tree_unflatten
 
@@ -232,6 +241,53 @@ def build(ctx: Context) -> list[ParityCase]:
             ),
         )
 
+        # The direct case at each converted precision.
+        #
+        # Only fp32 is published; fp16 and the integer widths are local conversions
+        # under `Parity/weights`, so a machine without them simply produces fewer
+        # cases. Direct only, for the reason SE's are: chunking is orthogonal to
+        # precision and the chunked fp32 case above already covers the seams.
+        #
+        # `nn.quantize` unconditionally here, unlike the Swift side, which filters on
+        # the checkpoint. The two agree anyway: Python's `UniDeepFsmn` returns before
+        # building any `Linear` when `lorder is None`, so the set it quantizes is
+        # exactly the set with `scales` in the file. Swift constructs a dummy
+        # `Linear(1, 1)` on that branch and has to exclude it explicitly - that
+        # asymmetry is the thing the filter exists for, and this case is what would
+        # catch it if the filter were wrong.
+        precision_direct: dict[str, np.ndarray] = {}
+        for name in PRECISION_VARIANTS:
+            checkpoint = PARITY_DIR / "weights" / "MossFormer2_SR_48K_MLX" / f"model_{name}.safetensors"
+            if not checkpoint.exists():
+                print(f"  skip {NAME}_direct_{name} - {checkpoint.name} not present")
+                continue
+
+            variant_args = AttrDict(json.load(open(config_path)))
+            variant_args.one_time_decode_length = 20.0
+            variant_args.decode_window = 4.0
+            variant = MossFormer2_SR_48K(variant_args)
+            if name.startswith("int"):
+                nn.quantize(variant, group_size=GROUP_SIZE, bits=int(name[3:]))
+            variant.update(tree_unflatten(list(mx.load(str(checkpoint)).items())))
+
+            def generate_variant(chunk, _model=variant):
+                inputs = mx.array(np.ascontiguousarray(chunk, dtype=np.float32))
+                mel = mel_spectrogram(
+                    mx.expand_dims(inputs, axis=0),
+                    n_fft=args.n_fft, num_mels=args.num_mels,
+                    sampling_rate=args.sampling_rate, hop_size=args.hop_size,
+                    win_size=args.win_size, fmin=args.fmin, fmax=args.fmax,
+                )
+                raw = mx.squeeze(_model(mel))
+                mx.eval(raw)
+                return np.asarray(raw, dtype=np.float32)
+
+            precision_direct[name] = substitute(
+                upsampled_short, generate_variant(upsampled_short)
+            )
+            del variant
+            mx.clear_cache()
+
     shared = {
         "source_audio": source,
         "reference_files": [
@@ -292,4 +348,36 @@ def build(ctx: Context) -> list[ParityCase]:
             },
             **shared,
         ),
+    ] + [
+        # One per converted precision, direct only.
+        #
+        # These carry `upsampled_48k` unchanged from the fp32 case: the resampler
+        # runs before the model and is not affected by the checkpoint, so repeating
+        # it per precision would store four identical copies of the same 3 s of
+        # audio and invite a reader to treat four restatements as four measurements.
+        ParityCase(
+            name=f"{NAME}_direct_{precision}",
+            sample_rate=SAMPLE_RATE,
+            tensors={
+                "input": short,
+                "upsampled_48k": upsampled_short,
+                "enhanced": precision_direct[precision],
+            },
+            notes=(
+                f"{DIRECT_SECONDS:g}s at {precision}, unchunked. Locally converted "
+                "from the published fp32 checkpoint; only fp32 is on HuggingFace. "
+                "Quantization reaches 168 Linear modules and none of the Generator, "
+                "which is why the file barely shrinks and the run time does not move."
+            ),
+            extra={
+                "input_sample_rate": INPUT_SAMPLE_RATE, "repo": repo,
+                "precision": precision,
+                "group_size": GROUP_SIZE if precision.startswith("int") else None,
+                "published": False,
+                "seconds": DIRECT_SECONDS, "chunked": False,
+            },
+            **shared,
+        )
+        for precision in PRECISION_VARIANTS
+        if precision in precision_direct
     ]

@@ -42,9 +42,41 @@ final class UpscalingParityTests: ParityTestCase {
         try await assertUpscaling(case: "mossformer2_sr_48k_direct")
     }
 
-    private func assertUpscaling(case caseName: String) async throws {
+    /// The locally converted precisions, direct.
+    ///
+    /// Only fp32 is published; these are conversions under `Parity/weights`, and the
+    /// tests skip when they are absent.
+    ///
+    /// fp16 is deliberately not among them. The fp16 checkpoint holds no non-finite
+    /// weight - checked, all 1138 tensors - and still produces 143872 NaN samples
+    /// out of 143872, because the *forward pass* overflows rather than the weights.
+    /// The integer widths are unaffected: they pack only the `Linear` weights and
+    /// leave every activation in fp32. A case for it would assert that NaN equals
+    /// NaN, so the finding lives in `ParityThresholds` and in the provider instead.
+    func testSuperResolutionDirectInt8MatchesReference() async throws {
+        try await assertUpscaling(
+            case: "mossformer2_sr_48k_direct_int8", weights: "model_int8.safetensors"
+        )
+    }
+
+    func testSuperResolutionDirectInt6MatchesReference() async throws {
+        try await assertUpscaling(
+            case: "mossformer2_sr_48k_direct_int6", weights: "model_int6.safetensors"
+        )
+    }
+
+    func testSuperResolutionDirectInt4MatchesReference() async throws {
+        try await assertUpscaling(
+            case: "mossformer2_sr_48k_direct_int4", weights: "model_int4.safetensors"
+        )
+    }
+
+    private func assertUpscaling(
+        case caseName: String,
+        weights weightsFile: String = "model_fp32.safetensors"
+    ) async throws {
         let artifact = try artifact(caseName)
-        let weights = try stagedWeights("MossFormer2_SR_48K_MLX", "model_fp32.safetensors")
+        let weights = try stagedWeights("MossFormer2_SR_48K_MLX", weightsFile)
         let config = try stagedWeights("MossFormer2_SR_48K_MLX", "config.json")
         let samples = try XCTUnwrap(artifact.tensor("input"))
         let inputRate = 16_000
@@ -182,9 +214,29 @@ final class UpscalingParityTests: ParityTestCase {
     /// the 527-d embedding, both outputs would agree with each other while
     /// disagreeing with the reference - which a single-condition test would miss.
     func testUniversalSourceSeparationMatchesReference() async throws {
-        let artifact = try artifact("uss_resunet30_32k")
+        try await assertSeparation(case: "uss_resunet30_32k", useFp16: false)
+    }
+
+    /// The same mixture at fp16, against an fp16 reference.
+    ///
+    /// This is the provider's *default* (`useFp16: true`), which is the reason it
+    /// needs its own reference rather than being compared to the fp32 one - and the
+    /// reason it is worth measuring at all. Against fp32 the fp16 checkpoint costs
+    /// 68.0 dB SI-SDR on speech and 57.3 on music, while running 5% slower and
+    /// peaking 55 MiB *higher* on an M1 Pro. It saves 53 MB on disk and nothing
+    /// else. Whether that is the right default is a product question; that it is
+    /// currently the default on an unmeasured assumption is not.
+    ///
+    /// What this case tests is narrower and still worth having: Swift's fp16 path
+    /// matches Python's fp16 path. The dtype error is common to both and cancels.
+    func testUniversalSourceSeparationFP16MatchesReference() async throws {
+        try await assertSeparation(case: "uss_resunet30_32k_fp16", useFp16: true)
+    }
+
+    private func assertSeparation(case caseName: String, useFp16: Bool) async throws {
+        let artifact = try artifact(caseName)
         let weights = try reference(
-            "Models/uss_mlx_swift/USSSwift/Models/resunet30_fp32.safetensors"
+            "Models/uss_mlx_swift/USSSwift/Models/resunet30_\(useFp16 ? "fp16" : "fp32").safetensors"
         )
         let samples = try XCTUnwrap(artifact.tensor("input"))
         let input = AudioBuffer(samples: samples, sampleRate: artifact.sampleRate, channels: 1)
@@ -194,7 +246,7 @@ final class UpscalingParityTests: ParityTestCase {
                 weightsPath: weights.path,
                 embeddingType: type,
                 segmentDuration: 2.0,
-                useFp16: false
+                useFp16: useFp16
             )
             try await provider.load()
             let output = try await provider.process(input, type: type)

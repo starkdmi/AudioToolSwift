@@ -49,11 +49,51 @@ final class ChatterboxParityTests: ParityTestCase {
     /// resampled with librosa, which is soxr and LGPL, and both sides were moved onto
     /// one published design so the Swift could reproduce it at all. The reasoning is
     /// in `ParityThresholds`.
+    /// Each published checkpoint loads without disturbing the conditioning path.
+    ///
+    /// **This is not quantization parity, and must not be read as it.** Counted from
+    /// `chatterbox-4bit/model.safetensors`: `ve` has 13 keys and none of them
+    /// quantized, `s3gen.speaker_encoder` has 815 and none quantized. Every module
+    /// feeding the five tensors below is stored at full precision in the quantized
+    /// checkpoints, so all five come out bit-identical to the fp32 case - measured,
+    /// not assumed: 116.7 dB and maxabs 3.465e-07 on `ve_speaker_emb` at fp32, 4bit,
+    /// 6bit and 8bit alike.
+    ///
+    /// Quantization lives in `t3` (219 modules) and `s3gen.flow` (423) - the
+    /// autoregressive token model and the flow decoder, which are exactly the
+    /// sampled halves that `expectConditioningParity` exists to exclude. Verifying
+    /// those needs a deterministic sub-run of `t3` rather than this.
+    ///
+    /// What these four do earn: a quantized checkpoint loads, its unquantized
+    /// modules survive the load intact, and Swift and Python agree on which modules
+    /// to leave alone. A load path that mangled `ve` while quantizing `t3` would
+    /// fail here. That is worth a test - it is just a much narrower claim than the
+    /// name "parity at 4bit" suggests.
+    ///
+    /// FP16 is the exception and is a real comparison: it is a dtype change applied
+    /// to every weight, `ve` included, which is why it measures 118.6 dB where the
+    /// integer cases repeat fp32's 116.7 exactly.
+    func testConditioningMatchesReferenceFP16() async throws {
+        try await expectConditioningParity("chatterbox_conditionals_24k_fp16", repo: "chatterbox-fp16")
+    }
+
+    func testConditioningMatchesReference8Bit() async throws {
+        try await expectConditioningParity("chatterbox_conditionals_24k_8bit", repo: "chatterbox-8bit")
+    }
+
+    func testConditioningMatchesReference6Bit() async throws {
+        try await expectConditioningParity("chatterbox_conditionals_24k_6bit", repo: "chatterbox-6bit")
+    }
+
+    func testConditioningMatchesReference4Bit() async throws {
+        try await expectConditioningParity("chatterbox_conditionals_24k_4bit", repo: "chatterbox-4bit")
+    }
+
     private func expectConditioningParity(
-        _ caseName: String, line: UInt = #line
+        _ caseName: String, repo: String = "chatterbox", line: UInt = #line
     ) async throws {
         let artifact = try artifact(caseName)
-        let weights = try stagedWeights("chatterbox", "model.safetensors")
+        let weights = try stagedWeights(repo, "model.safetensors")
 
         let samples = try XCTUnwrap(artifact.tensor("input"))
 

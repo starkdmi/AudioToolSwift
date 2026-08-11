@@ -27,6 +27,14 @@ REPOS=(
     starkdmi/MossFormer2_SS_2SPK_16K_MLX
     starkdmi/MossFormer2_SS_2SPK_WHAMR_8K_MLX
     starkdmi/MossFormer2_SS_3SPK_8K_MLX
+    # Chatterbox, one repository per precision. `chatterbox` itself was staged by
+    # hand before this list existed; naming it here means a fresh machine gets it
+    # too, and re-running is a no-op on one that already has it.
+    starkdmi/chatterbox
+    starkdmi/chatterbox-fp16
+    starkdmi/chatterbox-8bit
+    starkdmi/chatterbox-6bit
+    starkdmi/chatterbox-4bit
 )
 
 [ -d "$CACHE" ] || { echo "error: no HF cache at $CACHE" >&2; exit 1; }
