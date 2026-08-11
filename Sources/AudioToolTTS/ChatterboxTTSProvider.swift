@@ -83,6 +83,65 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     
     /// Base HuggingFace repository (without precision suffix)
     public static let baseRepo = ModelRepository.chatterboxFP32
+
+    /// Which repository holds a given precision.
+    ///
+    /// ChatterBox names its quantized repos `-8bit`/`-6bit`/`-4bit` rather than the
+    /// `ModelPrecision.repoSuffix` spelling, so the mapping cannot be derived and
+    /// has to be written down. Written down *once*: the benchmark catalog needs the
+    /// same answer to report where a case's weights come from, and a second copy
+    /// would be free to disagree - which is the failure `ModelRepository` exists to
+    /// prevent.
+    public static func repository(for precision: ModelPrecision) -> String {
+        switch precision {
+        case .fp32: baseRepo
+        case .fp16: "\(baseRepo)-fp16"
+        case .bit8: "\(baseRepo)-8bit"
+        case .bit6: "\(baseRepo)-6bit"
+        case .bit4: "\(baseRepo)-4bit"
+        default: precision.repo(base: baseRepo)
+        }
+    }
+
+    /// Peak footprint at a given precision, for the benchmark's headroom gate.
+    ///
+    /// These were `550_000_000` at 4-bit and scaled by precision, which was wrong in
+    /// the one direction that matters: the 4-bit checkpoint is 650 MB on its own, so
+    /// the estimate sat below the weights alone. `Headroom.check` uses this to decide
+    /// whether a case is safe to start, and an underestimate green-lights a run that
+    /// then exhausts memory - the failure the gate exists to prevent.
+    ///
+    /// Measured peak footprint on an M1 Pro / 16 GB, three runs each:
+    ///
+    /// | precision | checkpoint | peak | overhead |
+    /// | --- | ---: | ---: | ---: |
+    /// | fp32 | 2580 MiB | 4017 MiB | 1437 |
+    /// | fp16 | 1293 MiB | 3058 MiB | 1765 |
+    /// | 8bit |  917 MiB | 2287 MiB | 1370 |
+    /// | 6bit |  769 MiB | 2250 MiB | 1481 |
+    /// | 4bit |  620 MiB | 2205 MiB | 1585 |
+    ///
+    /// Peak barely moves across the integer widths, because the weights are mmap'd
+    /// lazily - `weightsMaterializedAtLoad` is false and the load delta is 48 MiB -
+    /// and what dominates is run-time allocation: activations, T3's KV cache and the
+    /// S3Gen flow decoder, all computed in float whatever the weights are stored as.
+    /// Quantizing this model moves peak memory far less than the file sizes suggest.
+    ///
+    /// So: checkpoint size plus a flat 1.8 GiB, which is above every measured
+    /// overhead including fp16's 1765 MiB. 1.6 GiB was tried first and put fp16's
+    /// estimate 168 MiB *below* its measurement - the one direction a headroom gate
+    /// must never err in.
+    public static func estimatedMemoryBytes(for precision: ModelPrecision) -> Int {
+        let runtimeOverhead = 1_800_000_000
+        let checkpoint: Int = switch precision {
+        case .fp32: 2_580_000_000
+        case .fp16, .bf16: 1_290_000_000
+        case .int8, .bit8: 900_000_000
+        case .int6, .bit6: 750_000_000
+        case .int4, .bit4: 650_000_000
+        }
+        return checkpoint + runtimeOverhead
+    }
     
     /// Default precision
     public static let defaultPrecision: ModelPrecision = .fp32
@@ -171,15 +230,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         useRuAccent: Bool = true,
         convertToStressMarks: Bool = true
     ) {
-        // ChatterBox repos use different suffix pattern
-        let repo = switch precision {
-        case .fp32: Self.baseRepo
-        case .fp16: "\(Self.baseRepo)-fp16"
-        case .bit8: "\(Self.baseRepo)-8bit"
-        case .bit6: "\(Self.baseRepo)-6bit"
-        case .bit4: "\(Self.baseRepo)-4bit"
-        default: precision.repo(base: Self.baseRepo)
-        }
+        let repo = Self.repository(for: precision)
         self.precision = precision
         self.repo = repo
         self.modelIdentity = repo
@@ -1240,13 +1291,7 @@ extension ChatterboxTTSProvider: ManagedModel {
     }
 
     public nonisolated var estimatedMemoryBytes: Int {
-        switch precision {
-        case .fp32: 2_400_000_000
-        case .fp16, .bf16: 1_300_000_000
-        case .int8, .bit8: 850_000_000
-        case .bit6: 700_000_000
-        case .int4, .bit4: 550_000_000
-        }
+        Self.estimatedMemoryBytes(for: precision)
     }
 
     public func checkIfLoaded() async -> Bool {

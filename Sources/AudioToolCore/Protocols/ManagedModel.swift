@@ -47,6 +47,24 @@ public protocol ManagedModel: Sendable {
     /// - Reporting total memory usage
     ///
     /// For MLX models, include GPU memory. For CoreML, include ANE/CPU allocations.
+    ///
+    /// **This is the running footprint, not the checkpoint size.** Every conformance
+    /// in this package once returned roughly its weights file size, which
+    /// understated the truth by between 3x and 55x - FRCRN declared 60 MB against a
+    /// measured 2522 MiB, the CoreML GAN declared 30 MB against 1631 MiB. Since
+    /// `ModelResidency.beginUse` admits models against this number, the effect was a
+    /// residency budget that believed it had room for twenty of something that fits
+    /// twice.
+    ///
+    /// The weights are usually the small part. What dominates is the forward pass -
+    /// activations, attention caches, STFT buffers - which is why fp16 weights buy
+    /// so much less footprint than their file size suggests, and occasionally cost
+    /// more.
+    ///
+    /// Conformances should carry the measurement and the conditions it was taken
+    /// under: `audio-tool-bench` reports `peakFootprintBytes` per case, and the
+    /// numbers in this package are from 30 s of audio on an M1 Pro. Chunked
+    /// providers hold roughly flat past that; whole-file ones do not, and say so.
     var estimatedMemoryBytes: Int { get }
     
     /// Load model into memory.

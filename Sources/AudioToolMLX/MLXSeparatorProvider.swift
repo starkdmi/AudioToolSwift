@@ -733,8 +733,16 @@ extension MossFormer2SSProvider: ManagedModel {
     /// weights and must not share a residency slot.
     public nonisolated var modelId: String { "mossformer2_ss_\(modelType.rawValue)" }
 
-    /// ~250 MB FP32.
-    public nonisolated var estimatedMemoryBytes: Int { 250_000_000 }
+    /// Measured peak, 30 s at the model's rate on an M1 Pro: 5426 MiB for 2-speaker
+    /// 16 kHz, 4514 for 3-speaker 8 kHz, 3939 for 2-speaker WHAMR. The 250 MB this
+    /// declared was the checkpoint size - see `ManagedModel.estimatedMemoryBytes`.
+    ///
+    /// The largest footprint in the package, and by a distance: separation holds a
+    /// full-length output per speaker alongside the attention state that produced
+    /// them. One figure, taken from the worst of the three, because the residency
+    /// manager decides whether to admit *this provider* and cannot know which
+    /// configuration it will be asked for.
+    public nonisolated var estimatedMemoryBytes: Int { 5_600_000_000 }
 
     public func checkIfLoaded() async -> Bool { model != nil }
 
@@ -747,13 +755,17 @@ extension MossFormer2SSProvider: ManagedModel {
 extension DemucsProvider: ManagedModel {
     public nonisolated var modelId: String { "demucs" }
 
-    /// ~80 MB per stem across all four.
+    /// Measured peak, 30 s at 44.1 kHz on an M1 Pro: 3791 MiB for all four stems,
+    /// 3231 for vocals alone. The 320 MB this declared was four checkpoints' worth
+    /// of file size - see `ManagedModel.estimatedMemoryBytes`.
     ///
-    /// Deliberately the all-stems figure even though stems load independently and a
-    /// caller asking only for vocals holds a quarter of this. `estimatedMemoryBytes`
-    /// is nonisolated so it cannot read how many are actually resident, and for an
-    /// eviction policy over-estimating is the safe direction to be wrong in.
-    public nonisolated var estimatedMemoryBytes: Int { 320_000_000 }
+    /// Still deliberately the all-stems figure, and the original reasoning stands:
+    /// stems load independently and a caller asking only for vocals holds less, but
+    /// this property is nonisolated and cannot read how many are resident, so
+    /// over-estimating is the safe direction. Note how little the two differ - 3231
+    /// against 3791 - because each stem's checkpoint emits all four sources and the
+    /// forward pass, not the weights, is what costs.
+    public nonisolated var estimatedMemoryBytes: Int { 3_900_000_000 }
 
     /// Load every stem.
     ///
