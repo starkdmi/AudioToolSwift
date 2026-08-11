@@ -34,8 +34,13 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     /// HuggingFace repository for model weights
     public static let repo = ModelRepository.mossFormer2SE48K
     
-    /// Supported precisions for this model
-    public static let supportedPrecisions: [ModelPrecision] = [.fp32, .fp16]
+    /// Supported precisions for this model.
+    ///
+    /// The quantized widths became loadable when `MossFormer2Pipeline` learned to
+    /// apply `quantize` before the parameters arrive; before that they were
+    /// published, unreferenced, and would have loaded into an unquantized model
+    /// without complaining. See ``QuantizationParameters``.
+    public static let supportedPrecisions: [ModelPrecision] = [.fp32, .fp16, .int8, .int6, .int4]
     
     public nonisolated let sampleRate: Int = 48000
     public nonisolated let inputChannels: Int = 1
@@ -354,10 +359,17 @@ extension MossFormer2SE48KProvider: ManagedModel {
     /// Unique identifier for this model instance
     public nonisolated var modelId: String { "mossformer2_se_48k" }
     
-    /// Estimated memory footprint in bytes (VRAM + RAM)
-    /// ~200MB for FP16, ~400MB for FP32
+    /// Estimated memory footprint in bytes (VRAM + RAM).
+    ///
+    /// Measured peak, 30 s at 48 kHz on an M1 Pro: 1091 MiB at fp32, 847 at fp16,
+    /// 901 at int8, 956 at int6, 939 at int4. The read of 200/400 MB was the
+    /// checkpoint size; see `ManagedModel.estimatedMemoryBytes`.
+    ///
+    /// Two figures rather than five, because the spread across the quantized widths
+    /// is 100 MiB and the residency manager is choosing whether to keep a model, not
+    /// billing for it. Chunked at 4 s, so this does not grow with input length.
     public nonisolated var estimatedMemoryBytes: Int {
-        precision == .fp16 ? 200_000_000 : 400_000_000
+        precision == .fp32 ? 1_150_000_000 : 1_000_000_000
     }
     
     /// Check if the model is currently loaded
@@ -680,7 +692,11 @@ extension FRCRNSE16KProvider: ManagedModel {
     public nonisolated var modelId: String { "frcrn_se_16k" }
 
     /// ~60 MB FP32. FRCRN is the smallest of the enhancement models.
-    public nonisolated var estimatedMemoryBytes: Int { 60_000_000 }
+    /// Measured peak 2522 MiB, 30 s at 16 kHz on an M1 Pro - against the 60 MB
+    /// this declared, which was the checkpoint size. The widest gap in the package:
+    /// FRCRN's STFT/ISTFT buffers dwarf its 56 MB of weights. Chunked at 4 s, so it
+    /// does not grow with input length.
+    public nonisolated var estimatedMemoryBytes: Int { 2_600_000_000 }
 
     public func checkIfLoaded() async -> Bool { model != nil }
 

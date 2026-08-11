@@ -207,12 +207,16 @@ func runFRCRNWithBackground(inputPath: String, outputPath: String, weightsPath: 
 
 // MARK: - MossFormer2 SE with Chunking
 
-func runMossFormer2SE(inputPath: String, outputPath: String) async throws {
+func runMossFormer2SE(inputPath: String, outputPath: String, weightsPath: String?) async throws {
     print("\n=== MossFormer2 SE 48K with Chunking ===")
     print("Chunking: 4s chunks, 25% overlap, discard-edges")
-    
-    // Create provider (downloads from HuggingFace)
-    let provider = MLXProviders.mossformer2SE48K()
+
+    // `--weights` was accepted and then ignored here, unlike every neighbouring
+    // command. That mattered once quantized checkpoints existed: the precision is
+    // carried by the file, so pointing at `model_int8.safetensors` is the only way
+    // to ask for int8 without a download through the catalog.
+    let provider = weightsPath.map { MossFormer2SE48KProvider(weightsPath: $0) }
+        ?? MLXProviders.mossformer2SE48K()
     
     // Load model
     print("Loading model (may download from HuggingFace)...")
@@ -723,7 +727,7 @@ Task {
         case "frcrn-bg", "frcrnbg", "frcrn_bg":
             try await runFRCRNWithBackground(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "mossformer2_se", "mossformer2se", "se48k":
-            try await runMossFormer2SE(inputPath: inputPath, outputPath: outputPath)
+            try await runMossFormer2SE(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "se48k-bg", "se48kbg", "mossformer2_se_bg":
             try await runMossFormer2SEWithBackground(inputPath: inputPath, outputPath: outputPath)
         case "demucs", "vocals":

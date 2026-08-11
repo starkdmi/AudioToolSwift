@@ -512,7 +512,7 @@ extension KokoroTTSProvider: ManagedModel {
         case .fp32: 360_000_000
         case .fp16, .bf16: 220_000_000
         case .int8, .bit8: 150_000_000
-        case .bit6: 130_000_000
+        case .int6, .bit6: 130_000_000
         case .int4, .bit4: 110_000_000
         }
     }

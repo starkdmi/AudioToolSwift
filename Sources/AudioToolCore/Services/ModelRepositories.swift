@@ -157,7 +157,7 @@ public enum ModelFiles {
     /// quantization metadata in `config.json`.
     public static func chatterboxRequired(for precision: ModelPrecision) -> [String] {
         switch precision {
-        case .int8, .int4, .bit8, .bit6, .bit4:
+        case .int8, .int6, .int4, .bit8, .bit6, .bit4:
             chatterbox + ["config.json"]
         case .fp32, .fp16, .bf16:
             chatterbox

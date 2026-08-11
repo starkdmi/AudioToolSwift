@@ -89,12 +89,33 @@ public class MossFormer2Pipeline {
         self.audioSaver = AudioSaver(config: .init(sampleRate: sampleRate))
     }
     
-    /// Load model weights from NPZ file
-    /// - Parameter weightsPath: Path to the weights file (mossformer2_full.npz)
-    public func loadWeights(from weightsPath: String) throws {
+    /// Load model weights.
+    ///
+    /// - Parameters:
+    ///   - weightsPath: Path to the weights file.
+    ///   - quantization: How the checkpoint was quantized, or `nil` to work it out
+    ///     from the file itself. Pass this only to override the detection.
+    ///
+    /// A quantized checkpoint stores each `Linear` as a packed integer `weight`
+    /// alongside `scales` and `biases`, so the modules have to be replaced with
+    /// their quantized equivalents *before* the parameters arrive - the same
+    /// `nn.quantize(model, group_size=64, bits=bits)` the Python generator runs
+    /// before its own load, at `public/python/generate.py`. The quantizable set is
+    /// identical on both sides: `FFConvM.linear` and `UniDeepFSMN.linear/project`
+    /// are the only `Linear` layers in the model, there are no `Embedding`s, and
+    /// `ScaledSinuEmbedding` is a plain `Module` that neither runtime touches.
+    public func loadWeights(
+        from weightsPath: String,
+        quantization: QuantizationParameters? = nil
+    ) throws {
         print("Loading weights from \(weightsPath)...")
         let loadStart = Date()
-        
+
+        if let quantization = quantization ?? QuantizationParameters.resolve(forWeightsAt: weightsPath) {
+            print("  Quantized checkpoint: \(quantization.bits)-bit, group size \(quantization.groupSize)")
+            quantize(model: model, groupSize: quantization.groupSize, bits: quantization.bits)
+        }
+
         // Load weights from MLX format (NPZ file)
         let weights = try MLX.loadArrays(url: URL(fileURLWithPath: weightsPath))
         
@@ -133,8 +154,16 @@ public class MossFormer2Pipeline {
         
         // Apply only the weights that exist in the model
         let nestedParams = NestedDictionary<String, MLXArray>.unflattened(filteredWeights)
-        
-        try model.update(parameters: nestedParams, verify: .none)
+
+        // `.shapeMismatch`, not `.none`. The filter above drops any key the model
+        // does not have, which is what let a quantized checkpoint load into an
+        // unquantized model and produce audio rather than an error: `scales` and
+        // `biases` were discarded as unknown, and the packed integer `weight` -
+        // [out, in/8] where the model wants [out, in] - was assigned without a
+        // check. Nothing downstream noticed. Shape verification is the narrowest
+        // guard that catches it; `.allModelKeysSet` would too, but it also fails
+        // on any parameter the checkpoint legitimately omits.
+        try model.update(parameters: nestedParams, verify: .shapeMismatch)
                 
         let loadEnd = Date()
         print("\nWeights loaded successfully!")

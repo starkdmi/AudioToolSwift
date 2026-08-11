@@ -12,6 +12,12 @@ import MLX
 import MLXNN
 import AudioUtils
 import MossFormer2SR
+// For `QuantizationParameters`, which describes how a MossFormer2 checkpoint was
+// quantized. It lives beside the SE pipeline because that is where it was first
+// needed; the concept is not SE-specific and the two providers share this file's
+// notion of a checkpoint. Duplicating it so this target could avoid one import
+// would let the two copies disagree about a group size.
+@preconcurrency import Mossformer2MLXSwift
 
 // MARK: - MossFormer2 SR 48K Provider (Super Resolution)
 
@@ -22,8 +28,23 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     /// HuggingFace repository for model weights
     public static let repo = ModelRepository.mossFormer2SR48K
     
-    /// Supported precisions (fp32 only)
-    public static let supportedPrecisions: [ModelPrecision] = [.fp32]
+    /// Supported precisions.
+    ///
+    /// Only fp32 is published; the rest are conversions of it and exist locally.
+    /// Listed anyway because the loader handles them and the benchmark sweeps them
+    /// - and because the answer they produce is worth having written down: on this
+    /// model quantization is close to pointless. Only 168 `Linear` modules quantize
+    /// against a Generator that is almost entirely convolutions, so int4 is 0.65x
+    /// the fp32 size where SE reaches 0.30x, and fp16 at 0.50x is smaller than every
+    /// quantized variant.
+    ///
+    /// **fp16 is excluded because it does not work.** The fp16 conversion returns
+    /// NaN for every sample - 143872 of 143872 - while its checkpoint contains no
+    /// non-finite weight, so it is the forward pass that overflows and not the
+    /// cast. The integer widths are unaffected: they pack only the `Linear` weights
+    /// and every activation stays fp32. Nothing here reports that at run time, which
+    /// is why it is a supported-precision decision rather than a caller's problem.
+    public static let supportedPrecisions: [ModelPrecision] = [.fp32, .int8, .int6, .int4]
     
     // AudioUpscaler conformance
     public nonisolated var inputSampleRate: Int { 16000 }
@@ -91,6 +112,11 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     }
     
     /// Initialize with explicit weights path (no download)
+    ///
+    /// `precision` is not taken here: the checkpoint carries it. `load()` reads the
+    /// quantization off the file - a sibling `config.json` if it names one, the
+    /// `model_int<n>` filename otherwise - so pointing this at
+    /// `model_int8.safetensors` is how you ask for int8 without a download.
     public init(weightsPath: String, configPath: String) {
         self.weightsPath = weightsPath
         self.configPath = configPath
@@ -151,7 +177,38 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
         let weights = try MLX.loadArrays(url: URL(fileURLWithPath: resolvedWeightsPath))
         let filteredWeights = weights.filter { !$0.key.contains("num_batches_tracked") }
         let parameters = ModuleParameters.unflattened(filteredWeights)
-        candidate.update(parameters: parameters)
+
+        // Quantized checkpoints need their modules replaced before the parameters
+        // arrive - see `QuantizationParameters`.
+        //
+        // Filtered on the checkpoint rather than quantized wholesale, unlike the SE
+        // pipeline, because the two ports disagree about one module: Python's
+        // `UniDeepFsmn.__init__` returns early when `lorder is None` and builds no
+        // `Linear` at all, while the Swift initialiser constructs a dummy
+        // `Linear(1, 1)` on that branch. An unconditional `quantize` would therefore
+        // quantize a layer on this side that has no counterpart in the checkpoint.
+        // Asking the checkpoint which modules it holds `scales` for makes the two
+        // sets agree by construction - the same predicate
+        // `ChatterboxTTSProvider.updateModule` uses.
+        if let quantization = QuantizationParameters.resolve(forWeightsAt: resolvedWeightsPath) {
+            let quantizedPaths = Set(
+                filteredWeights.keys.compactMap { key -> String? in
+                    key.hasSuffix(".scales") ? String(key.dropLast(".scales".count)) : nil
+                }
+            )
+            quantize(
+                model: candidate,
+                groupSize: quantization.groupSize,
+                bits: quantization.bits,
+                filter: { path, _ in quantizedPaths.contains(path) }
+            )
+        }
+
+        // `.shapeMismatch` rather than the default `.none`. `update(parameters:)`
+        // without a verify argument calls through to `verify: .none`, which would
+        // assign a packed integer weight into a float parameter of a different shape
+        // and report nothing - the same silent path the SE pipeline had.
+        try candidate.update(parameters: parameters, verify: .shapeMismatch)
         eval(candidate)
         try Task.checkCancellation()
 
@@ -803,8 +860,14 @@ private struct SuperResolutionChunkSource {
 extension MossFormer2SR48KProvider: ManagedModel {
     public nonisolated var modelId: String { "mossformer2_sr_48k" }
 
-    /// ~300 MB FP32.
-    public nonisolated var estimatedMemoryBytes: Int { 300_000_000 }
+    /// Measured peak 4017 MiB, 30 s of 16 kHz input on an M1 Pro.
+    ///
+    /// This read 300 MB - below even the 418 MiB checkpoint - and I replaced it with
+    /// 1.6 GB scaled from SE's measurement before an SR benchmark run existed. Both
+    /// were wrong by more than a factor of two in the direction that matters, which
+    /// is the whole argument for measuring: SR has the largest footprint of the
+    /// enhancement models and nothing about its checkpoint says so.
+    public nonisolated var estimatedMemoryBytes: Int { 4_200_000_000 }
 
     public func checkIfLoaded() async -> Bool { model != nil }
 

@@ -82,7 +82,14 @@ public enum ModelPrecision: String, Sendable, CaseIterable, Hashable {
     
     /// 8-bit integer quantization
     case int8 = "int8"
-    
+
+    /// 6-bit integer quantization
+    ///
+    /// Only MossFormer2 SE publishes this width. It exists because the drop from
+    /// int8 to int4 is not gradual on this architecture and int6 sits usefully in
+    /// between - see the quantization trade-off report.
+    case int6 = "int6"
+
     /// 4-bit integer quantization
     case int4 = "int4"
     
