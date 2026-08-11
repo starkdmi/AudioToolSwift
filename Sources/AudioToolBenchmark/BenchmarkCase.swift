@@ -10,6 +10,7 @@ import AudioTool
 import AudioToolCore
 import AudioToolMLX
 import AudioToolCoreML
+import AudioToolTTS
 import AudioToolUSS
 
 // MARK: - Workload
@@ -25,6 +26,25 @@ public struct WorkloadOutput: Sendable {
         self.frames = frames
         self.sampleRate = sampleRate
     }
+}
+
+/// Which side of a case the real-time factor divides by.
+///
+/// Every audio-to-audio model here consumes and produces the same duration, so
+/// "seconds of audio per second of wall time" is unambiguous and the input is the
+/// convenient place to read it. Text-to-speech consumes no audio at all: the
+/// runner still hands it a buffer, the model ignores it, and dividing by that
+/// buffer's duration would report the length of a signal nothing looked at.
+///
+/// Naming the basis per case rather than inferring it from the category keeps the
+/// two kinds of row from silently sharing a column - a `tts` RTF and an
+/// `enhancement` RTF are both "x realtime" and are not the same measurement. The
+/// renderer groups them separately for the same reason.
+public enum RateBasis: String, Codable, Sendable {
+    /// Audio in per second of wall time. Every transform case.
+    case input
+    /// Audio out per second of wall time. Synthesis.
+    case output
 }
 
 /// A model, reduced to the three operations the runner times.
@@ -98,6 +118,9 @@ public struct BenchmarkCase: Sendable {
     /// is that a case starts from nothing.
     public let makeWorkload: @Sendable () -> BenchmarkWorkload
 
+    /// Which duration the real-time factor divides by. See ``RateBasis``.
+    public let rateBasis: RateBasis
+
     public init(
         id: String,
         label: String,
@@ -111,8 +134,10 @@ public struct BenchmarkCase: Sendable {
         weightsPreCached: @escaping @Sendable () -> Bool? = { nil },
         weightsSource: @escaping @Sendable () -> WeightsSource = { .none },
         unavailableReason: @escaping @Sendable () -> String? = { nil },
+        rateBasis: RateBasis = .input,
         makeWorkload: @escaping @Sendable () -> BenchmarkWorkload
     ) {
+        self.rateBasis = rateBasis
         self.id = id
         self.label = label
         self.category = category
@@ -139,16 +164,83 @@ public struct BenchmarkCase: Sendable {
 /// project rather than this one, and mixing them into the same table invites a
 /// comparison that is not being made.
 ///
-/// TTS (Kokoro, Chatterbox) is also absent. Not for any dependency reason - it
-/// links fine - but because a text-to-speech RTF is a different measurement with a
-/// different denominator, and folding it into a table of audio-to-audio RTFs would
-/// produce a column where two rows mean different things. Adding a `tts` category
-/// here is a small change when someone wants it.
+/// TTS was absent for a long time, and the objection was right: a text-to-speech
+/// RTF has a different denominator, and folding it into a table of audio-to-audio
+/// RTFs produces a column where two rows mean different things. Chatterbox is here
+/// now because ``RateBasis`` answers that - each case names which duration its rate
+/// divides by, and the renderer groups the categories separately - rather than
+/// because the objection stopped applying. Kokoro is still absent.
 public enum BenchmarkCatalog {
 
     public static func allCases(options: CatalogOptions = CatalogOptions()) -> [BenchmarkCase] {
         enhancement(options) + separation(options) + superResolution(options)
-            + music(options) + universal(options)
+            + music(options) + universal(options) + tts(options)
+    }
+
+    // MARK: Text to speech
+
+    /// The sentence every TTS case synthesizes.
+    ///
+    /// Fixed, and long enough that per-call overhead is not most of the
+    /// measurement, but the absolute duration does not matter: the rate divides by
+    /// what came out, so a case that generates more audio is not thereby faster.
+    /// What does matter is that every precision synthesizes the *same* text -
+    /// Chatterbox is autoregressive, so a longer sentence is more decoder steps,
+    /// and comparing precisions on different text would compare sentence lengths.
+    private static let ttsPrompt =
+        "The quick brown fox jumps over the lazy dog, and then it does so again."
+
+    /// Chatterbox at each published precision.
+    ///
+    /// This category is reported apart from the rest and its rate means something
+    /// different: `RateBasis.output`, seconds generated per second of wall time,
+    /// against `.input` everywhere else. Both render as "x realtime" and they are
+    /// not comparable - a TTS row and an enhancement row in one sorted column
+    /// would invite exactly the comparison this split exists to prevent.
+    ///
+    /// Quality is deliberately not here. Everything downstream of conditioning
+    /// samples, so two precisions do not produce comparable waveforms even with a
+    /// fixed seed; what a precision costs is measured on the conditioning
+    /// embeddings instead. See `Scripts/quantization-report.py`.
+    ///
+    /// **Read the cross-precision rates with care.** Within one precision the
+    /// measurement is tight - standard deviation of 0.02 s over three runs. Across
+    /// precisions it is not controlled: sampling means each one draws a different
+    /// token sequence for the same sentence, so they generate different amounts of
+    /// audio - measured 3.18 s at 4bit against 3.95 s at 6bit. Dividing by the
+    /// output duration removes most of that, but not the part where per-token cost
+    /// differs between prefill and decode, and the ratio between the two moves with
+    /// length. A gap of a few percent here is not a result; the 4bit-to-6bit gap of
+    /// ~20% is larger than that and survives, which is worth knowing but is still
+    /// one sentence on one machine.
+    private static func tts(_ options: CatalogOptions) -> [BenchmarkCase] {
+        let precisions: [ModelPrecision] = [.fp32, .fp16, .bit8, .bit6, .bit4]
+
+        return precisions.map { precision in
+            let repo = ChatterboxTTSProvider.repository(for: precision)
+            let files = ModelFiles.chatterboxRequired(for: precision)
+
+            return BenchmarkCase(
+                id: "mlx.chatterbox.\(precision.rawValue)",
+                label: "Chatterbox TTS (\(precision.rawValue.uppercased()))",
+                category: "tts",
+                backend: "mlx",
+                // The model's own output rate. Nothing resamples the result.
+                sampleRate: 24000,
+                estimatedMemoryBytes: ChatterboxTTSProvider.estimatedMemoryBytes(for: precision),
+                weightsPreCached: { cached(repo, files) },
+                weightsSource: { source(local: nil, repo: repo, files: files) },
+                rateBasis: .output,
+                makeWorkload: {
+                    let tts = ChatterboxTTSProvider(precision: precision)
+                    return synthesis(
+                        load: { try await tts.load() },
+                        generate: { try await tts.synthesize(ttsPrompt, voice: "default") },
+                        unload: { await tts.unload() }
+                    )
+                }
+            )
+        }
     }
 
     /// Inputs the catalog needs that cannot be discovered.
@@ -160,6 +252,10 @@ public enum BenchmarkCatalog {
         /// why this case now runs unattended on a development machine.
         public var coreMLGANModelPath: String?
 
+        /// The FP16 conversion, when the checkout has one beside the fp32 file.
+        /// Not settable from `--coreml-gan`, which names one file.
+        public var coreMLGANFP16ModelPath: String?
+
         /// Weights already on this machine. See ``LocalWeights``.
         public var localWeights: LocalWeights
 
@@ -169,6 +265,7 @@ public enum BenchmarkCatalog {
         ) {
             self.localWeights = localWeights
             self.coreMLGANModelPath = coreMLGANModelPath ?? localWeights.mossFormerGANCoreML
+            self.coreMLGANFP16ModelPath = localWeights.mossFormerGANCoreMLFP16
         }
     }
 
@@ -207,8 +304,14 @@ public enum BenchmarkCatalog {
             )
         ]
 
-        for precision in [ModelPrecision.fp32, .fp16] {
-            // Only FP32 exists in the checkout; FP16 resolves through HuggingFace.
+        // Every precision the repository publishes, which is also
+        // `MossFormer2SE48KProvider.supportedPrecisions`. The quantized widths are
+        // here to be compared against fp32 rather than merely to run: this is the
+        // only model in the catalog offering a precision ladder, so it is the only
+        // one that can answer what a user gives up by picking a smaller one.
+        for precision in MossFormer2SE48KProvider.supportedPrecisions {
+            // Only FP32 exists in the checkout; everything else resolves through
+            // HuggingFace.
             let local = precision == .fp32 ? options.localWeights.mossFormer2SE48KFP32 : nil
             cases.append(BenchmarkCase(
                 id: "mlx.mossformer2_se_48k.\(precision.rawValue)",
@@ -241,29 +344,50 @@ public enum BenchmarkCatalog {
         }
 
         if let modelPath = options.coreMLGANModelPath {
-            cases.append(BenchmarkCase(
-                id: "coreml.mossformer_gan_se_16k",
-                label: "MossFormerGAN SE 16 kHz (CoreML)",
-                category: "enhancement",
-                backend: "coreml",
-                sampleRate: 16000,
-                estimatedMemoryBytes: 700_000_000,
-                weightsPreCached: { FileManager.default.fileExists(atPath: modelPath) },
-                weightsSource: { .local },
-                unavailableReason: {
-                    FileManager.default.fileExists(atPath: modelPath)
-                        ? nil
-                        : "CoreML model not found at \(modelPath)"
-                },
-                makeWorkload: {
-                    let provider = MossFormerGANCoreMLProvider(modelPath: modelPath)
-                    return transform(
-                        load: { try await provider.load() },
-                        process: { try await provider.process($0) },
-                        unload: { await provider.unload() }
-                    )
-                }
-            ))
+            // One case per compiled `.mlpackage`. CoreML fixes precision at
+            // conversion time rather than at load, so fp32 and fp16 are two files
+            // and cannot be one case with a parameter - which also means the
+            // comparison here is between two conversions of one graph, not between
+            // two ways of running it.
+            //
+            // The fp16 variant is only benchmarked when it sits beside the fp32 one
+            // in the checkout; `--coreml-gan` names a single file, and deriving a
+            // sibling path from it would guess.
+            let variants: [(suffix: String, label: String, path: String)] = [
+                ("", "FP32", modelPath)
+            ] + (options.coreMLGANFP16ModelPath.map {
+                [(".fp16", "FP16", $0)]
+            } ?? [])
+
+            for variant in variants {
+                cases.append(BenchmarkCase(
+                    id: "coreml.mossformer_gan_se_16k\(variant.suffix)",
+                    label: "MossFormerGAN SE 16 kHz (CoreML \(variant.label))",
+                    category: "enhancement",
+                    backend: "coreml",
+                    sampleRate: 16000,
+                    // Measured peak 1631 MiB for the fp32 conversion, 30 s at
+                    // 16 kHz. Almost none of it is CoreML - mlxPeakDuringRunBytes is
+                    // 5 MiB - because the STFT, ISTFT and segment stitching either
+                    // side of the model run in MLX.
+                    estimatedMemoryBytes: 1_700_000_000,
+                    weightsPreCached: { FileManager.default.fileExists(atPath: variant.path) },
+                    weightsSource: { .local },
+                    unavailableReason: {
+                        FileManager.default.fileExists(atPath: variant.path)
+                            ? nil
+                            : "CoreML model not found at \(variant.path)"
+                    },
+                    makeWorkload: {
+                        let provider = MossFormerGANCoreMLProvider(modelPath: variant.path)
+                        return transform(
+                            load: { try await provider.load() },
+                            process: { try await provider.process($0) },
+                            unload: { await provider.unload() }
+                        )
+                    }
+                ))
+            }
         } else {
             cases.append(BenchmarkCase(
                 id: "coreml.mossformer_gan_se_16k",
@@ -342,40 +466,46 @@ public enum BenchmarkCatalog {
 
     private static func superResolution(_ options: CatalogOptions) -> [BenchmarkCase] {
         _ = options
-        return [
-            BenchmarkCase(
-                id: "mlx.mossformer2_sr_48k",
-                label: "MossFormer2 SR 16 -> 48 kHz",
-                category: "superResolution",
-                backend: "mlx",
-                // Consumes 16 kHz and emits 48 kHz. Feeding it 48 kHz would be
-                // self-defeating - see the note on `sampleRate` in the provider -
-                // and would also make its RTF incomparable to its own docs.
-                sampleRate: 16000,
-                estimatedMemoryBytes: 1_200_000_000,
-                // The one case where `config.json` is not decoration: this provider
-                // reads its architecture out of it rather than hardcoding one, so
-                // both files have to be present for a load to succeed.
-                weightsPreCached: {
-                    cached(MossFormer2SR48KProvider.repo, ModelFiles.standard(.fp32))
-                },
-                weightsSource: {
-                    source(
-                        local: nil,
-                        repo: MossFormer2SR48KProvider.repo,
-                        files: ModelFiles.standard(.fp32)
-                    )
-                },
-                makeWorkload: {
-                    let provider = MossFormer2SR48KProvider(precision: .fp32)
-                    return transform(
-                        load: { try await provider.load() },
-                        process: { try await provider.process($0) },
-                        unload: { await provider.unload() }
-                    )
-                }
-            )
-        ]
+        return MossFormer2SR48KProvider.supportedPrecisions.map { precision in
+                BenchmarkCase(
+                    id: "mlx.mossformer2_sr_48k.\(precision.rawValue)",
+                    label: "MossFormer2 SR 16 -> 48 kHz (\(precision.rawValue.uppercased()))",
+                    category: "superResolution",
+                    backend: "mlx",
+                    // Consumes 16 kHz and emits 48 kHz. Feeding it 48 kHz would be
+                    // self-defeating - see the note on `sampleRate` in the provider -
+                    // and would also make its RTF incomparable to its own docs.
+                    sampleRate: 16000,
+                    // Measured peak 4017 MiB at fp32, the largest of the enhancement
+                    // models. The precisions barely differ: only 168 `Linear` modules
+                    // quantize against a Generator of convolutions.
+                    estimatedMemoryBytes: 4_200_000_000,
+                    // The one case where `config.json` is not decoration: this provider
+                    // reads its architecture out of it rather than hardcoding one, so
+                    // both files have to be present for a load to succeed. The
+                    // quantized checkpoints share the fp32 config - the bit width comes
+                    // off the filename, since only fp32 is published and the rest are
+                    // local conversions.
+                    weightsPreCached: {
+                        cached(MossFormer2SR48KProvider.repo, ModelFiles.standard(precision))
+                    },
+                    weightsSource: {
+                        source(
+                            local: nil,
+                            repo: MossFormer2SR48KProvider.repo,
+                            files: ModelFiles.standard(precision)
+                        )
+                    },
+                    makeWorkload: {
+                        let provider = MossFormer2SR48KProvider(precision: precision)
+                        return transform(
+                            load: { try await provider.load() },
+                            process: { try await provider.process($0) },
+                            unload: { await provider.unload() }
+                        )
+                    }
+                )
+            }
     }
 
     // MARK: Music separation
@@ -523,6 +653,30 @@ public enum BenchmarkCatalog {
     // MARK: Helpers
 
     /// The common shape: an `AudioTransform`-style `process(_:)`.
+    /// A workload that generates rather than transforms.
+    ///
+    /// The buffer the runner supplies is discarded on purpose - synthesis has no
+    /// audio input, and the case declares `rateBasis: .output` so the real-time
+    /// factor divides by what came out instead of what was ignored.
+    private static func synthesis(
+        load: @escaping @Sendable () async throws -> Void,
+        generate: @escaping @Sendable () async throws -> AudioBuffer,
+        unload: @escaping @Sendable () async -> Void
+    ) -> BenchmarkWorkload {
+        BenchmarkWorkload(
+            load: load,
+            run: { _ in
+                let output = try await generate()
+                return WorkloadOutput(
+                    streams: 1,
+                    frames: output.frameCount,
+                    sampleRate: output.sampleRate
+                )
+            },
+            unload: unload
+        )
+    }
+
     private static func transform(
         load: @escaping @Sendable () async throws -> Void,
         process: @escaping @Sendable (AudioBuffer) async throws -> AudioBuffer,

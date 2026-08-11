@@ -55,7 +55,7 @@ public struct LocalWeights: Sendable {
     /// | FRCRN | `Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors` |
     /// | SE 48K FP32 | `Models/mossformer2_se_mlx_swift/model_fp32.safetensors` |
     /// | Demucs | `Models/demucs_mlx_swift/Weights` (a directory of four stems) |
-    /// | USS | `Models/uss_mlx_swift/USSSwiftTests/resunet30_<precision>.safetensors` |
+    /// | USS | `Models/uss_mlx_swift/USSSwift/Models/resunet30_<precision>.safetensors` |
     /// | MossFormerGAN | `Models/mossformer_gan_se_coreml/MossFormerGAN_256frames.mlpackage` |
     ///
     /// Super-resolution and speaker separation are absent on purpose: the checkout
@@ -68,8 +68,26 @@ public struct LocalWeights: Sendable {
         public static let mossFormerGANCoreML =
             "Models/mossformer_gan_se_coreml/MossFormerGAN_256frames.mlpackage"
 
+        /// The FP16-weight conversion of the same graph, alongside it in the
+        /// checkout at 7.6 MB against 13 MB. CoreML precision is a property of the
+        /// compiled `.mlpackage`, not a runtime flag, so the two are separate files
+        /// and separate benchmark cases rather than one case with a parameter.
+        public static let mossFormerGANCoreMLFP16 =
+            "Models/mossformer_gan_se_coreml/MossFormerGAN_256frames_FP16.mlpackage"
+
+        /// `USSSwift/Models`, not `USSSwiftTests`.
+        ///
+        /// The test directory holds one real symlink and one macOS *alias*:
+        /// `resunet30_fp32.safetensors` is a 45-byte symlink that resolves, and
+        /// `resunet30_fp16.safetensors` is a 1152-byte alias file beginning
+        /// `book....mark....` that nothing below Finder can follow. `file(1)` calls
+        /// it "MacOS Alias file". So fp16 was rejected by the size floor below and
+        /// every fp16 benchmark fell through to HuggingFace - where `USS_MLX` is
+        /// unpublished, making the default USS configuration unrunnable.
+        ///
+        /// `USSSwift/Models` holds both as ordinary files, 53 MB and 106 MB.
         public static func uss(_ precision: ModelPrecisionName) -> String {
-            "Models/uss_mlx_swift/USSSwiftTests/resunet30_\(precision.rawValue).safetensors"
+            "Models/uss_mlx_swift/USSSwift/Models/resunet30_\(precision.rawValue).safetensors"
         }
     }
 
@@ -127,6 +145,7 @@ public struct LocalWeights: Sendable {
     public var mossFormer2SE48KFP32: String? { path(Layout.mossFormer2SE48KFP32) }
     public var demucsDirectory: String? { path(Layout.demucsDirectory) }
     public var mossFormerGANCoreML: String? { path(Layout.mossFormerGANCoreML) }
+    public var mossFormerGANCoreMLFP16: String? { path(Layout.mossFormerGANCoreMLFP16) }
 
     public func uss(_ precision: ModelPrecisionName) -> String? {
         path(Layout.uss(precision))

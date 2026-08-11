@@ -201,11 +201,23 @@ public enum CaseRunner {
         // MLXCachePolicy's own limits over the ones requested above.
         result.effectiveGpuCacheLimitBytes = GPU.cacheLimit
         result.effectiveGpuMemoryLimitBytes = GPU.memoryLimit
+        // Synthesis ignores the buffer it is handed, so dividing by that buffer's
+        // duration would report the length of a signal nothing looked at. See
+        // ``RateBasis``.
+        let ratedSeconds: Double
+        switch benchmarkCase.rateBasis {
+        case .input:
+            ratedSeconds = input.duration
+        case .output:
+            ratedSeconds = lastOutput.sampleRate > 0
+                ? Double(lastOutput.frames) / Double(lastOutput.sampleRate)
+                : 0
+        }
         result.timing = TimingMetrics(
             loadSeconds: loadSeconds,
             firstRunSeconds: firstRunSeconds,
             iterationSeconds: iterationSeconds,
-            audioSeconds: input.duration
+            audioSeconds: ratedSeconds
         )
         result.memory = MemoryMetrics(
             baselineFootprintBytes: baseline,

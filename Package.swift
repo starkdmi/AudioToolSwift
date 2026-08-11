@@ -398,6 +398,10 @@ let package = Package(
                 "AudioToolMLX",
                 "AudioToolCoreML",
                 "AudioToolUSS",
+                // For the `tts` category. Adding this is what the note in
+                // BenchmarkCatalog meant by "a small change when someone wants it";
+                // the dependency was never the obstacle, the shared RTF column was.
+                "AudioToolTTS",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
                 .product(name: "MLX", package: "mlx-swift"),
             ],
