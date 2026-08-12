@@ -137,6 +137,34 @@ public struct AudioBuffer: Sendable, Hashable {
         return min(frameCount, Int(time * Double(sampleRate)))
     }
     
+    /// Frames spanned by a duration in seconds, without converting an unbounded
+    /// `Double` straight to `Int`.
+    ///
+    /// `Int(_:)` traps on NaN, on either infinity, and on anything past `Int.max`.
+    /// These values reach public constructors from arithmetic - a duration divided
+    /// by a zero rate, a difference of two timestamps - far more often than from a
+    /// literal, and a trap in a constructor takes the host process with it. Zero and
+    /// `Int.max` are the two saturating ends; an allocation that large fails as an
+    /// out-of-memory condition, which is a diagnosable outcome rather than a crash
+    /// inside a numeric conversion.
+    static func frameCount(forSeconds seconds: Double, sampleRate: Int) -> Int {
+        guard seconds.isFinite, seconds > 0, sampleRate > 0 else { return 0 }
+        let frames = (seconds * Double(sampleRate)).rounded(.towardZero)
+        guard frames < Double(Int.max) else { return Int.max }
+        return Int(frames)
+    }
+
+    /// Signed sample offset for a timeline position in seconds. Saturates at both
+    /// ends for the same reasons as ``frameCount(forSeconds:sampleRate:)``; a
+    /// non-finite offset has no position on the timeline and is treated as zero.
+    static func sampleOffset(forSeconds seconds: Double, sampleRate: Int, channels: Int) -> Int {
+        guard seconds.isFinite, sampleRate > 0, channels > 0 else { return 0 }
+        let magnitude = frameCount(forSeconds: abs(seconds), sampleRate: sampleRate)
+        let (scaled, overflowed) = magnitude.multipliedReportingOverflow(by: channels)
+        let offset = overflowed ? Int.max : scaled
+        return seconds < 0 ? -offset : offset
+    }
+
     /// Subtract another buffer (for residual computation)
     public func subtracting(_ other: AudioBuffer) -> AudioBuffer {
         precondition(other.sampleRate == sampleRate, "Sample rates must match")
@@ -153,19 +181,28 @@ public struct AudioBuffer: Sendable, Hashable {
     }
     
     /// Mix with another buffer at optional offset
+    ///
+    /// A non-finite `offset` is treated as zero rather than trapping; see
+    /// ``sampleOffset(forSeconds:sampleRate:channels:)``.
     public func mixing(with other: AudioBuffer, at offset: Double = 0) -> AudioBuffer {
         precondition(other.sampleRate == sampleRate, "Sample rates must match")
         precondition(other.channels == channels, "Channel counts must match")
-        
-        let offsetSamples = Int(offset * Double(sampleRate)) * channels
+
+        let offsetSamples = Self.sampleOffset(
+            forSeconds: offset,
+            sampleRate: sampleRate,
+            channels: channels
+        )
 
         // The returned buffer represents the union of both timelines. For a
         // negative offset, shift `self` to the right instead of indexing the result
         // with a negative value (which used to trap) or throwing away the leading
         // part of `other`.
         let timelineStart = min(0, offsetSamples)
-        let timelineEnd = max(samples.count, offsetSamples + other.samples.count)
-        let totalLength = max(0, timelineEnd - timelineStart)
+        let (otherEnd, otherOverflowed) = offsetSamples.addingReportingOverflow(other.samples.count)
+        let timelineEnd = otherOverflowed ? Int.max : max(samples.count, otherEnd)
+        let (span, spanOverflowed) = timelineEnd.subtractingReportingOverflow(timelineStart)
+        let totalLength = spanOverflowed ? Int.max : max(0, span)
         let selfStart = -timelineStart
         let otherStart = offsetSamples - timelineStart
         
@@ -214,18 +251,24 @@ public struct AudioBuffer: Sendable, Hashable {
 extension AudioBuffer {
     
     /// Create silence buffer for testing
+    ///
+    /// A non-finite or negative `duration` yields an empty buffer rather than
+    /// trapping in the `Double` to `Int` conversion.
     public static func silence(duration: Double, sampleRate: Int, channels: Int = 1) -> AudioBuffer {
-        let frameCount = Int(duration * Double(sampleRate))
+        let frameCount = frameCount(forSeconds: duration, sampleRate: sampleRate)
+        let (sampleCount, overflowed) = frameCount.multipliedReportingOverflow(by: max(1, channels))
         return AudioBuffer(
-            samples: [Float](repeating: 0, count: frameCount * channels),
+            samples: [Float](repeating: 0, count: overflowed ? Int.max : sampleCount),
             sampleRate: sampleRate,
             channels: channels
         )
     }
     
     /// Create sine wave for testing
+    ///
+    /// A non-finite or negative `duration` yields an empty buffer.
     public static func sine(frequency: Float, duration: Double, sampleRate: Int, amplitude: Float = 0.5) -> AudioBuffer {
-        let frameCount = Int(duration * Double(sampleRate))
+        let frameCount = frameCount(forSeconds: duration, sampleRate: sampleRate)
         let samples = (0..<frameCount).map { i in
             amplitude * sin(2 * .pi * frequency * Float(i) / Float(sampleRate))
         }
@@ -233,8 +276,10 @@ extension AudioBuffer {
     }
     
     /// Create white noise for testing
+    ///
+    /// A non-finite or negative `duration` yields an empty buffer.
     public static func noise(duration: Double, sampleRate: Int, amplitude: Float = 0.5) -> AudioBuffer {
-        let frameCount = Int(duration * Double(sampleRate))
+        let frameCount = frameCount(forSeconds: duration, sampleRate: sampleRate)
         let samples = (0..<frameCount).map { _ in Float.random(in: -amplitude...amplitude) }
         return AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
     }

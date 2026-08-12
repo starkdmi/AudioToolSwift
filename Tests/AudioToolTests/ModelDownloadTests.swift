@@ -132,6 +132,252 @@ struct ModelDownloadTypeTests {
         #expect(selected?.standardizedFileURL == olderComplete.standardizedFileURL)
     }
 
+    // MARK: - Pinned cache selection
+
+    /// Build a cache directory holding `file`, with an optional `swift-transformers`
+    /// download sidecar naming the commit it came from.
+    private func makeCandidate(
+        named name: String,
+        in root: URL,
+        file: String,
+        contents: Data,
+        recordingRevision revision: String?
+    ) throws -> URL {
+        let candidate = root.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: true)
+        try contents.write(to: candidate.appendingPathComponent(file))
+
+        if let revision {
+            let metadataDirectory = candidate
+                .appendingPathComponent(".cache")
+                .appendingPathComponent("huggingface")
+                .appendingPathComponent("download")
+            try FileManager.default.createDirectory(
+                at: metadataDirectory,
+                withIntermediateDirectories: true
+            )
+            try "\(revision)\netag\n1700000000.0\n".write(
+                to: metadataDirectory.appendingPathComponent("\(file).metadata"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+        return candidate
+    }
+
+    @Test("A cache hit at another revision is not accepted for a pinned repository")
+    func testPinnedLookupRejectsForeignRevision() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pinned = String(repeating: "a", count: 40)
+        let foreign = String(repeating: "b", count: 40)
+        let file = "model_fp16.safetensors"
+
+        let stale = try makeCandidate(
+            named: "stale", in: root, file: file,
+            contents: Data([9]), recordingRevision: foreign
+        )
+        let current = try makeCandidate(
+            named: "current", in: root, file: file,
+            contents: Data([1]), recordingRevision: pinned
+        )
+
+        let pin = ModelPin(revision: pinned)
+        let selected = ModelDownloader.firstCompletePath(
+            in: [stale, current],
+            matching: [file],
+            pin: pin
+        )
+
+        // Order puts the foreign-revision snapshot first; the pin is what rejects it.
+        #expect(selected?.standardizedFileURL == current.standardizedFileURL)
+    }
+
+    @Test("An unpinned repository accepts any cached revision")
+    func testUnpinnedLookupIgnoresRevision() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let file = "model_fp16.safetensors"
+        let candidate = try makeCandidate(
+            named: "any", in: root, file: file,
+            contents: Data([1]), recordingRevision: String(repeating: "c", count: 40)
+        )
+
+        let selected = ModelDownloader.firstCompletePath(in: [candidate], matching: [file])
+        #expect(selected?.standardizedFileURL == candidate.standardizedFileURL)
+    }
+
+    @Test("Content standing in for missing provenance is accepted only when it matches")
+    func testPinnedLookupFallsBackToContentHashes() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let file = "model_fp16.safetensors"
+        let bytes = Data("pinned bytes".utf8)
+
+        // No sidecar - an older swift-transformers wrote this directory.
+        let legacy = try makeCandidate(
+            named: "legacy", in: root, file: file,
+            contents: bytes, recordingRevision: nil
+        )
+        let hash = try ModelDownloader.sha256(
+            ofFileAt: legacy.appendingPathComponent(file)
+        )
+
+        let matchingPin = ModelPin(
+            revision: String(repeating: "a", count: 40),
+            fileHashes: [file: hash]
+        )
+        #expect(
+            ModelDownloader.firstCompletePath(
+                in: [legacy], matching: [file],
+                pin: matchingPin
+            ) != nil
+        )
+
+        PinnedContentCache.shared.invalidate()
+
+        let otherPin = ModelPin(
+            revision: String(repeating: "a", count: 40),
+            fileHashes: [file: String(repeating: "0", count: 64)]
+        )
+        #expect(
+            ModelDownloader.firstCompletePath(
+                in: [legacy], matching: [file],
+                pin: otherPin
+            ) == nil
+        )
+
+        PinnedContentCache.shared.invalidate()
+
+        // Nothing recorded and nothing to check against: refuse.
+        let hashlessPin = ModelPin(revision: String(repeating: "a", count: 40))
+        #expect(
+            ModelDownloader.firstCompletePath(
+                in: [legacy], matching: [file],
+                pin: hashlessPin
+            ) == nil
+        )
+    }
+
+    @Test("A sidecar for one file does not vouch for a file that has none")
+    func testPinnedLookupRequiresSidecarCoverage() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pinned = String(repeating: "a", count: 40)
+        let weight = "model_fp16.safetensors"
+
+        // A legacy weight with no sidecar, beside a config downloaded later at the
+        // pinned revision - which is what an upgrade in place looks like.
+        let candidate = try makeCandidate(
+            named: "mixed", in: root, file: "config.json",
+            contents: Data([7]), recordingRevision: pinned
+        )
+        try Data("stale weights".utf8).write(to: candidate.appendingPathComponent(weight))
+
+        // Hashes that do not match the stale weight, so acceptance can only come from
+        // trusting the config's sidecar for the whole directory.
+        let pin = ModelPin(
+            revision: pinned,
+            fileHashes: [weight: String(repeating: "0", count: 64)]
+        )
+
+        PinnedContentCache.shared.invalidate()
+        #expect(
+            ModelDownloader.firstCompletePath(
+                in: [candidate], matching: [weight, "config.json"], pin: pin
+            ) == nil
+        )
+    }
+
+    @Test("A directory holding two revisions is refused outright")
+    func testPinnedLookupRejectsMixedRevisions() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let pinned = String(repeating: "a", count: 40)
+        let foreign = String(repeating: "b", count: 40)
+        let weight = "model_fp16.safetensors"
+
+        // The weight is the pinned one; the config beside it came from elsewhere.
+        let candidate = try makeCandidate(
+            named: "mixed", in: root, file: weight,
+            contents: Data("pinned bytes".utf8), recordingRevision: pinned
+        )
+        let metadataDirectory = candidate
+            .appendingPathComponent(".cache")
+            .appendingPathComponent("huggingface")
+            .appendingPathComponent("download")
+        try Data([7]).write(to: candidate.appendingPathComponent("config.json"))
+        try "\(foreign)\netag\n1700000000.0\n".write(
+            to: metadataDirectory.appendingPathComponent("config.json.metadata"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // Hashes cover only the weight, so falling back to content would accept this
+        // directory on the strength of a file that is not in dispute.
+        let pin = ModelPin(
+            revision: pinned,
+            fileHashes: [weight: try ModelDownloader.sha256(
+                ofFileAt: candidate.appendingPathComponent(weight)
+            )]
+        )
+
+        PinnedContentCache.shared.invalidate()
+        #expect(
+            ModelDownloader.firstCompletePath(
+                in: [candidate], matching: [weight, "config.json"], pin: pin
+            ) == nil
+        )
+    }
+
+    @Test("A file rewritten in place is hashed again, not trusted")
+    func testPinnedContentCacheNoticesInPlaceRewrite() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let file = "model_fp16.safetensors"
+        let candidate = try makeCandidate(
+            named: "legacy", in: root, file: file,
+            contents: Data("the pinned bytes".utf8), recordingRevision: nil
+        )
+        let target = candidate.appendingPathComponent(file)
+        let pin = ModelPin(
+            revision: String(repeating: "a", count: 40),
+            fileHashes: [file: try ModelDownloader.sha256(ofFileAt: target)]
+        )
+
+        PinnedContentCache.shared.invalidate()
+        #expect(
+            ModelDownloader.firstCompletePath(in: [candidate], matching: [file], pin: pin) != nil
+        )
+
+        // Overwrite the weight in place. The containing directory's modification date
+        // does not move for this - only the file's does - which is why the cache key
+        // is built from the pinned files rather than from the directory.
+        try Data("something else entirely".utf8).write(to: target)
+
+        #expect(
+            ModelDownloader.firstCompletePath(in: [candidate], matching: [file], pin: pin) == nil
+        )
+    }
+
     @Test("Partial variants remain discoverable for deletion")
     func testPartialVariantDeletionDiscovery() throws {
         let root = FileManager.default.temporaryDirectory

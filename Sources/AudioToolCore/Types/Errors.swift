@@ -23,6 +23,9 @@ public enum AudioToolError: Error, Sendable {
     
     /// Model not loaded yet
     case modelNotLoaded(String)
+
+    /// Downloaded model files do not match their pinned hashes
+    case modelIntegrityFailed(repo: String, details: String)
     
     // MARK: - Audio Errors
     
@@ -83,6 +86,11 @@ extension AudioToolError: LocalizedError {
             return "Incompatible model version. Expected: \(expected), Found: \(found)"
         case .modelNotLoaded(let model):
             return "Model not loaded: \(model). Call preload() first."
+        case .modelIntegrityFailed(let repo, let details):
+            return """
+                Downloaded files from '\(repo)' do not match the pinned hashes \
+                (\(details)). Delete the cached copy and download it again.
+                """
         case .invalidEmbedding(let reason):
             return "Invalid sound embedding: \(reason)"
         case .invalidAudioFormat(let expected, let found):

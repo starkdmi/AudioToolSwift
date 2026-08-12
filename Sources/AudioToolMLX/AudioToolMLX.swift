@@ -82,25 +82,36 @@ public struct MLXProviders {
 }
 
 /// AudioEngine extension for registering MLX providers
+///
+/// Each of these loads through ``AudioEngine/preload(_:)`` rather than calling the
+/// provider's `load()` directly: `preload` goes through the residency manager, so a
+/// configured model counts against the memory budget instead of sitting alongside
+/// it, and two concurrent configurations of the same provider share one load.
+///
+/// Registration comes after the load, so a `configure` that fails leaves the engine
+/// exactly as it was. `preload` takes the provider directly and never consults the
+/// registry, so nothing is gained by registering first - and registering first meant
+/// a failed reconfiguration replaced a working provider with the one that had just
+/// failed to load.
 extension AudioEngine {
-    
+
     /// Configure with MLX enhancement provider
     public func configure(enhancer: MossFormer2SE48KProvider, for model: EnhancementModel = .mossformerSE48k) async throws {
-        try await enhancer.load()
+        try await self.preload(enhancer)
         self.register(enhancer: enhancer, for: model)
     }
-    
+
     /// Configure with MLX FRCRN provider
     public func configure(enhancer: FRCRNSE16KProvider, for model: EnhancementModel = .frcrn) async throws {
-        try await enhancer.load()
+        try await self.preload(enhancer)
         self.register(enhancer: enhancer, for: model)
     }
-    
+
     // Note: MossFormer GAN SE configure is now in AudioToolCoreML
-    
+
     /// Configure with MLX speaker separator
     public func configure(separator: MossFormer2SSProvider, for model: SeparationModel = .mossformer2spk) async throws {
-        try await separator.load()
+        try await self.preload(separator)
         self.register(separator: separator, for: model)
     }
     
@@ -118,7 +129,7 @@ extension AudioEngine {
     
     /// Configure with super resolution provider
     public func configure(upsampler: MossFormer2SR48KProvider) async throws {
-        try await upsampler.load()
+        try await self.preload(upsampler)
         self.register(upscaler: upsampler)
     }
 }

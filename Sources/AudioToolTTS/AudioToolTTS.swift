@@ -191,7 +191,9 @@ extension AudioEngine {
         synthesizer: KokoroTTSProvider,
         for model: SynthesisModel = .kokoro(language: .americanEnglish, voice: "af_heart")
     ) async throws {
-        try await synthesizer.load()
+        // Loaded through the residency manager, so the weights count against the
+        // engine's memory budget rather than sitting outside it.
+        try await self.preload(synthesizer)
         self.register(synthesizer: synthesizer, for: model)
     }
     
@@ -232,7 +234,7 @@ extension AudioEngine {
         synthesizer: ChatterboxTTSProvider,
         for model: SynthesisModel = .chatterbox(language: .english)
     ) async throws {
-        try await synthesizer.load()
+        try await self.preload(synthesizer)
         self.register(synthesizer: synthesizer, for: model)
     }
     
@@ -251,7 +253,7 @@ extension AudioEngine {
             language: language,
             useRuAccent: useRuAccent
         )
-        try await provider.load()
+        try await self.preload(provider)
         self.register(synthesizer: provider, for: .chatterbox(language: language))
     }
 }

@@ -76,6 +76,17 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     
     /// Default precision
     public static let defaultPrecision: ModelPrecision = .bf16
+
+    /// Precisions `mlx-community` publishes a Kokoro repository for.
+    ///
+    /// ``init(precision:language:)`` derives a repository name from whatever
+    /// precision it is handed, so this is the set for which that name exists - and,
+    /// because `ModelPins` covers exactly these, the set that is pinned. A precision
+    /// outside it resolves to a repository that is not there, and fails at download.
+    ///
+    /// Declared like every other provider's `supportedPrecisions`: as the published
+    /// answer to "which of these can I ask for", not as a runtime gate.
+    public static let supportedPrecisions: [ModelPrecision] = [.bf16, .bit8, .bit6, .bit4]
     
     /// Current loading state for UI binding
     public private(set) var state: ModelState = .notLoaded
@@ -99,6 +110,9 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     private var tts: KokoroTTS?
     private var modelPath: URL?
     private var loadGeneration: UInt64 = 0
+
+    /// One load at a time; see ``ModelLoadGate``.
+    private let loadGate = ModelLoadGate()
     private nonisolated let language: KokoroLanguage
     private nonisolated let repo: String
     private nonisolated let precision: ModelPrecision
@@ -165,6 +179,18 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
     
     /// Load model, downloading if necessary
     public func load() async throws {
+        try await loadGate.run { [self] in try await performLoad() }
+    }
+
+    /// The load itself.
+    ///
+    /// The generation counter below already stops a load that began before an
+    /// `unload()` from publishing after it. What it does not stop is two concurrent
+    /// `load()` calls both allocating: the second bumps the generation, so the first
+    /// does the work and then throws `CancellationError` at its caller, who asked
+    /// for nothing more than a loaded model. ``ModelLoadGate`` gives both callers the
+    /// one load they wanted.
+    private func performLoad() async throws {
         loadGeneration &+= 1
         let generation = loadGeneration
 
@@ -239,12 +265,19 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
             
             // KokoroSwift uses .misaki G2P by default (MIT license, no ESpeakNG)
             //
-            // Non-throwing: KokoroSwift traps on a malformed checkpoint rather than
-            // reporting one. That is upstream's behaviour and this file tracks
-            // upstream byte for byte, so the guard belongs on the way in - see
-            // `resolveWeightsPath`, which is what keeps a truncated download from
-            // reaching this call.
-            let candidate = KokoroTTS(modelPath: weightsPath, g2p: .misaki)
+            // Throwing: this used to trap on a malformed checkpoint, on the grounds
+            // that the vendored engine tracked upstream byte for byte and the guard
+            // belonged on the way in. `resolveWeightsPath` does still guard the
+            // downloaded case - but this initializer also accepts a path the caller
+            // chose, and a mismatched or truncated file there killed the host
+            // process. `KokoroWeightError` surfaces as a load failure now, like any
+            // other.
+            let candidate: KokoroTTS
+            do {
+                candidate = try KokoroTTS(modelPath: weightsPath, g2p: .misaki)
+            } catch let error as KokoroWeightError {
+                throw AudioToolError.modelLoadFailed("Kokoro", underlying: error)
+            }
             guard generation == loadGeneration else { throw CancellationError() }
             tts = candidate
             modelPath = path
@@ -520,6 +553,11 @@ extension KokoroTTSProvider: ManagedModel {
     public func checkIfLoaded() async -> Bool { tts != nil }
 
     public func unload() async {
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         loadGeneration &+= 1
         tts = nil
         voiceEmbeddings.removeAll()

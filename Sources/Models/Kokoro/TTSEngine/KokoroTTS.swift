@@ -63,13 +63,13 @@ public final class KokoroTTS {
   /// - Parameters:
   ///   - modelPath: URL to the directory containing model weights
   ///   - g2p: Grapheme-to-phoneme processor type (default: Misaki)
-  public init(modelPath: URL, g2p: G2P = .misaki) {
+  public init(modelPath: URL, g2p: G2P = .misaki) throws {
     // Load and sanitize model weights
-    let sanitizedWeights = WeightLoader.loadWeights(modelPath: modelPath)
+    let sanitizedWeights = try WeightLoader.loadWeights(modelPath: modelPath)
     let config = KokoroConfig.loadConfig()
     
     // Initialize BERT model for phoneme encoding
-    bert = CustomAlbert(
+    bert = try CustomAlbert(
       weights: sanitizedWeights,
       config: AlbertModelArgs(
         numHiddenLayers: config.plbert.numHiddenLayers,
@@ -82,12 +82,12 @@ public final class KokoroTTS {
     
     // Initialize BERT output encoder
     bertEncoder = Linear(
-      weight: sanitizedWeights["bert_encoder.weight"]!,
-      bias: sanitizedWeights["bert_encoder.bias"]!
+      weight: try KokoroWeights.require(sanitizedWeights, "bert_encoder.weight"),
+      bias: try KokoroWeights.require(sanitizedWeights, "bert_encoder.bias")
     )
     
     // Initialize duration prediction components
-    durationEncoder = DurationEncoder(
+    durationEncoder = try DurationEncoder(
       weights: sanitizedWeights,
       dModel: config.hiddenDim,
       styDim: config.styleDim,
@@ -98,31 +98,31 @@ public final class KokoroTTS {
     predictorLSTM = LSTM(
       inputSize: config.hiddenDim + config.styleDim,
       hiddenSize: config.hiddenDim / 2,
-      wxForward: sanitizedWeights["predictor.lstm.weight_ih_l0"]!,
-      whForward: sanitizedWeights["predictor.lstm.weight_hh_l0"]!,
-      biasIhForward: sanitizedWeights["predictor.lstm.bias_ih_l0"]!,
-      biasHhForward: sanitizedWeights["predictor.lstm.bias_hh_l0"]!,
-      wxBackward: sanitizedWeights["predictor.lstm.weight_ih_l0_reverse"]!,
-      whBackward: sanitizedWeights["predictor.lstm.weight_hh_l0_reverse"]!,
-      biasIhBackward: sanitizedWeights["predictor.lstm.bias_ih_l0_reverse"]!,
-      biasHhBackward: sanitizedWeights["predictor.lstm.bias_hh_l0_reverse"]!
+      wxForward: try KokoroWeights.require(sanitizedWeights, "predictor.lstm.weight_ih_l0"),
+      whForward: try KokoroWeights.require(sanitizedWeights, "predictor.lstm.weight_hh_l0"),
+      biasIhForward: try KokoroWeights.require(sanitizedWeights, "predictor.lstm.bias_ih_l0"),
+      biasHhForward: try KokoroWeights.require(sanitizedWeights, "predictor.lstm.bias_hh_l0"),
+      wxBackward: try KokoroWeights.require(sanitizedWeights, "predictor.lstm.weight_ih_l0_reverse"),
+      whBackward: try KokoroWeights.require(sanitizedWeights, "predictor.lstm.weight_hh_l0_reverse"),
+      biasIhBackward: try KokoroWeights.require(sanitizedWeights, "predictor.lstm.bias_ih_l0_reverse"),
+      biasHhBackward: try KokoroWeights.require(sanitizedWeights, "predictor.lstm.bias_hh_l0_reverse")
     )
 
     // Initialize duration projection layer
     durationProj = Linear(
-      weight: sanitizedWeights["predictor.duration_proj.linear_layer.weight"]!,
-      bias: sanitizedWeights["predictor.duration_proj.linear_layer.bias"]!
+      weight: try KokoroWeights.require(sanitizedWeights, "predictor.duration_proj.linear_layer.weight"),
+      bias: try KokoroWeights.require(sanitizedWeights, "predictor.duration_proj.linear_layer.bias")
     )
 
     // Initialize prosody predictor (F0, pitch, etc.)
-    prosodyPredictor = ProsodyPredictor(
+    prosodyPredictor = try ProsodyPredictor(
       weights: sanitizedWeights,
       styleDim: config.styleDim,
       dHid: config.hiddenDim
     )
 
     // Initialize text encoder
-    textEncoder = TextEncoder(
+    textEncoder = try TextEncoder(
       weights: sanitizedWeights,
       channels: config.hiddenDim,
       kernelSize: config.textEncoderKernelSize,
@@ -131,7 +131,7 @@ public final class KokoroTTS {
     )
 
     // Initialize audio decoder
-    decoder = Decoder(
+    decoder = try Decoder(
       weights: sanitizedWeights,
       dimIn: config.hiddenDim,
       styleDim: config.styleDim,
@@ -293,9 +293,18 @@ public final class KokoroTTS {
     
     // Extract result before clearing cache
     let result = audio[0].asArray(Float.self)
-    
-    // Clear GPU cache to reduce memory accumulation
-    GPU.clearCache()
+
+    // Clear the MLX allocator cache only once it has grown materially.
+    //
+    // This was unconditional, on every synthesis. `GPU.clearCache()` is
+    // process-global: a short utterance would throw away buffers belonging to
+    // whatever else in the process is using MLX, and give back the allocator reuse
+    // that makes the *next* utterance fast. The threshold mirrors
+    // `MLXCachePolicy.defaultThresholdBytes` in AudioToolMLX, which sits above this
+    // target and cannot be imported from here. Change both together.
+    if GPU.cacheMemory >= Constants.mlxCacheTrimThresholdBytes {
+      GPU.clearCache()
+    }
 
     return (result, tokenArray)
   }
@@ -463,7 +472,13 @@ public final class KokoroTTS {
     
     /// Audio sampling rate in Hz
     public static let samplingRate = 24000
-    
+
+    /// Allocator-cache size past which a synthesis trims MLX's cache.
+    ///
+    /// Mirrors `MLXCachePolicy.defaultThresholdBytes` in AudioToolMLX, which sits
+    /// above this target and cannot be imported from here. Change both together.
+    static let mlxCacheTrimThresholdBytes = 128 * 1024 * 1024
+
     // Benchmark timer identifiers
     public static let bm_TTS = "TTSAudio"
     static let bm_Phonemize = "Phonemize"

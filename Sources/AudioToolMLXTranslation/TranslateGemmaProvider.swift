@@ -40,6 +40,9 @@ public actor TranslateGemmaProvider: TextTranslator, ManagedModel {
     
     /// Cached model container
     private var modelContainer: ModelContainer?
+
+    /// One load at a time; see ``ModelLoadGate``.
+    private let loadGate = ModelLoadGate()
     
     /// Progress handler for model loading
     private let progressHandler: (@Sendable (Progress) -> Void)?
@@ -228,21 +231,43 @@ public actor TranslateGemmaProvider: TextTranslator, ManagedModel {
         if let container = modelContainer {
             return container
         }
-        
-        // Configure with extra EOS tokens for proper stopping
+
+        // Not `if modelContainer == nil { load }`: this actor is reentrant across
+        // the load's awaits, so two callers could both find it nil and both pull
+        // down four gigabytes of Gemma. The gate makes the second one wait for the
+        // first instead. See ``ModelLoadGate``.
+        try await loadGate.run { [self] in try await performLoad() }
+
+        guard let container = modelContainer else {
+            throw AudioToolError.modelNotLoaded("TranslateGemma")
+        }
+        return container
+    }
+
+    private func performLoad() async throws {
+        // Configure with extra EOS tokens for proper stopping.
+        //
+        // The revision comes from `ModelPins`. `ModelConfiguration` defaults it to
+        // `main`, and this provider downloads through MLXLMCommon rather than
+        // `ModelDownloader`, so the pin registry - which every other provider goes
+        // through - had no effect here at all: the largest model in the package was
+        // the one following a mutable branch.
         let configuration = ModelConfiguration(
             id: repositoryId,
+            revision: ModelPins.revision(for: repositoryId),
             extraEOSTokens: ["<end_of_turn>"]
         )
-        
+
         // Load model
         let container = try await LLMModelFactory.shared.loadContainer(
             configuration: configuration,
             progressHandler: progressHandler ?? { _ in }
         )
-        
+
+        // An `unload()` during the load cancels it; publishing here anyway would
+        // resurrect a container the caller believes it released.
+        try Task.checkCancellation()
         self.modelContainer = container
-        return container
     }
 
     // MARK: - ManagedModel
@@ -259,6 +284,12 @@ public actor TranslateGemmaProvider: TextTranslator, ManagedModel {
     }
 
     public func unload() async {
+        // Cancel first: a load mid-download must not publish over this unload.
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         modelContainer = nil
         GPU.clearCache()
     }

@@ -239,57 +239,21 @@ public actor AudioEngine {
     
     /// Save audio to file
     ///
-    /// Exports audio buffer to a file in the specified format using AudioUtils.
+    /// Exports audio buffer to a file in the specified format.
+    ///
+    /// The buffer's own channel count and sample rate are written; multi-channel
+    /// audio stays multi-channel. `.wav`, `.m4a` and `.flac` produce those
+    /// containers. `.mp3` throws - Apple platforms ship an MP3 decoder but no
+    /// encoder, and the previous behaviour of writing WAV bytes to a `.mp3` path
+    /// produced files that no downstream tool could make sense of.
     ///
     /// - Parameters:
     ///   - buffer: Audio buffer to save
     ///   - url: Destination file path
     ///   - format: Output format (default: .wav)
+    /// - Throws: ``AudioToolError/invalidAudioFormat(expected:found:)`` for `.mp3`.
     public func saveAudio(_ buffer: AudioToolCore.AudioBuffer, to url: URL, format: AudioFormat = .wav) async throws {
-        // Map AudioTool format to AudioSaver format
-        let saverConfig: AudioSaver.Configuration
-        switch format {
-        case .wav:
-            saverConfig = AudioSaver.Configuration(
-                sampleRate: Double(buffer.sampleRate),
-                bitDepth: .float32,
-                fileFormat: .wav
-            )
-        case .m4a:
-            saverConfig = AudioSaver.Configuration(
-                sampleRate: Double(buffer.sampleRate),
-                bitDepth: .float32,
-                fileFormat: .m4a(bitRate: 128000)
-            )
-        case .mp3:
-            // MP3 not directly supported, fall back to WAV
-            saverConfig = AudioSaver.Configuration(
-                sampleRate: Double(buffer.sampleRate),
-                bitDepth: .int16,
-                fileFormat: .wav
-            )
-        case .flac:
-            // FLAC not in AudioSaver, use WAV with high bit depth
-            saverConfig = AudioSaver.Configuration(
-                sampleRate: Double(buffer.sampleRate),
-                bitDepth: .int24,
-                fileFormat: .wav
-            )
-        }
-        
-        let saver = AudioSaver(config: saverConfig)
-        
-        // Convert AudioBuffer to AudioData
-        let audioData = AudioData(
-            samples: buffer.samples,
-            sampleRate: buffer.sampleRate
-        )
-        
-        do {
-            try saver.saveBuffer(audioData, to: url)
-        } catch let error as AudioSaverError {
-            throw AudioToolError.resourceUnavailable(error.localizedDescription)
-        }
+        try AudioFileWriter.write(buffer, to: url, format: format)
     }
     
     // MARK: - Analysis
@@ -1120,15 +1084,51 @@ public actor AudioEngine {
         outputSampleRate: Int? = nil,
         eventHandler: (@Sendable (PipelineEvent) async -> Void)? = nil
     ) async throws -> PipelineResult {
+        try await runPipeline(
+            pipeline,
+            audio: audio,
+            outputSampleRate: outputSampleRate,
+            inheriting: nil,
+            eventHandler: eventHandler
+        ).result
+    }
+
+    /// What a nested run tells its parent beyond the result itself.
+    private struct PipelineRun {
+        let result: PipelineResult
+        /// The rate the run wants its audio delivered at. A nested run reports this
+        /// upward instead of converting, so an `upscale` inside a branch is not
+        /// undone by the parent's edge conversion.
+        let targetSampleRate: Int
+    }
+
+    /// The pipeline loop.
+    ///
+    /// - Parameter parentContext: The enclosing run's context, for a nested run.
+    ///   Nesting used to start from scratch: every recursive call seeded
+    ///   `originalAudio` with whatever audio it was handed, so a `separate(useOriginal:
+    ///   true)` inside a `conditionally` branch received the already-enhanced audio
+    ///   that `useOriginal` exists to bypass, and `analysis` came back nil - which is
+    ///   what made `separateOverlappingSpeakers` silently skip its three-speaker
+    ///   branch, since that branch's condition reads `context.analysis`.
+    ///   `nil` marks a top-level run: the audio it is given is the original.
+    private func runPipeline(
+        _ pipeline: PipelineBuilder,
+        audio: AudioToolCore.AudioBuffer,
+        outputSampleRate: Int? = nil,
+        inheriting parentContext: PipelineContext?,
+        eventHandler: (@Sendable (PipelineEvent) async -> Void)? = nil
+    ) async throws -> PipelineRun {
+        let isNested = parentContext != nil
         let startTime = ContinuousClock.now
         var metrics = PipelineMetrics()
-        
+
         var context = PipelineContext(
-            analysis: nil,
+            analysis: parentContext?.analysis,
             currentAudio: audio,
-            originalAudio: audio
+            originalAudio: parentContext?.originalAudio ?? audio
         )
-        
+
         var result = PipelineResult(metrics: metrics)
 
         // Where the audio should end up. Defaults to the caller's rate so a pipeline
@@ -1348,8 +1348,23 @@ public actor AudioEngine {
                     nil
                 }
                 
-                // Auto-select model based on speaker count
-                let model: SeparationModel = speakers == 3 ? .mossformer3spk : .mossformerWhamr
+                // Auto-select model based on speaker count.
+                //
+                // Exhaustive rather than a ternary on `== 3`. Only two models exist,
+                // and the ternary silently routed every other count - 0, 1, 4, a
+                // negative - to two-speaker WHAMR, so a pipeline asking for five
+                // speakers got two tracks back and no indication that the request
+                // had not been honoured.
+                let model: SeparationModel
+                switch speakers {
+                case 2: model = .mossformerWhamr
+                case 3: model = .mossformer3spk
+                default:
+                    throw AudioToolError.pipelineConfigurationInvalid(
+                        "separate(speakers: \(speakers)) is not supported. "
+                        + "Available separation models handle 2 or 3 speakers."
+                    )
+                }
                 let tracks = try await separate(inputAudio, model: model, onProgress: progressCallback)
                 
                 result = PipelineResult(
@@ -1663,8 +1678,23 @@ public actor AudioEngine {
                 if !stagesToRun.isEmpty {
                     var subBuilder = PipelineBuilder(voice: self)
                     subBuilder.stages = stagesToRun
-                    let subResult = try await executePipeline(subBuilder, audio: context.currentAudio, eventHandler: eventHandler)
-                    
+                    let branchInputRate = context.currentAudio.sampleRate
+                    let subRun = try await runPipeline(
+                        subBuilder,
+                        audio: context.currentAudio,
+                        inheriting: context,
+                        eventHandler: eventHandler
+                    )
+                    let subResult = subRun.result
+                    // A branch that raised the target rate - only `upscale` does -
+                    // sets the rate for everything after it, unless the caller named
+                    // a rate. `outputSampleRate` wins over an upscale wherever the
+                    // upscale happens; the direct `.upscale` case makes the same
+                    // check.
+                    if outputSampleRate == nil, subRun.targetSampleRate != branchInputRate {
+                        targetOutputRate = subRun.targetSampleRate
+                    }
+
                     // Merge AnalysisResult components (preserve VAD segments and diarization speakers)
                     let mergedAnalysis: AnalysisResult?
                     if let subAnalysis = subResult.analysis {
@@ -1706,31 +1736,53 @@ public actor AudioEngine {
                 // Execute all branches in parallel
                 // Capture values before entering task group to satisfy Swift 6 strict concurrency
                 let currentAudio = context.currentAudio
+                let branchContext = context
                 var branchResults = [PipelineResult?](
                     repeating: nil,
                     count: branches.count
                 )
+                var branchTargetRates = [Int?](repeating: nil, count: branches.count)
                 try await withThrowingTaskGroup(
-                    of: (Int, PipelineResult).self
+                    of: (Int, PipelineResult, Int).self
                 ) { group in
                     for (index, branchStages) in branches.enumerated() {
                         group.addTask {
                             var subBuilder = PipelineBuilder(voice: self)
                             subBuilder.stages = branchStages
-                            let branchResult = try await self.executePipeline(
+                            let branchRun = try await self.runPipeline(
                                 subBuilder,
                                 audio: currentAudio,
+                                inheriting: branchContext,
                                 eventHandler: eventHandler
                             )
-                            return (index, branchResult)
+                            return (index, branchRun.result, branchRun.targetSampleRate)
                         }
                     }
-                    
+
                     // Completion order is deliberately ignored. It is scheduler
                     // state, not pipeline semantics.
-                    for try await (index, branchResult) in group {
+                    for try await (index, branchResult, branchRate) in group {
                         branchResults[index] = branchResult
+                        branchTargetRates[index] = branchRate
                     }
+                }
+
+                // The rate comes from whichever branch's audio survives the merge,
+                // not from whichever branch happened to raise one.
+                //
+                // `mergeParallelResults` is last-branch-wins per field, in
+                // declaration order. Deciding the rate separately meant a discarded
+                // branch could still set it: `parallel([[upscale], [enhance]])` on
+                // 16 kHz input returns the *enhanced* 16 kHz audio, and the upscale
+                // branch nobody kept pushed the output target to 48 kHz - so the
+                // enhanced audio was resampled up to a rate it had no content for.
+                //
+                // An explicit `outputSampleRate` outranks all of this, as everywhere
+                // else.
+                if outputSampleRate == nil,
+                   let winner = branchResults.lastIndex(where: { $0?.audio != nil }),
+                   let winningRate = branchTargetRates[winner] {
+                    targetOutputRate = winningRate
                 }
 
                 let orderedResults = branchResults.compactMap { $0 }
@@ -1754,7 +1806,21 @@ public actor AudioEngine {
                     var processedTracks: [AudioToolCore.AudioBuffer] = []
                     for track in tracks {
                         let subBuilder = transform(PipelineBuilder(voice: self))
-                        let trackResult = try await executePipeline(subBuilder, audio: track, eventHandler: eventHandler)
+                        // Each track is its own original: `useOriginal` inside a
+                        // per-track pipeline means this track before this branch
+                        // touched it, not the mixture every track was cut from. The
+                        // enclosing analysis still carries through.
+                        let trackContext = PipelineContext(
+                            analysis: context.analysis,
+                            currentAudio: track,
+                            originalAudio: track
+                        )
+                        let trackResult = try await runPipeline(
+                            subBuilder,
+                            audio: track,
+                            inheriting: trackContext,
+                            eventHandler: eventHandler
+                        ).result
                         if let processedAudio = trackResult.audio {
                             processedTracks.append(processedAudio)
                         }
@@ -1781,6 +1847,30 @@ public actor AudioEngine {
         
         // The single conversion at the edge. Everything above ran at whatever rate
         // each model wanted; this is where the caller's expectation is honoured.
+        //
+        // A nested run is not an edge. Converting there and again at the real edge
+        // is the compounding this pipeline was written to avoid, and it also
+        // reverted an `upscale` performed inside a branch: the parent's target rate
+        // was still the input rate, so the extra bandwidth was resampled straight
+        // back out. The rate travels up in `PipelineRun` instead.
+        guard !isNested else {
+            metrics.totalDuration = ContinuousClock.now - startTime
+            return PipelineRun(
+                result: PipelineResult(
+                    audio: result.audio,
+                    separatedTracks: result.separatedTracks,
+                    identifiedTracks: result.identifiedTracks,
+                    ussSeparated: result.ussSeparated,
+                    transcription: result.transcription,
+                    diarizedTranscription: result.diarizedTranscription,
+                    classifications: result.classifications,
+                    analysis: result.analysis,
+                    metrics: metrics
+                ),
+                targetSampleRate: targetOutputRate
+            )
+        }
+
         let targetRate = targetOutputRate
         let outputAudio = try result.audio.map { audio in
             guard audio.sampleRate != targetRate else { return audio }
@@ -1820,17 +1910,20 @@ public actor AudioEngine {
         )
         
         metrics.totalDuration = ContinuousClock.now - startTime
-        
-        return PipelineResult(
-            audio: result.audio,
-            separatedTracks: result.separatedTracks,
-            identifiedTracks: result.identifiedTracks,
-            ussSeparated: result.ussSeparated,
-            transcription: result.transcription,
-            diarizedTranscription: result.diarizedTranscription,
-            classifications: result.classifications,
-            analysis: result.analysis,
-            metrics: metrics
+
+        return PipelineRun(
+            result: PipelineResult(
+                audio: result.audio,
+                separatedTracks: result.separatedTracks,
+                identifiedTracks: result.identifiedTracks,
+                ussSeparated: result.ussSeparated,
+                transcription: result.transcription,
+                diarizedTranscription: result.diarizedTranscription,
+                classifications: result.classifications,
+                analysis: result.analysis,
+                metrics: metrics
+            ),
+            targetSampleRate: targetRate
         )
     }
 
@@ -1908,6 +2001,25 @@ public actor AudioEngine {
     public func preload(_ models: [any ModelIdentifier]) async throws {
         // Model preloading is handled by providers - this is a no-op hint
         // Providers should be loaded via their load() methods before registration
+    }
+
+    /// Bring a provider into memory now, under this engine's memory budget.
+    ///
+    /// Equivalent to calling `provider.load()` except that the load goes through the
+    /// residency manager, so the provider's footprint counts against
+    /// ``AudioToolConfiguration/modelMemoryLimit``, older models can be evicted to
+    /// make room for it, and two concurrent preloads of the same provider share one
+    /// load rather than allocating it twice.
+    ///
+    /// This is what the `configure(...)` conveniences in AudioToolMLX, AudioToolTTS
+    /// and AudioToolCoreML call. They used to call `load()` directly and then
+    /// register, which put multi-gigabyte allocations outside the budget entirely:
+    /// three configured models could be resident, and none of them known to the
+    /// manager that is supposed to be deciding whether they fit.
+    ///
+    /// - Parameter provider: A provider conforming to ``ManagedModel``.
+    public func preload(_ provider: any ManagedModel) async throws {
+        try await withResidency(provider) { }
     }
     
     // MARK: - Model Lifecycle Convenience

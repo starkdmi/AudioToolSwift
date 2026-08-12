@@ -60,7 +60,10 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     private var pipeline: MossFormer2Pipeline?
     private let weightsPath: String?
     private let precision: ModelPrecision
-    
+
+    /// One load at a time; see ``ModelLoadGate``.
+    private let loadGate = ModelLoadGate()
+
     /// Chunking config: 4s chunks, 25% overlap, discard-edges
     private let chunkingConfig = ChunkingConfig.mossformer2SE48K()
     
@@ -80,7 +83,13 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     }
     
     /// Load model weights (downloads if not cached)
+    ///
+    /// Concurrent calls share one load; see ``ModelLoadGate``.
     public func load() async throws {
+        try await loadGate.run { [self] in try await performLoad() }
+    }
+
+    private func performLoad() async throws {
         // Before the first allocation, not at the first chunk boundary.
         // `trimIfNeeded` used to be the only thing that applied these, so a
         // provider ran its load and its opening chunks under MLX's own default
@@ -144,57 +153,85 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
     /// Process with chunking - direct port from Python benchmark_chunking.py
     /// Uses discard-edges strategy: keep center of each chunk, discard edges where overlap occurs
     private func processWithChunking(_ input: AudioBuffer, pipeline: MossFormer2Pipeline) async throws -> AudioBuffer {
-        let audio = input.samples
+        let stitched = try await chunked(input.samples, outputCount: 1) { chunk in
+            [try await self.processChunk(chunk, pipeline: pipeline).samples]
+        }
+        return AudioBuffer(samples: stitched[0], sampleRate: sampleRate, channels: 1)
+    }
+
+    /// The discard-edges loop itself, over any number of tracks the model emits per
+    /// chunk.
+    ///
+    /// Written once because it has two callers now. Background extraction used to
+    /// build a single graph over the complete recording while ordinary enhancement
+    /// chunked at four seconds, so the memory profile of `processWithBackground`
+    /// bore no relation to `process` on the same input - and the CLI hands both of
+    /// them whole files.
+    ///
+    /// - Parameters:
+    ///   - audio: The complete recording, held as plain samples. Only the active
+    ///     chunk is ever an `MLXArray`.
+    ///   - outputCount: Tracks the per-chunk closure returns, stitched in parallel
+    ///     against identical chunk boundaries.
+    ///   - processChunk: Runs one padded chunk through the model.
+    private func chunked(
+        _ audio: [Float],
+        outputCount: Int,
+        processChunk: ([Float]) async throws -> [[Float]]
+    ) async throws -> [[Float]] {
         let totalLength = audio.count
         let chunkSamples = chunkingConfig.chunkSamples
         let stride = chunkingConfig.strideSamples
         let giveUp = chunkingConfig.overlapSamples / 2
-        
-        
+
         // Pre-allocate output
-        var result = [Float](repeating: 0, count: totalLength)
-        
+        var results = [[Float]](
+            repeating: [Float](repeating: 0, count: totalLength),
+            count: outputCount
+        )
+
         var currentIdx = 0
         var chunkCount = 0
-        
+
         while currentIdx + chunkSamples <= totalLength + stride {
+            try Task.checkCancellation()
             let endIdx = min(currentIdx + chunkSamples, totalLength)
-            
+
             // Extract and pad chunk
             var chunk = Array(audio[currentIdx..<endIdx])
             if chunk.count < chunkSamples {
                 chunk.append(contentsOf: [Float](repeating: 0, count: chunkSamples - chunk.count))
             }
-            
+
             // Process through model
-            let processed = try await processChunk(chunk, pipeline: pipeline)
-            let output = processed.samples
-            
+            let outputs = try await processChunk(chunk)
+
             // Determine valid range
             let validStart = currentIdx == 0 ? 0 : giveUp
             // validEnd would be: chunkSamples - giveUp (used implicitly below)
             let outputRangeStart = currentIdx == 0 ? 0 : currentIdx + giveUp
             let outputRangeEnd = currentIdx == 0 ? chunkSamples - giveUp : currentIdx + chunkSamples - giveUp
-            
+
             // Copy valid portion
             let actualEnd = min(outputRangeEnd, totalLength)
-            for i in outputRangeStart..<actualEnd {
-                let srcIdx = validStart + (i - outputRangeStart)
-                if srcIdx < output.count {
-                    result[i] = output[srcIdx]
+            for (track, output) in outputs.enumerated() where track < outputCount {
+                for i in outputRangeStart..<actualEnd {
+                    let srcIdx = validStart + (i - outputRangeStart)
+                    if srcIdx < output.count {
+                        results[track][i] = output[srcIdx]
+                    }
                 }
             }
-            
+
             currentIdx += stride
             chunkCount += 1
-            
+
             MLXCachePolicy.trimIfNeeded(afterChunk: chunkCount)
         }
-        
-        
-        return AudioBuffer(samples: result, sampleRate: sampleRate, channels: 1)
+
+        return results
     }
-    
+
     /// Process a single chunk using pure MLX (no file I/O)
     private func processChunk(_ samples: [Float], pipeline: MossFormer2Pipeline) async throws -> AudioBuffer {
         let inputMLX = MLXArray(samples)
@@ -247,16 +284,44 @@ public actor MossFormer2SE48KProvider: SpeechEnhancer {
             throw AudioToolError.modelNotLoaded("MossFormer2SE48K")
         }
         try validateInputFormat(input)
-        
-        // Use direct processing with background extraction (matches Python implementation)
-        let inputMLX = MLXArray(input.samples)
+
+        let durationSeconds = Float(input.samples.count) / Float(sampleRate)
+
+        // Short audio goes through in one pass, exactly as `process` does.
+        if durationSeconds <= maxDirectDuration {
+            let pair = try backgroundChunk(input.samples, pipeline: pipeline, gamma: gamma)
+            return MLXEnhancedWithBackground(
+                enhanced: AudioBuffer(samples: pair[0], sampleRate: sampleRate, channels: 1),
+                background: AudioBuffer(samples: pair[1], sampleRate: sampleRate, channels: 1)
+            )
+        }
+
+        // Enhanced and background are the two halves of one mask applied to one
+        // spectrum, so they are stitched on identical chunk boundaries in a single
+        // pass rather than by running the model twice.
+        let stitched = try await chunked(input.samples, outputCount: 2) { chunk in
+            try self.backgroundChunk(chunk, pipeline: pipeline, gamma: gamma)
+        }
+
+        return MLXEnhancedWithBackground(
+            enhanced: AudioBuffer(samples: stitched[0], sampleRate: sampleRate, channels: 1),
+            background: AudioBuffer(samples: stitched[1], sampleRate: sampleRate, channels: 1)
+        )
+    }
+
+    /// One chunk through the soft-inverse-mask path: `[enhanced, background]`.
+    private func backgroundChunk(
+        _ samples: [Float],
+        pipeline: MossFormer2Pipeline,
+        gamma: Float
+    ) throws -> [[Float]] {
+        let inputMLX = MLXArray(samples)
         let result = try pipeline.enhanceAudioWithBackground(inputMLX, gamma: gamma)
         eval(result.enhanced, result.background)
-        
-        return MLXEnhancedWithBackground(
-            enhanced: AudioBuffer(samples: result.enhanced.asArray(Float.self), sampleRate: sampleRate, channels: 1),
-            background: AudioBuffer(samples: result.background.asArray(Float.self), sampleRate: sampleRate, channels: 1)
-        )
+        return [
+            result.enhanced.asArray(Float.self),
+            result.background.asArray(Float.self)
+        ]
     }
 }
 
@@ -374,9 +439,16 @@ extension MossFormer2SE48KProvider: ManagedModel {
     
     /// Check if the model is currently loaded
     public func checkIfLoaded() async -> Bool { pipeline != nil }
-    
+
     /// Unload model from memory
     public func unload() async {
+        // Before clearing `pipeline`, so a load still in flight cannot publish
+        // itself over the top of this unload.
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         pipeline = nil
         GPU.clearCache()
     }
@@ -409,6 +481,9 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     private let weightsPath: String?
     private let precision: ModelPrecision
 
+    /// One load at a time; see ``ModelLoadGate``.
+    private let loadGate = ModelLoadGate()
+
     /// Chunking config: 4s chunks, 25% overlap, discard-edges
     private let chunkingConfig: ChunkingConfig
 
@@ -432,7 +507,13 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
     }
 
     /// Load model weights (downloads if not cached)
+    ///
+    /// Concurrent calls share one load; see ``ModelLoadGate``.
     public func load() async throws {
+        try await loadGate.run { [self] in try await performLoad() }
+    }
+
+    private func performLoad() async throws {
         // Before the first allocation, not at the first chunk boundary.
         // `trimIfNeeded` used to be the only thing that applied these, so a
         // provider ran its load and its opening chunks under MLX's own default
@@ -577,27 +658,23 @@ public actor FRCRNSE16KProvider: SpeechEnhancer {
             throw AudioToolError.modelNotLoaded("FRCRN_SE_16K")
         }
         try validateInputFormat(input)
-        
-        let inputMLX = MLXArray(input.samples).reshaped([1, -1])
-        
-        // Get enhanced audio using the existing working forward pass
-        let enhanced = model(inputMLX)
-        eval(enhanced)
-        
-        // FRCRN output is slightly shorter due to STFT/iSTFT - truncate input to match
-        let enhancedLen = enhanced.shape[1]
-        let inputTruncated = inputMLX[0..., 0..<enhancedLen]
-        
-        // Background = input - enhanced (time-domain subtraction)
-        let background = inputTruncated - enhanced
-        eval(background)
-        
-        // Extract samples from batched output
-        let enhancedSamples = enhanced[0].asArray(Float.self)
-        let backgroundSamples = background[0].asArray(Float.self)
-        
+
+        // The same chunking `process` uses. This path used to build one graph over
+        // the complete recording - the model's own forward pass on an hour of audio,
+        // plus a full-length subtraction on top of it - while the ordinary path
+        // never held more than four seconds at a time.
+        let enhanced = try await processWithChunking(input, model: model)
+
+        // Background = input - enhanced (time-domain subtraction). Chunk stitching
+        // already returns a result the length of the input, so the two line up
+        // without the truncation the single-graph version needed.
+        var backgroundSamples = [Float](repeating: 0, count: enhanced.samples.count)
+        for i in 0..<enhanced.samples.count {
+            backgroundSamples[i] = input.samples[i] - enhanced.samples[i]
+        }
+
         return MLXEnhancedWithBackground(
-            enhanced: AudioBuffer(samples: enhancedSamples, sampleRate: sampleRate, channels: 1),
+            enhanced: enhanced,
             background: AudioBuffer(samples: backgroundSamples, sampleRate: sampleRate, channels: 1)
         )
     }
@@ -701,6 +778,12 @@ extension FRCRNSE16KProvider: ManagedModel {
     public func checkIfLoaded() async -> Bool { model != nil }
 
     public func unload() async {
+        // Cancel first: a load mid-download must not publish over this unload.
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         model = nil
         GPU.clearCache()
     }

@@ -222,12 +222,13 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/Models/USS",
-            // The ResUNet30 weights this target used to bundle (~106 MB) now come from
-            // HuggingFace. What stays are the 527-d AudioSet class vectors, 2 KB each,
-            // which select what to separate - they are inputs, not weights.
-            resources: [
-                .copy("Embeddings")
-            ],
+            // No resources. The ResUNet30 weights this target used to bundle (~106 MB)
+            // come from HuggingFace, and the seven 527-d AudioSet conditioning vectors
+            // that replaced them are gone too: each was a normalised multi-hot vector
+            // over a fixed class list, so `SoundEmbedding`'s presets reproduce them
+            // exactly from the indices alone. Shipping both a generated artifact and
+            // the thing that generates it meant carrying binary files whose provenance
+            // had to be explained separately from the code that made them.
             swiftSettings: modelSwiftSettings
         ),
         .target(
@@ -449,6 +450,9 @@ let package = Package(
                 "AudioTool",
                 "AudioToolCore",
                 "AudioToolMLX",
+                // For the MLX STFT/ISTFT pair, which lives in AudioToolCoreML but is
+                // a plain MLX transform: hermetic, no CoreML model, no weights.
+                "AudioToolCoreML",
                 "AudioToolTTS",
                 "AudioToolUSS",
                 "AudioToolFluidAudio",

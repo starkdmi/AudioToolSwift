@@ -58,7 +58,7 @@ public actor FluidAudioVADProvider: VADProvider, ChunkedProgressProvider {
     
     /// Load the VAD model
     public func load() async throws {
-        manager = try await VadManager(config: config)
+        manager = try await PinnedVADModel.makeManager(config: config)
     }
     
     // MARK: - VADProvider Conformance

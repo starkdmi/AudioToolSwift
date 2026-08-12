@@ -175,8 +175,14 @@ public final class MockSeparator: SpeechSeparator, @unchecked Sendable {
         self.outputCount = outputCount
     }
     
+    /// Every buffer handed to `separate`, in order. Lets a test assert *which* audio
+    /// a stage was given - `useOriginal: true` is only meaningful if the original is
+    /// what arrives.
+    public var receivedInputs: [AudioBuffer] = []
+
     public func separate(_ audio: AudioBuffer) async throws -> [AudioBuffer] {
         separateCallCount += 1
+        receivedInputs.append(audio)
         try await Task.sleep(for: processDelay)
         
         // Return scaled copies, one per output track

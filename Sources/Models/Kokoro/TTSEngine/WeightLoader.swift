@@ -30,10 +30,19 @@ final class WeightLoader {
   /// - **Decoder weights**: Transposes noise convolution weights and handles weight_v conditionally
   /// - Parameter modelPath: URL to the directory containing model weight files
   /// - Returns: Dictionary mapping weight names to their processed MLXArray tensors
-  /// - Note: Uses forced try (try!) as weight loading is critical and should fail fast if unsuccessful
-  static func loadWeights(modelPath: URL) -> [String: MLXArray] {
+  /// - Throws: ``KokoroWeightError/unreadableCheckpoint(path:underlying:)`` when the
+  ///   file cannot be read or parsed. This was `try!`, on the reasoning that weight
+  ///   loading is critical and should fail fast - but "fail fast" here meant killing
+  ///   the host application over a truncated download, on a path the caller is
+  ///   allowed to choose.
+  static func loadWeights(modelPath: URL) throws -> [String: MLXArray] {
     // Load raw weights from disk
-    let weights = try! MLX.loadArrays(url: modelPath)
+    let weights: [String: MLXArray]
+    do {
+      weights = try MLX.loadArrays(url: modelPath)
+    } catch {
+      throw KokoroWeightError.unreadableCheckpoint(path: modelPath.path, underlying: error)
+    }
     var sanitizedWeights: [String: MLXArray] = [:]
 
     // Process each weight based on its component prefix

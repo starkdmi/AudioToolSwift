@@ -15,7 +15,10 @@ final class Tokenizer {
   ///   - phonemizedText: Phonemized text to tokenize
   /// - Returns: Tokenized array that can then be passed to TTS system
   static func tokenize(phonemizedText text: String) -> [Int] {
-    guard let vocab = KokoroConfig.config?.vocab else { return [] }
+    // Reads the configuration directly rather than a global the model initialiser
+    // happened to have populated. Tokenizing before any model had been built used
+    // to return an empty array - not an error, just silence.
+    let vocab = KokoroConfig.loadConfig().vocab
     return text
       .map { vocab[String($0)] }
       .filter { $0 != nil }

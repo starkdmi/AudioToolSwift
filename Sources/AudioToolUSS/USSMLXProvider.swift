@@ -85,7 +85,10 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     
     private var inference: USSInference?
     private var conditioning: MLXArray?
-    
+
+    /// One load at a time; see ``ModelLoadGate``.
+    private let loadGate = ModelLoadGate()
+
     /// Cached embeddings for all types (loaded on first access)
     private var embeddingCache: [EmbeddingLoader.EmbeddingType: MLXArray] = [:]
     
@@ -170,8 +173,13 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     /// Locate the ResUNet30 weights, downloading them if necessary.
     ///
     /// These used to be ~106 MB of SPM bundle resources. They are fetched at runtime
-    /// now, like every other model's weights, so a clone stays small. The bundle is
-    /// still checked first so an app that vendors them keeps working.
+    /// now, like every other model's weights, so a clone stays small.
+    ///
+    /// The module bundle used to be checked ahead of the cache, so that an app which
+    /// vendored the weights kept working. That lookup is gone with the bundle itself -
+    /// the target declares no resources at all now - and ``init(weightsPath:)`` is the
+    /// supported way to point at a local file, which is what every other provider
+    /// offers and is explicit rather than implicit.
     private func resolveWeightsPath() async throws -> String {
         let filename = useFp16 ? "resunet30_fp16.safetensors" : "resunet30_fp32.safetensors"
 
@@ -180,10 +188,6 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
                 throw AudioToolError.modelNotFound("USS ResUNet30 weights at \(explicit)")
             }
             return explicit
-        }
-
-        if let bundled = USSBundle.weightsURL(fp16: useFp16) {
-            return bundled.path
         }
 
         let requiredFiles = [filename]
@@ -207,7 +211,13 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     }
 
     /// Load USS model and cache all embeddings
+    ///
+    /// Concurrent calls share one load; see ``ModelLoadGate``.
     public func load() async throws {
+        try await loadGate.run { [self] in try await performLoad() }
+    }
+
+    private func performLoad() async throws {
         // Initialize model
         let model = ResUNet30()
         
@@ -216,21 +226,18 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         // Load weights
         try WeightLoader.loadWeights(model: model, from: weightsPath)
         
-        // Load and cache ALL embeddings upfront (~14KB total for 7 types)
-        guard let embeddingsDir = USSBundle.embeddingsDirectory else {
-            throw AudioToolError.modelNotFound("USS embeddings directory")
-        }
-        
+        // Build the conditioning cache for all seven presets (~14 KB total).
+        //
+        // These were seven bundle resources read from disk here, which meant `load()`
+        // failed outright when the bundle was missing - including for callers that
+        // only ever pass their own `SoundEmbedding` and need none of the seven. They
+        // are class lists in Core now, so there is nothing left to fail on.
         for type in EmbeddingLoader.EmbeddingType.allCases {
-            let embedding = try EmbeddingLoader.loadEmbedding(type: type, from: embeddingsDir.path)
-            embeddingCache[type] = embedding
+            embeddingCache[type] = conditioningTensor(for: type.embedding)
         }
-        
-        // Set initial conditioning
-        guard let initialConditioning = embeddingCache[initialEmbeddingType] else {
-            throw AudioToolError.modelNotFound("USS embedding for \(initialEmbeddingType.rawValue)")
-        }
-        
+
+        let initialConditioning = conditioningTensor(for: initialEmbeddingType.embedding)
+
         // Create inference pipeline with 2s non-overlapping segments, as the
         // Python reference does.
         let inference = USSInference(
@@ -244,6 +251,9 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
         // Prewarm model with initial conditioning
         inference.prewarm(conditioning: initialConditioning)
         
+        // An `unload()` that landed while the weights were downloading cancels
+        // this load; publishing here anyway would resurrect the provider behind it.
+        try Task.checkCancellation()
         self.inference = inference
         self.conditioning = initialConditioning
         self.currentEmbeddingType = initialEmbeddingType
@@ -256,6 +266,12 @@ public actor USSMLXProvider: AudioProcessor, ManagedModel {
     
     /// Unload model from memory and release GPU resources
     public func unload() async {
+        // Cancel first: a load mid-download must not publish over this unload.
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         inference = nil
         conditioning = nil
         embeddingCache.removeAll()

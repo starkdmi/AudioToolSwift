@@ -90,10 +90,12 @@ public struct SoundEmbedding: Sendable, Hashable {
 
     /// Normalised multi-hot vector over `classes`.
     ///
-    /// The reciprocal is computed in `Double` and then narrowed, which is what the
-    /// original Python conversion did. Dividing in `Float` directly would be a
-    /// different rounding path; `SoundEmbeddingTests` pins every preset against the
-    /// bytes of the original `.safetensors` files to keep this honest.
+    /// This is USS's `at_soft` conditioning: a zero vector with 1.0 at each class in
+    /// the group, divided by the group's size. The conversion script did it in
+    /// float32 throughout; the reciprocal is taken in `Double` here and narrowed,
+    /// which is a different rounding path in principle and identical in fact - the
+    /// two agree for every one of the seven group sizes, and `SoundEmbeddingTests`
+    /// pins each preset to the SHA-256 of the original conversion's float32 payload.
     private static func multiHot(_ classes: Set<Int>) -> [Float] {
         let value = Float(1.0 / Double(classes.count))
         var weights = [Float](repeating: 0, count: dimension)

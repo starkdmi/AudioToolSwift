@@ -8,10 +8,10 @@ import MLXNN
 class AlbertLayerGroup: Module {
   @ModuleInfo(key: "albert_layers") var albertLayers: [AlbertLayer]
 
-  init(config: AlbertModelArgs, layerNum: Int, weights: [String: MLXArray]) {
+  init(config: AlbertModelArgs, layerNum: Int, weights: [String: MLXArray]) throws {
     var layers: [AlbertLayer] = []
     for innerGroupNum in 0 ..< config.innerGroupNum {
-      layers.append(AlbertLayer(weights: weights, config: config, layerNum: layerNum, innerGroupNum: innerGroupNum))
+      layers.append(try AlbertLayer(weights: weights, config: config, layerNum: layerNum, innerGroupNum: innerGroupNum))
     }
     self._albertLayers.wrappedValue = layers
   }

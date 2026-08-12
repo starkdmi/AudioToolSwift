@@ -11,13 +11,13 @@ class AlbertEmbeddings: Module {
   @ModuleInfo var tokenTypeEmbeddings: Embedding
   @ModuleInfo var layerNorm: LayerNormInference
 
-  init(weights: [String: MLXArray], config: AlbertModelArgs) {
-    self._wordEmbeddings.wrappedValue = Embedding(weight: weights["bert.embeddings.word_embeddings.weight"]!)
-    self._positionEmbeddings.wrappedValue = Embedding(weight: weights["bert.embeddings.position_embeddings.weight"]!)
-    self._tokenTypeEmbeddings.wrappedValue = Embedding(weight: weights["bert.embeddings.token_type_embeddings.weight"]!)
+  init(weights: [String: MLXArray], config: AlbertModelArgs) throws {
+    self._wordEmbeddings.wrappedValue = Embedding(weight: try KokoroWeights.require(weights, "bert.embeddings.word_embeddings.weight"))
+    self._positionEmbeddings.wrappedValue = Embedding(weight: try KokoroWeights.require(weights, "bert.embeddings.position_embeddings.weight"))
+    self._tokenTypeEmbeddings.wrappedValue = Embedding(weight: try KokoroWeights.require(weights, "bert.embeddings.token_type_embeddings.weight"))
     
-    let layerNormWeights = weights["bert.embeddings.LayerNorm.weight"]!
-    let layerNormBiases = weights["bert.embeddings.LayerNorm.bias"]!
+    let layerNormWeights = try KokoroWeights.require(weights, "bert.embeddings.LayerNorm.weight")
+    let layerNormBiases = try KokoroWeights.require(weights, "bert.embeddings.LayerNorm.bias")
 
     guard layerNormBiases.count == config.embeddingSize, layerNormWeights.count == config.embeddingSize else {
       fatalError("Wrong shape for AlbertEmbeddings LayerNorm bias or weights!")

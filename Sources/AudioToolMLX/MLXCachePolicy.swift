@@ -133,4 +133,19 @@ enum MLXCachePolicy {
         ) else { return }
         GPU.clearCache()
     }
+
+    /// The same policy for work that is not a chunk sequence: one direct inference,
+    /// one synthesis.
+    ///
+    /// There is no interval to count against here, so the threshold does all the
+    /// deciding. The paths that call this used to purge unconditionally on every
+    /// call, which is exactly what the threshold exists to avoid - `GPU.clearCache()`
+    /// is process-global, so a provider clearing after each short inference throws
+    /// away buffers belonging to whatever else is using MLX, and hands back the
+    /// allocator reuse that makes the next call fast.
+    static func trimIfCacheGrew(thresholdBytes: Int = defaultThresholdBytes) {
+        applyProcessLimits()
+        guard GPU.cacheMemory >= thresholdBytes else { return }
+        GPU.clearCache()
+    }
 }

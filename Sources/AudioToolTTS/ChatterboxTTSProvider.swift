@@ -171,6 +171,9 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     
     private var modelPath: URL?
     private var loadGeneration: UInt64 = 0
+
+    /// One load at a time; see ``ModelLoadGate``.
+    private let loadGate = ModelLoadGate()
     private nonisolated let language: ChatterboxLanguage
     private nonisolated let repo: String
     private nonisolated let precision: ModelPrecision
@@ -284,6 +287,18 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     
     /// Load model, downloading if necessary
     public func load() async throws {
+        try await loadGate.run { [self] in try await performLoad() }
+    }
+
+    /// The load itself.
+    ///
+    /// The generation counter below already stops a load that began before an
+    /// `unload()` from publishing after it. What it does not stop is two concurrent
+    /// `load()` calls both allocating: the second bumps the generation, so the first
+    /// does the work and then throws `CancellationError` at its caller, who asked
+    /// for nothing more than a loaded model. ``ModelLoadGate`` gives both callers the
+    /// one load they wanted.
+    private func performLoad() async throws {
         loadGeneration &+= 1
         let generation = loadGeneration
 
@@ -818,12 +833,27 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     ///
     /// - Parameters:
     ///   - exaggeration: Emotion/intensity control (0.0-1.0+). Higher = more expressive, faster speech. Default: 0.5
-    ///   - temperature: Sampling temperature for speech tokens. Higher = more variation. Default: 0.8
-    ///   - cfgWeight: Classifier-free guidance weight. Lower = slower/more deliberate. Default: 0.5
-    ///   - repetitionPenalty: Penalty for repeating tokens. Default: 2.0
-    ///   - minP: Minimum probability threshold for sampling. Default: 0.05
-    ///   - topP: Nucleus sampling threshold. Default: 1.0
-    ///   - seed: Random seed for reproducible results. Default: 0 (random)
+    ///   - temperature: Sampling temperature for speech tokens, greater than 0. Higher = more variation. Default: 0.8
+    ///   - cfgWeight: Classifier-free guidance weight, 0 or greater. Lower = slower/more deliberate. Default: 0.5
+    ///   - repetitionPenalty: Penalty for repeating tokens, greater than 0. Default: 2.0
+    ///   - minP: Minimum probability threshold for sampling, 0...1. Default: 0.05
+    ///   - topP: Nucleus sampling threshold, 0...1. Default: 1.0
+    ///   - seed: Random seed for reproducible results. Default: 0, which draws a
+    ///     fresh seed for each synthesis.
+    /// - Throws: ``AudioToolError/pipelineConfigurationInvalid(_:)`` for a value
+    ///   outside its range. `temperature` and `repetitionPenalty` are *divisors*
+    ///   inside T3's sampling loop, so zero or a non-finite value did not produce
+    ///   unusual speech - it produced infinities, then NaN logits, then whatever a
+    ///   sampler does with a NaN distribution.
+    /// The seed a synthesis should run under.
+    ///
+    /// `seed == 0` is documented as "random" and now behaves that way: a fresh draw
+    /// per call. Any other value is used as given, which is what makes a configured
+    /// seed reproducible.
+    private func resolvedSeed() -> UInt64 {
+        seed == 0 ? UInt64.random(in: 1...UInt64.max) : seed
+    }
+
     public func configure(
         exaggeration: Float = 0.5,
         temperature: Float = 0.8,
@@ -832,7 +862,24 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         minP: Float = 0.05,
         topP: Float = 1.0,
         seed: UInt64 = 0
-    ) {
+    ) throws {
+        func validate(_ value: Float, _ name: String, _ isValid: Bool, _ expected: String) throws {
+            guard value.isFinite, isValid else {
+                throw AudioToolError.pipelineConfigurationInvalid(
+                    "Chatterbox \(name) must be \(expected); got \(value)."
+                )
+            }
+        }
+
+        try validate(exaggeration, "exaggeration", exaggeration >= 0, "0 or greater")
+        try validate(temperature, "temperature", temperature > 0, "greater than 0")
+        try validate(cfgWeight, "cfgWeight", cfgWeight >= 0, "0 or greater")
+        try validate(
+            repetitionPenalty, "repetitionPenalty", repetitionPenalty > 0, "greater than 0"
+        )
+        try validate(minP, "minP", (0...1).contains(minP), "between 0 and 1")
+        try validate(topP, "topP", (0...1).contains(topP), "between 0 and 1")
+
         self.exaggeration = exaggeration
         self.t3Temperature = temperature
         self.t3CfgWeight = cfgWeight
@@ -877,8 +924,17 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         // Preprocess text
         let processedText = await preprocessText(text)
         
-        // Initialize random seed
-        MLXRandom.seed(seed)
+        // One seeding per synthesis, resolved from `seed`.
+        //
+        // `MLXRandom.seed` is process-global state, not per-actor: two providers
+        // synthesizing concurrently reseed each other's sampler mid-generation, and
+        // nothing here can prevent that short of threading an explicit key through
+        // every sampling call in the vendored T3 implementation. What is fixed is
+        // the documented contract - seed 0 meant "random" and was in fact the fixed
+        // seed zero - and the double reseed: this used to be applied here and again
+        // immediately before T3 inference, so the first had no effect at all.
+        let synthesisSeed = resolvedSeed()
+        MLXRandom.seed(synthesisSeed)
         
         // Tokenize text
         let textTokenIds = textTokenizer.textToTokens(processedText, languageId: language.rawValue)
@@ -920,7 +976,6 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         }
         
         // Run T3 inference
-        MLXRandom.seed(seed)
         let rawSpeechTokens = try t3.inference(
             t3_cond: &t3Cond,
             text_tokens: textTokens,
@@ -1249,37 +1304,18 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         throw AudioToolError.modelNotFound("S3Tokenizer weights not found in model bundle or HuggingFace cache")
     }
     
-    /// Find S3TokenizerV2 in HuggingFace cache
+    /// Find the pinned S3TokenizerV2 snapshot in the model cache.
+    ///
+    /// Through ``ModelDownloader``, so the pin applies. This used to walk
+    /// `~/.cache/huggingface/hub` itself and take the snapshot with the newest
+    /// modification date: whichever revision happened to be fetched last won,
+    /// including one fetched from `main` by some other tool, and the registry entry
+    /// for this repository governed nothing.
     private func resolveHFS3TokenizerPath() -> String? {
-        let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser
-        let hubBase = home.appendingPathComponent(".cache/huggingface/hub")
-        let modelDir = hubBase.appendingPathComponent("models--mlx-community--S3TokenizerV2")
-        let snapshotsDir = modelDir.appendingPathComponent("snapshots")
-        
-        guard let entries = try? fm.contentsOfDirectory(
-            at: snapshotsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-        
-        // Sort by modification date, use most recent
-        let sorted = entries.sorted { lhs, rhs in
-            let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            return lhsDate < rhsDate
-        }
-        
-        for entry in sorted.reversed() {
-            let candidate = entry.appendingPathComponent("model.safetensors").path
-            if fm.fileExists(atPath: candidate) {
-                return candidate
-            }
-        }
-        
-        return nil
+        ModelDownloader.shared.localPath(
+            for: ModelRepository.s3Tokenizer,
+            matching: ["model.safetensors"]
+        )?.appendingPathComponent("model.safetensors").path
     }
 }
 
@@ -1299,6 +1335,11 @@ extension ChatterboxTTSProvider: ManagedModel {
     }
 
     public func unload() async {
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         loadGeneration &+= 1
         clearLoadedState()
         // `referenceAudioConfiguration` is CPU-backed user configuration and is

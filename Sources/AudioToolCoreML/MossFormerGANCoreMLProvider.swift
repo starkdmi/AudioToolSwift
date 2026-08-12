@@ -38,6 +38,9 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     private var model: MLModel?
     private let modelPath: String
     private let computeUnits: MLComputeUnits
+
+    /// One load at a time; see ``ModelLoadGate``.
+    private let loadGate = ModelLoadGate()
     
     // MLX STFT window
     private let mlxWindow: MLXArray
@@ -51,7 +54,15 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     }
     
     /// Load CoreML model (auto-compiles .mlpackage if needed)
+    ///
+    /// Concurrent calls share one load; see ``ModelLoadGate``. Compiling an
+    /// `.mlpackage` twice at once is wasted work at best, and both compilations
+    /// write to the same temporary location.
     public func load() async throws {
+        try await loadGate.run { [self] in try await performLoad() }
+    }
+
+    private func performLoad() async throws {
         let config = MLModelConfiguration()
         config.computeUnits = computeUnits
         
@@ -63,7 +74,11 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
             modelURL = compiledURL
         }
         
-        model = try await MLModel.load(contentsOf: modelURL, configuration: config)
+        let candidate = try await MLModel.load(contentsOf: modelURL, configuration: config)
+        // An `unload()` that landed during compilation cancels this load; publishing
+        // here anyway would resurrect the provider behind it.
+        try Task.checkCancellation()
+        model = candidate
     }
     
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {
@@ -702,6 +717,12 @@ extension MossFormerGANCoreMLProvider: ManagedModel {
     public func checkIfLoaded() async -> Bool { model != nil }
 
     public func unload() async {
+        // Cancel first: a load mid-compile must not publish over this unload.
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         model = nil
     }
 }

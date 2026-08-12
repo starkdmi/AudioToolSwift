@@ -100,24 +100,66 @@ if outputPath.isEmpty {
     outputPath = url.deletingLastPathComponent().appendingPathComponent("\(name)_chunked.wav").path
 }
 
+// MARK: - Weights Resolution
+
+/// Failures a run can report to the shell.
+///
+/// Every one of these used to be `print(...)` followed by `return`, which meant the
+/// tool announced a failure and then exited 0 - a script could not tell a completed
+/// enhancement from a missing model.
+enum CLIError: LocalizedError {
+    case weightsNotFound(String)
+    case unknownVariant(String, available: String)
+    case noTranscriptionLocale
+
+    var errorDescription: String? {
+        switch self {
+        case .weightsNotFound(let path):
+            return "Weights not found at: \(path)"
+        case .unknownVariant(let variant, let available):
+            return "Unknown variant '\(variant)'. Available: \(available)"
+        case .noTranscriptionLocale:
+            return "No speech-recognition locale is available on this system"
+        }
+    }
+}
+
+/// Validate an explicit `--weights` path, if one was given.
+///
+/// `nil` means "let the provider fetch it", which is what the help text has always
+/// promised. Several runners instead defaulted to a path relative to the working
+/// directory - `../Models/frcrn_se_mlx_swift/Weights/...`, a sibling of a checkout
+/// that no installed copy of this tool has - and others hand-assembled a path into
+/// `~/.cache/huggingface`, bypassing the downloader that knows how to populate it.
+func explicitWeights(_ path: String?, isDirectory: Bool = false) throws -> String? {
+    guard let path else { return nil }
+    var directory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: path, isDirectory: &directory),
+          directory.boolValue == isDirectory else {
+        throw CLIError.weightsNotFound(path)
+    }
+    return path
+}
+
+/// FRCRN from an explicit path, or downloading on first use.
+func makeFRCRN(weightsPath: String?) throws -> FRCRNSE16KProvider {
+    if let path = try explicitWeights(weightsPath) {
+        return FRCRNSE16KProvider(weightsPath: path)
+    }
+    return FRCRNSE16KProvider()
+}
+
 // MARK: - FRCRN with Chunking
 
 func runFRCRN(inputPath: String, outputPath: String, weightsPath: String?) async throws {
     print("\n=== FRCRN SE 16K with Chunking ===")
     print("Chunking: 4s chunks, 25% overlap, discard-edges")
     
-    // Resolve weights path
-    let resolvedWeights = weightsPath ?? "../Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
-    guard FileManager.default.fileExists(atPath: resolvedWeights) else {
-        print("Error: Weights not found at: \(resolvedWeights)")
-        return
-    }
-    
-    // Create provider
-    let provider = FRCRNSE16KProvider(weightsPath: resolvedWeights)
-    
+    // Create provider - downloads from HuggingFace unless --weights points elsewhere
+    let provider = try makeFRCRN(weightsPath: weightsPath)
+
     // Load model
-    print("Loading model from: \(resolvedWeights)")
+    print("Loading model\(weightsPath.map { " from: \($0)" } ?? " (downloading if needed)")")
     try await provider.load()
     print("Model ready")
     
@@ -154,18 +196,11 @@ func runFRCRN(inputPath: String, outputPath: String, weightsPath: String?) async
 func runFRCRNWithBackground(inputPath: String, outputPath: String, weightsPath: String?) async throws {
     print("\n=== FRCRN SE 16K with Background Extraction ===")
     
-    // Resolve weights path
-    let resolvedWeights = weightsPath ?? "../Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
-    guard FileManager.default.fileExists(atPath: resolvedWeights) else {
-        print("Error: Weights not found at: \(resolvedWeights)")
-        return
-    }
-    
-    // Create provider
-    let provider = FRCRNSE16KProvider(weightsPath: resolvedWeights)
-    
+    // Create provider - downloads from HuggingFace unless --weights points elsewhere
+    let provider = try makeFRCRN(weightsPath: weightsPath)
+
     // Load model
-    print("Loading model from: \(resolvedWeights)")
+    print("Loading model\(weightsPath.map { " from: \($0)" } ?? " (downloading if needed)")")
     try await provider.load()
     print("Model ready")
     
@@ -306,18 +341,16 @@ func runDemucs(inputPath: String, outputPath: String, weightsPath: String?) asyn
     print("\n=== Demucs Vocals Separation with Chunking ===")
     print("Chunking: 7.8s chunks, 25% overlap, triangular blending")
     
-    // Resolve weights directory
-    let resolvedWeights = weightsPath ?? "../Models/demucs_mlx_swift/Weights"
-    guard FileManager.default.fileExists(atPath: resolvedWeights) else {
-        print("Error: Weights directory not found at: \(resolvedWeights)")
-        return
+    // Create provider - downloads from HuggingFace unless --weights points elsewhere
+    let provider: DemucsProvider
+    if let directory = try explicitWeights(weightsPath, isDirectory: true) {
+        provider = DemucsProvider(weightsDirectory: directory)
+    } else {
+        provider = DemucsProvider()
     }
-    
-    // Create provider
-    let provider = DemucsProvider(weightsDirectory: resolvedWeights)
-    
-    // Load vocals model
-    print("Loading vocals model from: \(resolvedWeights)")
+
+    // Load vocals model - only this stem's weights are fetched
+    print("Loading vocals model\(weightsPath.map { " from: \($0)" } ?? " (downloading if needed)")")
     try await provider.load(stem: .vocals)
     print("Model ready")
     
@@ -358,35 +391,18 @@ func runMossFormer2SS(inputPath: String, outputPath: String, variant: String) as
     case "3spk", "3speaker": modelType = .threeSpeaker
     case "whamr": modelType = .twoSpeakerWHAMR
     default:
-        print("Unknown SS variant: \(variant). Available: 2spk, 3spk, whamr")
-        return
+        throw CLIError.unknownVariant(variant, available: "2spk, 3spk, whamr")
     }
     
     print("\n=== MossFormer2 SS \(modelType.rawValue) with Chunking ===")
     print("Chunking: 4s chunks, 25% overlap, triangular blending")
     
-    // Find weights in HuggingFace cache - use huggingFaceRepo property
-    // Convert "starkdmi/Model_Name" to "models--starkdmi--Model_Name"
-    let repoName = modelType.huggingFaceRepo.replacingOccurrences(of: "/", with: "--")
-    let hfCache = NSHomeDirectory() + "/.cache/huggingface/hub/models--\(repoName)"
-    let snapshotsDir = hfCache + "/snapshots"
-    
-    guard let snapshots = try? FileManager.default.contentsOfDirectory(atPath: snapshotsDir),
-          let firstSnapshot = snapshots.first(where: { !$0.hasPrefix(".") }) else {
-        print("Error: Weights not found in HuggingFace cache at: \(hfCache)")
-        print("Run: huggingface-cli download \(modelType.huggingFaceRepo)")
-        return
-    }
-    
-    let weightsPath = snapshotsDir + "/" + firstSnapshot + "/model_fp32.safetensors"
-    guard FileManager.default.fileExists(atPath: weightsPath) else {
-        print("Error: model_fp32.safetensors not found at: \(weightsPath)")
-        return
-    }
-    
-    let provider = MossFormer2SSProvider(model: modelType, weightsPath: weightsPath)
-    
-    print("Loading model...")
+    // The provider fetches and caches its own weights. This used to reach into
+    // ~/.cache/huggingface, pick whichever snapshot directory sorted first, and tell
+    // the user to run `huggingface-cli` when it found nothing.
+    let provider = MossFormer2SSProvider(model: modelType)
+
+    print("Loading model (downloading if needed)...")
     try await provider.load()
     print("Model ready")
     
@@ -432,29 +448,10 @@ func runMossFormer2SR(inputPath: String, outputPath: String) async throws {
     print("Chunking: 4s chunks, 50% overlap, Hann window")
     print("Super-resolution: 16kHz → 48kHz")
     
-    // Find weights in HuggingFace cache
-    let hfCache = NSHomeDirectory() + "/.cache/huggingface/hub/models--starkdmi--MossFormer2_SR_48K_MLX"
-    let snapshotsDir = hfCache + "/snapshots"
-    
-    guard let snapshots = try? FileManager.default.contentsOfDirectory(atPath: snapshotsDir),
-          let firstSnapshot = snapshots.first(where: { !$0.hasPrefix(".") }) else {
-        print("Error: Weights not found in HuggingFace cache")
-        print("Run: huggingface-cli download starkdmi/MossFormer2_SR_48K_MLX")
-        return
-    }
-    
-    let weightsPath = snapshotsDir + "/" + firstSnapshot + "/model_fp32.safetensors"
-    let configPath = snapshotsDir + "/" + firstSnapshot + "/config.json"
-    
-    guard FileManager.default.fileExists(atPath: weightsPath),
-          FileManager.default.fileExists(atPath: configPath) else {
-        print("Error: model_fp32.safetensors or config.json not found")
-        return
-    }
-    
-    let provider = MossFormer2SR48KProvider(weightsPath: weightsPath, configPath: configPath)
-    
-    print("Loading model...")
+    // The provider fetches and caches its own weights and config.
+    let provider = MossFormer2SR48KProvider()
+
+    print("Loading model (downloading if needed)...")
     try await provider.load()
     print("Model ready")
     
@@ -517,8 +514,7 @@ func runTranscribe(inputPath: String) async throws {
         localeToUse = firstLocale
         print("No English locale, using: \(firstLocale.identifier)")
     } else {
-        print("Error: No locales available")
-        return
+        throw CLIError.noTranscriptionLocale
     }
     
     // Load audio at 16kHz
@@ -565,16 +561,9 @@ func runStreamingVerification(inputPath: String, outputPath: String, weightsPath
     print("\n=== Streaming Verification Test ===")
     print("Comparing process() vs processStream() output quality\n")
     
-    // Resolve weights path
-    let resolvedWeights = weightsPath ?? "../Models/frcrn_se_mlx_swift/Weights/frcrn_se_16k.safetensors"
-    guard FileManager.default.fileExists(atPath: resolvedWeights) else {
-        print("Error: Weights not found at: \(resolvedWeights)")
-        return
-    }
-    
-    // Create provider
-    let provider = FRCRNSE16KProvider(weightsPath: resolvedWeights)
-    
+    // Create provider - downloads from HuggingFace unless --weights points elsewhere
+    let provider = try makeFRCRN(weightsPath: weightsPath)
+
     // Load model
     print("Loading FRCRN model...")
     try await provider.load()

@@ -9,6 +9,13 @@ import Foundation
 
 /// Serializes cache-mutating operations for the same repository while allowing
 /// unrelated repositories to proceed concurrently.
+///
+/// ``withGlobalExclusiveAccess(operation:)`` is the whole-cache counterpart, for
+/// operations that are not scoped to one repository - clearing the cache. It waits
+/// for every in-flight repository operation to finish and holds off new ones for its
+/// duration. Without it, `clearCache()` deleted files from under an active download
+/// or an integrity verification: the downloader actor is reentrant while awaiting a
+/// snapshot, so "the actor is busy downloading" never stopped anything.
 actor RepositoryCacheAccess {
     static let shared = RepositoryCacheAccess()
 
@@ -54,12 +61,24 @@ actor RepositoryCacheAccess {
         }
     }
 
-    private struct RepositoryState {
-        var owner: UUID?
-        var waiters: [Waiter] = []
+    /// One waiter's claim, either on a single repository or on the whole cache.
+    private struct Blocked {
+        let token: UUID
+        /// `nil` for a whole-cache claim.
+        let repository: String?
+        let waiter: Waiter
     }
 
-    private var repositories: [String: RepositoryState] = [:]
+    /// Repositories with an operation in progress.
+    private var activeRepositories: Set<String> = []
+
+    /// Whether a whole-cache operation holds the barrier.
+    private var globalActive = false
+
+    /// Queued claims, oldest first. Whole-cache claims take priority over repository
+    /// claims queued behind them, so a `clearCache()` cannot be starved by a steady
+    /// stream of downloads.
+    private var blocked: [Blocked] = []
 
     func withExclusiveAccess<Value: Sendable>(
         to repository: String,
@@ -73,23 +92,39 @@ actor RepositoryCacheAccess {
         return try await operation()
     }
 
-    func waitingCount(for repository: String) -> Int {
-        repositories[repository]?.waiters.count ?? 0
+    /// Run `operation` with no repository operation in flight, and none admitted
+    /// until it returns.
+    func withGlobalExclusiveAccess<Value: Sendable>(
+        operation: @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let token = UUID()
+        try await acquire(repository: nil, token: token)
+        defer { release(repository: nil, token: token) }
+
+        try Task.checkCancellation()
+        return try await operation()
     }
 
-    private func acquire(repository: String, token: UUID) async throws {
+    func waitingCount(for repository: String) -> Int {
+        blocked.filter { $0.repository == repository }.count
+    }
+
+    /// Waiters for the whole-cache barrier.
+    func globalWaitingCount() -> Int {
+        blocked.filter { $0.repository == nil }.count
+    }
+
+    /// `repository == nil` claims the whole cache.
+    private func acquire(repository: String?, token: UUID) async throws {
         try Task.checkCancellation()
 
-        var state = repositories[repository] ?? RepositoryState()
-        guard state.owner != nil else {
-            state.owner = token
-            repositories[repository] = state
+        if canAdmit(repository: repository) {
+            take(repository: repository)
             return
         }
 
         let waiter = Waiter(id: token)
-        state.waiters.append(waiter)
-        repositories[repository] = state
+        blocked.append(Blocked(token: token, repository: repository, waiter: waiter))
 
         let acquired = await withTaskCancellationHandler {
             await waiter.wait()
@@ -98,7 +133,9 @@ actor RepositoryCacheAccess {
         }
 
         guard acquired else {
-            removeWaiter(repository: repository, token: token)
+            removeWaiter(token: token)
+            // A cancelled waiter may have been the one holding up the queue.
+            admitWaiting()
             throw CancellationError()
         }
         if Task.isCancelled {
@@ -107,30 +144,58 @@ actor RepositoryCacheAccess {
         }
     }
 
-    private func removeWaiter(repository: String, token: UUID) {
-        guard var state = repositories[repository] else { return }
-        state.waiters.removeAll { $0.id == token }
-        repositories[repository] = state
+    /// Whether a claim can start right now, ignoring the queue's own ordering.
+    private func canAdmit(repository: String?) -> Bool {
+        guard !globalActive else { return false }
+        guard let repository else {
+            // A whole-cache claim needs the cache quiet.
+            return activeRepositories.isEmpty
+        }
+        // A repository claim waits behind any queued whole-cache claim, so that
+        // claim is not starved by repositories that keep arriving.
+        guard !blocked.contains(where: { $0.repository == nil }) else { return false }
+        return !activeRepositories.contains(repository)
     }
 
-    private func release(repository: String, token: UUID) {
-        guard var state = repositories[repository], state.owner == token else {
-            return
-        }
-
-        state.owner = nil
-        while !state.waiters.isEmpty {
-            let waiter = state.waiters.removeFirst()
-            if waiter.resolve(acquired: true) {
-                state.owner = waiter.id
-                break
-            }
-        }
-
-        if state.owner == nil && state.waiters.isEmpty {
-            repositories.removeValue(forKey: repository)
+    private func take(repository: String?) {
+        if let repository {
+            activeRepositories.insert(repository)
         } else {
-            repositories[repository] = state
+            globalActive = true
+        }
+    }
+
+    private func removeWaiter(token: UUID) {
+        blocked.removeAll { $0.token == token }
+    }
+
+    private func release(repository: String?, token: UUID) {
+        if let repository {
+            activeRepositories.remove(repository)
+        } else {
+            globalActive = false
+        }
+        admitWaiting()
+    }
+
+    /// Hand the lock to whoever can take it now, in queue order.
+    private func admitWaiting() {
+        var index = 0
+        while index < blocked.count {
+            let candidate = blocked[index]
+            guard canAdmit(repository: candidate.repository) else {
+                // A queued whole-cache claim blocks everything behind it.
+                if candidate.repository == nil { return }
+                index += 1
+                continue
+            }
+            blocked.remove(at: index)
+            if candidate.waiter.resolve(acquired: true) {
+                take(repository: candidate.repository)
+            }
+            // The removed entry may have been the whole-cache claim that was
+            // holding the rest of the queue; rescan from the top either way.
+            index = 0
         }
     }
 }

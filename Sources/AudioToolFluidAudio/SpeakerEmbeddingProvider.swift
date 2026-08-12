@@ -133,7 +133,7 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
         let candidateVAD: VadManager?
         if config.useVAD {
             let vadConfig = VadConfig(defaultThreshold: config.vadThreshold)
-            candidateVAD = try await VadManager(config: vadConfig)
+            candidateVAD = try await PinnedVADModel.makeManager(config: vadConfig)
         } else {
             candidateVAD = nil
         }
@@ -248,42 +248,56 @@ public actor SpeakerEmbeddingProvider: SpeakerEmbeddingExtractor {
             }
         }
         
-        // Find first and last speech frames for trimming
-        var firstSpeechFrame = 0
-        var lastSpeechFrame = numFrames - 1
-        
+        // Find first and last speech frames for trimming.
+        //
+        // Left as optionals rather than seeded with the full input bounds. Seeding
+        // made "no speech anywhere" indistinguishable from "speech spans the whole
+        // recording": both produced 0...numFrames-1, the range passed the validity
+        // check below, and the fallback underneath it could never run. A silent
+        // clip came back untrimmed with a mask that was zero everywhere, which is
+        // the one mask an embedding cannot be pooled over.
+        var firstSpeechFrame: Int?
+        var lastSpeechFrame: Int?
+
         for i in 0..<numFrames {
             if frameMask[i] > 0.5 {
                 firstSpeechFrame = i
                 break
             }
         }
-        
+
         for i in stride(from: numFrames - 1, through: 0, by: -1) {
             if frameMask[i] > 0.5 {
                 lastSpeechFrame = i
                 break
             }
         }
-        
+
+        guard let firstSpeechFrame, let lastSpeechFrame else {
+            // No speech detected - use original audio with all-active mask
+            return VADResult(
+                trimmedAudio: audio,
+                speechMask: [Float](repeating: 1.0, count: numFrames)
+            )
+        }
+
         // Convert frames to samples for trimming
         let firstSpeechSample = max(0, Int(Float(firstSpeechFrame) * frameStep * Float(sampleRate)))
         let lastSpeechSample = min(audio.count, Int(Float(lastSpeechFrame + 1) * frameStep * Float(sampleRate)))
-        
-        // Trim audio
-        let trimmedAudio: [Float]
-        let trimmedMask: [Float]
-        
-        if firstSpeechSample < lastSpeechSample {
-            trimmedAudio = Array(audio[firstSpeechSample..<lastSpeechSample])
-            trimmedMask = Array(frameMask[firstSpeechFrame...lastSpeechFrame])
-        } else {
-            // No speech detected - use original audio with all-active mask
-            trimmedAudio = audio
-            trimmedMask = [Float](repeating: 1.0, count: numFrames)
+
+        // Speech frames were found, but frame-to-sample rounding can still collapse
+        // the range on very short input.
+        guard firstSpeechSample < lastSpeechSample else {
+            return VADResult(
+                trimmedAudio: audio,
+                speechMask: [Float](repeating: 1.0, count: numFrames)
+            )
         }
-        
-        return VADResult(trimmedAudio: trimmedAudio, speechMask: trimmedMask)
+
+        return VADResult(
+            trimmedAudio: Array(audio[firstSpeechSample..<lastSpeechSample]),
+            speechMask: Array(frameMask[firstSpeechFrame...lastSpeechFrame])
+        )
     }
     
     /// Extract speaker embedding from audio file URL

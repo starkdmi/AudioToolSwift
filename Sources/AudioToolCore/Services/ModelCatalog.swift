@@ -129,11 +129,20 @@ public final class ModelCatalog: @unchecked Sendable {
                 category: .speechEnhancement,
                 description: "Fast and efficient speech enhancement model",
                 variants: [
+                    // No FRCRN `config.json` exists and the provider never opens one -
+                    // it calls `loadWeights` and stops. That is not a reason to drop
+                    // the request: neither `MossFormer2_SE_48K_MLX` nor any of the
+                    // three SS repos publishes one either, so every `standard` variant
+                    // here asks for a file that is not there. An unmatched glob is not
+                    // an error, `requiredFiles` is what decides whether a snapshot is
+                    // loadable, and keeping the request means a repo that later gains
+                    // a config gets it. So nothing needs inventing at upload time.
+                    // Size is the real 56 MB checkpoint, not the old 150 MB guess.
                     ModelVariant(
                         id: "frcrn_se_fp32",
                         name: "FRCRN SE (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 150_000_000,
+                        sizeBytes: 56_000_000,
                         repo: ModelRepository.frcrnSE16K,
                         files: ModelFiles.standard(.fp32),
                         requiredFiles: ModelFiles.standardRequired(.fp32)
@@ -315,13 +324,30 @@ public final class ModelCatalog: @unchecked Sendable {
                 category: .vad,
                 description: "Fast voice activity detection",
                 variants: [
+                    // The repository holds several conversions side by side, so the
+                    // pattern names the one FluidAudio actually loads
+                    // (`ModelNames.VAD.sileroVad`) rather than every `.mlpackage` in
+                    // the repo - which would have pulled four unused models, and in
+                    // any case matched none of them: a compiled model is a directory,
+                    // and `*` does not cross a path separator.
                     ModelVariant(
                         id: "silero_vad_coreml",
                         name: "Silero VAD (CoreML)",
                         quantization: .fp16,
-                        sizeBytes: 2_000_000,
-                        repo: "FluidInference/SileroVAD",
-                        files: ["*.mlpackage"]
+                        sizeBytes: 1_100_000,
+                        repo: ModelRepository.sileroVADCoreML,
+                        files: ["silero-vad-unified-256ms-v6.2.1.mlmodelc/**"],
+                        // `requiredFiles` defaults to `files`, and a single recursive
+                        // wildcard is satisfied by *any one* entry inside the compiled
+                        // model - so an interrupted download that left one file behind
+                        // reported the variant as installed. A compiled Core ML model
+                        // is a directory of parts that are individually useless; these
+                        // are the ones it cannot load without.
+                        requiredFiles: [
+                            "silero-vad-unified-256ms-v6.2.1.mlmodelc/coremldata.bin",
+                            "silero-vad-unified-256ms-v6.2.1.mlmodelc/model.mil",
+                            "silero-vad-unified-256ms-v6.2.1.mlmodelc/weights/weight.bin",
+                        ]
                     ),
                 ]
             ),
@@ -337,7 +363,7 @@ public final class ModelCatalog: @unchecked Sendable {
                 name: "Speech Studio Essentials",
                 description: "Core tools for speech processing: enhancement, VAD",
                 variantIds: ["mossformer2_se_fp16", "silero_vad_coreml"],
-                totalSizeBytes: 92_000_000
+                totalSizeBytes: 91_100_000
             ),
             
             ModelPackage(
@@ -351,7 +377,7 @@ public final class ModelCatalog: @unchecked Sendable {
                     "whisper_small",
                     "silero_vad_coreml"
                 ],
-                totalSizeBytes: 722_000_000
+                totalSizeBytes: 721_100_000
             ),
             
             ModelPackage(
@@ -371,7 +397,7 @@ public final class ModelCatalog: @unchecked Sendable {
                     "whisper_large_v3",
                     "silero_vad_coreml"
                 ],
-                totalSizeBytes: 1_592_000_000
+                totalSizeBytes: 1_591_100_000
             ),
         ]
     }

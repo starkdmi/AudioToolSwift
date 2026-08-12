@@ -99,4 +99,71 @@ final class DemucsChannelLayoutTests: MLXTestCase {
         XCTAssertEqual(pair[0].asArray(Float.self), [2, 3])
         XCTAssertEqual(pair[1].asArray(Float.self), [-2, -3])
     }
+
+    // MARK: - What the provider accepts
+    //
+    // The conversion above is only reachable if `separate` lets the buffer through.
+    // It used to require `channels == 2`, so the mono and downmix branches were dead
+    // for any direct caller - and mono is the ordinary input, since `loadMono` is
+    // what the CLI and the tests use. `BackgroundExtractionTests.testDemucsBackground`
+    // failed on exactly that, and the benchmark harness carried a per-case channel
+    // count to route around it.
+    //
+    // These need no weights: reaching `modelNotLoaded` proves validation passed.
+
+    private func layoutBuffer(channels: Int, sampleRate: Int = 44100) -> AudioBuffer {
+        AudioBuffer(
+            samples: (0..<(64 * channels)).map { Float($0) / 100 },
+            sampleRate: sampleRate,
+            channels: channels
+        )
+    }
+
+    private func assertLayoutAccepted(
+        channels: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        let demucs = DemucsProvider(weightsDirectory: "/nonexistent")
+        do {
+            _ = try await demucs.separate(layoutBuffer(channels: channels), stem: .vocals)
+            XCTFail("expected modelNotLoaded", file: file, line: line)
+        } catch let error as AudioToolError {
+            guard case .modelNotLoaded = error else {
+                XCTFail(
+                    "\(channels)-channel input was rejected before loading: \(error)",
+                    file: file, line: line
+                )
+                return
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)", file: file, line: line)
+        }
+    }
+
+    func testAcceptsMonoInput() async { await assertLayoutAccepted(channels: 1) }
+    func testAcceptsStereoInput() async { await assertLayoutAccepted(channels: 2) }
+    func testAcceptsMultichannelInput() async { await assertLayoutAccepted(channels: 6) }
+
+    /// Relaxing the channel check must not relax the rate check with it. Providers
+    /// validate rather than resample, and 44.1 kHz is what this model was trained at.
+    func testStillRejectsWrongSampleRate() async {
+        let demucs = DemucsProvider(weightsDirectory: "/nonexistent")
+        do {
+            _ = try await demucs.separate(
+                layoutBuffer(channels: 1, sampleRate: 16000),
+                stem: .vocals
+            )
+            XCTFail("expected sampleRateMismatch")
+        } catch let error as AudioToolError {
+            guard case .sampleRateMismatch(let expected, let found) = error else {
+                XCTFail("wrong error: \(error)")
+                return
+            }
+            XCTAssertEqual(expected, 44100)
+            XCTAssertEqual(found, 16000)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
 }

@@ -429,6 +429,11 @@ public actor ModelResidency {
             } else if !waiterWasCancelled,
                       pendingLoads[modelId]?.token == pending.token {
                 pendingLoads.removeValue(forKey: modelId)
+                // This load displaced a resident of the same identifier and then
+                // failed. Put the old one back now that its slot is free again.
+                if let replaced = pending.replacedModel {
+                    await restore(replaced)
+                }
             }
             throw error
         }
@@ -557,6 +562,44 @@ public actor ModelResidency {
             await model.unload()
             throw error
         }
+    }
+
+    /// Put back a resident that was displaced for a replacement that then failed.
+    ///
+    /// Replacement unloads first by design - two instances of the same model are two
+    /// copies of the same several gigabytes, and the budget exists precisely to stop
+    /// that. The cost of unloading first is that a failed replacement takes the
+    /// working provider with it: the caller still holds and has registered the old
+    /// instance, and would find it unloaded through no action of its own. Reloading
+    /// an already-downloaded model is the cheap half of a load, and it is the state
+    /// the caller was in before it asked for something this manager could not give.
+    ///
+    /// Goes through ``beginUse(_:)`` rather than loading and publishing by hand. A
+    /// hand-rolled restore is invisible to this actor while it awaits: `unloadAll()`
+    /// could return and *then* have this publish behind it, a concurrent admission
+    /// would size its eviction against a budget that did not know about these bytes,
+    /// and losing a race to a same-identifier winner left the restored model loaded
+    /// but untracked - resident memory the manager could never reclaim. `beginUse` is
+    /// the one path that reserves the identifier before suspending, accounts for the
+    /// memory, and refuses while a teardown is in flight.
+    ///
+    /// Best effort by construction. If the restore fails, the original error is what
+    /// the caller needs to see, and `beginUse` reloads the model on its next use
+    /// regardless. Skipped entirely on cancellation, where nobody is waiting for the
+    /// old model either.
+    private func restore(_ model: any ManagedModel) async {
+        guard let lease = try? await beginUse(model) else {
+            Self.logger.error(
+                """
+                Could not restore '\(model.modelId, privacy: .public)' after a failed \
+                replacement; it will reload on next use
+                """
+            )
+            return
+        }
+        // Immediately: this is a restoration, not a use. The claim exists only to
+        // keep the entry from being evicted between admission and here.
+        release(lease)
     }
 
     private func ensureSameInstance(

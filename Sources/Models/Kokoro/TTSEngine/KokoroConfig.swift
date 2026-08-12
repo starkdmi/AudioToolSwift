@@ -14,8 +14,6 @@ import Foundation
 ///
 /// Configuration is loaded from a JSON file bundled with the module.
 struct KokoroConfig: Decodable {
-  /// Shared configuration instance cached after first load
-  nonisolated(unsafe) static var config: KokoroConfig?
 
   /// Configuration for the iSTFT (Inverse Short-Time Fourier Transform) decoder network.
   /// Defines the architecture of the decoder that converts mel-spectrograms to audio.
@@ -146,22 +144,30 @@ struct KokoroConfig: Decodable {
     
   /// Loads the configuration from the bundled config.json file.
   ///
-  /// This method reads the configuration file from the module's Resources directory,
-  /// parses it as JSON, and caches the result for future use.
-  ///
   /// - Returns: Parsed KokoroConfig instance
-  /// - Note: Uses forced unwrapping (try!) as configuration loading is critical
-  ///         and should fail fast if the file is missing or malformed
+  /// - Note: Force-unwraps deliberately. Unlike the model weights, this file is a
+  ///   resource compiled into the module, not something a caller supplies: if it is
+  ///   missing or malformed the build is broken, and there is no input that makes
+  ///   that reachable at runtime.
   nonisolated static func loadConfig() -> KokoroConfig {
+    shared
+  }
+
+  /// The parsed configuration, decoded once.
+  ///
+  /// A `static let` rather than the `nonisolated(unsafe) static var` this was.
+  /// Swift initialises a static `let` exactly once under `swift_once`, so two
+  /// provider actors racing to build their first model see one decode and one
+  /// value. The mutable version had them writing the same global concurrently -
+  /// benign only by luck, and invisible because this target still builds in Swift 5
+  /// language mode where the compiler does not object.
+  private nonisolated static let shared: KokoroConfig = {
     // Locate config.json in the module bundle
     let fileURL = Bundle.module.url(forResource: "config", withExtension: "json", subdirectory: "Resources")!
-    
+
     // Read file contents
     let configJSON = try! String(contentsOf: fileURL, encoding: .utf8)
-    
-    // Parse JSON and cache the result
-    KokoroConfig.config = try! JSONDecoder().decode(KokoroConfig.self, from: configJSON.data(using: .utf8)!)
-    
-    return KokoroConfig.config!
-  }
+
+    return try! JSONDecoder().decode(KokoroConfig.self, from: configJSON.data(using: .utf8)!)
+  }()
 }

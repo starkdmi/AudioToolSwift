@@ -89,6 +89,9 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     private var model: MossFormer2_SS_16K?
     private let weightsPath: String?
     private let precision: ModelPrecision
+
+    /// One load at a time; see ``ModelLoadGate``.
+    private let loadGate = ModelLoadGate()
     
     /// Max audio without chunking
     private let maxDirectDuration: Float = 4.0
@@ -108,7 +111,13 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
     }
     
     /// Load model weights (downloads if not cached)
+    ///
+    /// Concurrent calls share one load; see ``ModelLoadGate``.
     public func load() async throws {
+        try await loadGate.run { [self] in try await performLoad() }
+    }
+
+    private func performLoad() async throws {
         // Before the first allocation, not at the first chunk boundary.
         // `trimIfNeeded` used to be the only thing that applied these, so a
         // provider ran its load and its opening chunks under MLX's own default
@@ -375,7 +384,17 @@ public actor DemucsProvider: MusicSeparator {
     /// settings - so `.auto` is the measured answer and Mastering would be a guess
     /// that happens to sound better.
     public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .auto }
+    /// The model's input width, and the layout the facade converts to - not a
+    /// restriction on what this provider accepts.
+    ///
+    /// HTDemucs takes a `(2, frames)` tensor and separates partly on stereo cues, so
+    /// stereo in is the best input and `AudioEngine` adapts to it. But ``separate(_:stem:)``
+    /// takes any layout: ``stereoPair(from:)`` duplicates mono to both channels, the
+    /// way HTDemucs itself does, and downmixes anything wider.
     public nonisolated let inputChannels: Int = 2
+
+    /// Always mono: the separation uses both channels, and only the result is folded
+    /// down - see ``separateDirect(_:stem:)``.
     public nonisolated let outputChannels: Int = 1
     
     /// Stems the loaded weights can produce. Each has its own weight file, so this
@@ -387,6 +406,11 @@ public actor DemucsProvider: MusicSeparator {
 
     private var models: [Stem: HTDemucs] = [:]
     private let weightsDirectory: String?
+
+    /// One residency-managed load at a time; see ``ModelLoadGate``. Per-stem loads
+    /// go through ``load(stem:)`` and are not gated - they are additive, and a
+    /// duplicate costs one stem rather than the whole provider.
+    private let loadGate = ModelLoadGate()
 
     /// Max audio without chunking (7.8s is the limit from benchmarks)
     private let maxDirectDuration: Float = 7.8
@@ -422,6 +446,9 @@ public actor DemucsProvider: MusicSeparator {
                 weightsDirectory: directory
             )
         }
+        // An `unload()` that landed while the weights were downloading cancels this
+        // load; publishing here anyway would resurrect the provider behind it.
+        try Task.checkCancellation()
         models = candidates
     }
 
@@ -487,9 +514,22 @@ public actor DemucsProvider: MusicSeparator {
         return model
     }
     
-    /// Separate a specific source from the audio
+    /// Separate a specific source from the audio.
+    ///
+    /// Mono, stereo and wider inputs are all accepted; ``stereoPair(from:)`` converts.
+    /// The rate is not negotiable - 44.1 kHz is what the model was trained at.
+    ///
+    /// This validated the channel count too, against `inputChannels == 2`, which made
+    /// the mono and downmix branches of that conversion unreachable for anyone calling
+    /// the provider directly - and mono is the ordinary case here, since `AudioLoader`
+    /// exposes `loadMono` and the CLI uses it. Two things had already bent around the
+    /// guard rather than through it: the benchmark harness carried a per-case channel
+    /// count so Demucs would not report `channelCountMismatch` where nine other models
+    /// measured fine, and `BackgroundExtractionTests.testDemucsBackground` simply
+    /// failed. The conversion was written, documented and correct; only this line
+    /// stopped it running.
     public func separate(_ input: AudioBuffer, stem: Stem) async throws -> AudioBuffer {
-        try validateSampleRate(input)
+        try validateInputRate(input)
 
         guard models[stem] != nil else {
             throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
@@ -589,7 +629,10 @@ public actor DemucsProvider: MusicSeparator {
         guard let model = models[stem] else {
             throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
         }
-        defer { GPU.clearCache() }
+        // Threshold-based rather than unconditional: `GPU.clearCache()` is
+        // process-global, and purging after every separation both discards other
+        // MLX users' buffers and gives up the allocator reuse the next call wants.
+        defer { MLXCachePolicy.trimIfCacheGrew() }
 
         let sourceOutput = stemOutput(stereo, stem: stem, model: model)
         // Downmixed to mono, matching ``outputChannels``. The separation itself used
@@ -615,7 +658,10 @@ public actor DemucsProvider: MusicSeparator {
         guard let model = models[stem] else {
             throw AudioToolError.modelNotLoaded("Demucs_\(stem.rawValue)")
         }
-        defer { GPU.clearCache() }
+        // Threshold-based rather than unconditional: `GPU.clearCache()` is
+        // process-global, and purging after every separation both discards other
+        // MLX users' buffers and gives up the allocator reuse the next call wants.
+        defer { MLXCachePolicy.trimIfCacheGrew() }
 
         let chunkingConfig = ChunkingConfig.demucs(sampleRate: sampleRate)
         let chunkSamples = chunkingConfig.chunkSamples
@@ -747,6 +793,12 @@ extension MossFormer2SSProvider: ManagedModel {
     public func checkIfLoaded() async -> Bool { model != nil }
 
     public func unload() async {
+        // Cancel first: a load mid-download must not publish over this unload.
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         model = nil
         GPU.clearCache()
     }
@@ -774,14 +826,16 @@ extension DemucsProvider: ManagedModel {
     /// only need vocals. Residency-managed loading deliberately requires all four
     /// stems because `ManagedModel` treats this provider as one loadable unit.
     public func load() async throws {
-        // Before the first allocation, not at the first chunk boundary.
-        // `trimIfNeeded` used to be the only thing that applied these, so a
-        // provider ran its load and its opening chunks under MLX's own default
-        // ceiling and the cache had already grown past the cap by the time the
-        // cap arrived. Measured on Demucs: 5.1 GB peak applying it late against
-        // 3.2 GB applying it here.
-        MLXCachePolicy.applyProcessLimits()
-        try await loadAll()
+        try await loadGate.run { [self] in
+            // Before the first allocation, not at the first chunk boundary.
+            // `trimIfNeeded` used to be the only thing that applied these, so a
+            // provider ran its load and its opening chunks under MLX's own default
+            // ceiling and the cache had already grown past the cap by the time the
+            // cap arrived. Measured on Demucs: 5.1 GB peak applying it late against
+            // 3.2 GB applying it here.
+            MLXCachePolicy.applyProcessLimits()
+            try await loadAll()
+        }
     }
 
     public func checkIfLoaded() async -> Bool {
@@ -789,6 +843,12 @@ extension DemucsProvider: ManagedModel {
     }
 
     public func unload() async {
+        // Cancel first: a load mid-download must not publish over this unload.
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         models.removeAll()
         GPU.clearCache()
     }

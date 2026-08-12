@@ -13,11 +13,11 @@ class CustomAlbert: Module {
   @ModuleInfo var encoder: AlbertEncoder
   @ModuleInfo var pooler: Linear
 
-  init(weights: [String: MLXArray], config: AlbertModelArgs) {
+  init(weights: [String: MLXArray], config: AlbertModelArgs) throws {
     self.config = config
-    self._embeddings.wrappedValue = AlbertEmbeddings(weights: weights, config: config)
-    self._encoder.wrappedValue = AlbertEncoder(weights: weights, config: config)
-    self._pooler.wrappedValue = Linear(weight: weights["bert.pooler.weight"]!, bias: weights["bert.pooler.bias"]!)
+    self._embeddings.wrappedValue = try AlbertEmbeddings(weights: weights, config: config)
+    self._encoder.wrappedValue = try AlbertEncoder(weights: weights, config: config)
+    self._pooler.wrappedValue = Linear(weight: try KokoroWeights.require(weights, "bert.pooler.weight"), bias: try KokoroWeights.require(weights, "bert.pooler.bias"))
   }
 
   func callAsFunction(

@@ -49,6 +49,12 @@ public enum ModelRepository {
     /// Universal source separation.
     public static let uss = "starkdmi/USS_MLX"
 
+    /// The S3 speech tokenizer Chatterbox needs when its own repo does not ship one.
+    ///
+    /// Named here rather than spelled out at the use site, so it resolves through
+    /// `ModelDownloader` and its pin like every other repository.
+    public static let s3Tokenizer = "mlx-community/S3TokenizerV2"
+
     /// FRCRN speech enhancement, 16 kHz.
     ///
     /// The rate is in the name to match its neighbours - the catalog previously said
@@ -68,6 +74,17 @@ public enum ModelRepository {
 
     /// Chatterbox's default full-precision MLX checkpoint.
     public static let chatterboxFP32 = "starkdmi/chatterbox"
+
+    /// Silero VAD, as converted for Core ML by FluidAudio.
+    ///
+    /// The catalog previously named `FluidInference/SileroVAD`, which does not exist
+    /// - so a pre-download of the VAD entry could only ever 404. This is the
+    /// repository FluidAudio itself fetches from (`ModelNames.Repo.vad`).
+    ///
+    /// Listed here for the catalog's pre-download and size display only. The runtime
+    /// fetch goes through FluidAudio's own downloader, which this package does not
+    /// call and cannot pin; that one is fixed by the FluidAudio dependency version.
+    public static let sileroVADCoreML = "FluidInference/silero-vad-coreml"
 }
 
 // MARK: - File Layouts

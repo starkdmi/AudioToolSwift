@@ -32,9 +32,9 @@ final class TextEncoder: Module {
   ///   - depth: Number of CNN blocks to stack
   ///   - nSymbols: Size of the vocabulary (number of unique tokens)
   ///   - actv: Activation function (default: LeakyReLU with slope 0.2)
-  init(weights: [String: MLXArray], channels: Int, kernelSize: Int, depth: Int, nSymbols _: Int, actv: Module = LeakyReLU(negativeSlope: 0.2)) {
+  init(weights: [String: MLXArray], channels: Int, kernelSize: Int, depth: Int, nSymbols _: Int, actv: Module = LeakyReLU(negativeSlope: 0.2)) throws {
     // Initialize embedding layer
-    self._embedding.wrappedValue = Embedding(weight: weights["text_encoder.embedding.weight"]!)
+    self._embedding.wrappedValue = Embedding(weight: try KokoroWeights.require(weights, "text_encoder.embedding.weight"))
     
     // Calculate padding to maintain sequence length
     let padding = (kernelSize - 1) / 2
@@ -45,15 +45,15 @@ final class TextEncoder: Module {
       cnnLayers.append([
         // Weight-normalized convolution
         ConvWeighted(
-          weightG: weights["text_encoder.cnn.\(i).0.weight_g"]!,
-          weightV: weights["text_encoder.cnn.\(i).0.weight_v"]!,
-          bias: weights["text_encoder.cnn.\(i).0.bias"]!,
+          weightG: try KokoroWeights.require(weights, "text_encoder.cnn.\(i).0.weight_g"),
+          weightV: try KokoroWeights.require(weights, "text_encoder.cnn.\(i).0.weight_v"),
+          bias: try KokoroWeights.require(weights, "text_encoder.cnn.\(i).0.bias"),
           padding: padding
         ),
         // Layer normalization for stability
         LayerNormInference(
-          weight: weights["text_encoder.cnn.\(i).1.gamma"]!,
-          bias: weights["text_encoder.cnn.\(i).1.beta"]!
+          weight: try KokoroWeights.require(weights, "text_encoder.cnn.\(i).1.gamma"),
+          bias: try KokoroWeights.require(weights, "text_encoder.cnn.\(i).1.beta")
         ),
         // Activation function
         actv,
@@ -65,14 +65,14 @@ final class TextEncoder: Module {
     self._lstm.wrappedValue = LSTM(
       inputSize: channels,
       hiddenSize: channels / 2,  // Half size because bidirectional (forward + backward)
-      wxForward: weights["text_encoder.lstm.weight_ih_l0"]!,
-      whForward: weights["text_encoder.lstm.weight_hh_l0"]!,
-      biasIhForward: weights["text_encoder.lstm.bias_ih_l0"]!,
-      biasHhForward: weights["text_encoder.lstm.bias_hh_l0"]!,
-      wxBackward: weights["text_encoder.lstm.weight_ih_l0_reverse"]!,
-      whBackward: weights["text_encoder.lstm.weight_hh_l0_reverse"]!,
-      biasIhBackward: weights["text_encoder.lstm.bias_ih_l0_reverse"]!,
-      biasHhBackward: weights["text_encoder.lstm.bias_hh_l0_reverse"]!
+      wxForward: try KokoroWeights.require(weights, "text_encoder.lstm.weight_ih_l0"),
+      whForward: try KokoroWeights.require(weights, "text_encoder.lstm.weight_hh_l0"),
+      biasIhForward: try KokoroWeights.require(weights, "text_encoder.lstm.bias_ih_l0"),
+      biasHhForward: try KokoroWeights.require(weights, "text_encoder.lstm.bias_hh_l0"),
+      wxBackward: try KokoroWeights.require(weights, "text_encoder.lstm.weight_ih_l0_reverse"),
+      whBackward: try KokoroWeights.require(weights, "text_encoder.lstm.weight_hh_l0_reverse"),
+      biasIhBackward: try KokoroWeights.require(weights, "text_encoder.lstm.bias_ih_l0_reverse"),
+      biasHhBackward: try KokoroWeights.require(weights, "text_encoder.lstm.bias_hh_l0_reverse")
     )
   }
   

@@ -72,10 +72,12 @@ public actor ModelDownloader {
     /// - Parameters:
     ///   - repo: Repository ID (e.g., "starkdmi/MossFormer2_SE_48K_MLX")
     ///   - matching: Glob patterns for files to download
+    ///   - revision: Git revision to fetch. Defaults to this repository's pin.
     /// - Returns: AsyncThrowingStream of progress updates, final URL on completion
     public func download(
         repo: String,
-        matching globs: [String] = ["*.safetensors", "config.json"]
+        matching globs: [String] = ["*.safetensors", "config.json"],
+        revision: String? = nil
     ) -> AsyncThrowingStream<DownloadProgress, Error> {
         AsyncThrowingStream { continuation in
             let producer = Task {
@@ -83,7 +85,8 @@ public actor ModelDownloader {
                     try Task.checkCancellation()
                     _ = try await self.downloadAndGetPath(
                         repo: repo,
-                        matching: globs
+                        matching: globs,
+                        revision: revision
                     ) { progress in
                         _ = continuation.yield(progress)
                     }
@@ -106,14 +109,29 @@ public actor ModelDownloader {
     }
     
     /// Download model and return final path
+    ///
+    /// The revision defaults to the repository's entry in ``ModelPins``, so every
+    /// existing call site became pinned without naming a revision. Repositories with
+    /// no pin still follow their default branch, which is the old behaviour and the
+    /// only behaviour available for a conversion that has not been published yet.
+    ///
+    /// A fresh download is verified against ``ModelPin/fileHashes`` before the path
+    /// is returned. That check happens here rather than at load time because it is
+    /// the one moment the cost is already paid - the bytes were just written - and
+    /// because a loader that hashes 2.7 GB on every launch would be unusable.
+    ///
     /// - Parameters:
     ///   - repo: Repository ID
     ///   - matching: Glob patterns
+    ///   - revision: Git revision to fetch. Defaults to this repository's pin.
+    ///   - verify: Check the downloaded files against their pinned hashes.
     ///   - progress: Progress callback
     /// - Returns: Local directory URL
     public func downloadAndGetPath(
         repo: String,
         matching globs: [String] = ["*.safetensors", "config.json"],
+        revision: String? = nil,
+        verify: Bool = true,
         progress: @escaping @Sendable (DownloadProgress) -> Void = { _ in }
     ) async throws -> URL {
         guard Self.repositoryComponents(for: repo) != nil else {
@@ -121,10 +139,12 @@ public actor ModelDownloader {
                 "Invalid HuggingFace repository identifier '\(repo)'. Expected 'owner/name'."
             )
         }
+        let resolvedRevision = revision ?? ModelPins.revision(for: repo)
         return try await RepositoryCacheAccess.shared.withExclusiveAccess(to: repo) {
             try Task.checkCancellation()
-            return try await HubApi.shared.snapshot(
+            let directory = try await HubApi.shared.snapshot(
                 from: Hub.Repo(id: repo),
+                revision: resolvedRevision,
                 matching: globs
             ) { foundationProgress, speed in
                 progress(DownloadProgress(
@@ -134,6 +154,48 @@ public actor ModelDownloader {
                     bytesPerSecond: speed
                 ))
             }
+
+            // Inside the lease, not after it. Hashing used to run once the lease had
+            // been released, which is precisely when a queued `delete(repo:)` or
+            // `clearCache()` gets the barrier: the snapshot could be removed
+            // mid-verification, and since a pinned file that is absent is skipped
+            // rather than failed, the report came back `passed` and this method
+            // returned a directory that no longer existed.
+            //
+            // Only when the resolved revision *is* the pinned one. Verifying some
+            // other revision against this revision's hashes would fail by
+            // construction and be reported as corruption.
+            //
+            // The test used to be `revision == nil`, which asked how the revision was
+            // arrived at rather than what it is: a caller who passed the pinned SHA
+            // explicitly - the most careful thing a caller can do - silently got no
+            // hash check at all, `verify: true` notwithstanding.
+            if verify, resolvedRevision == ModelPins.revision(for: repo) {
+                let report = try self.verify(repo: repo, at: directory)
+                guard report.passed else {
+                    throw AudioToolError.modelIntegrityFailed(
+                        repo: repo,
+                        details: report.failureDescription
+                    )
+                }
+            }
+
+            // Never hand back a path that is not there. Deliberately existence and
+            // not `hasRequiredFiles(at:patterns:)`: `globs` is a download manifest,
+            // and some of its patterns are optional by design - `ModelFiles.kokoro`
+            // asks for `voices/*.npy`, which not every Kokoro repo publishes.
+            // Requiring every pattern to match here would fail downloads that are
+            // complete. Which files must be present to *load* is the caller's
+            // question, and `ModelFiles.standardRequired` is where it is answered.
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw AudioToolError.modelNotFound(
+                    "\(repo) snapshot is not present at \(directory.path) after download"
+                )
+            }
+
+            return directory
         }
     }
     
@@ -169,13 +231,28 @@ public actor ModelDownloader {
     ///
     /// Filtering all candidates is important because HuggingFace can leave a
     /// newer, partial snapshot next to an older complete one after interruption.
+    ///
+    /// For a pinned repository, a candidate must also *be* the pinned revision. This
+    /// is what makes pinning mean anything on a machine that already has the model:
+    /// providers ask here first and only call ``downloadAndGetPath(repo:matching:revision:verify:progress:)``
+    /// on a miss, so a snapshot fetched from `main` before the pin existed, or
+    /// fetched by `huggingface-cli` at some other revision, was loaded with neither
+    /// its revision nor its hashes ever checked.
+    ///
+    /// Usually free: both cache layouts record the commit, so this compares strings
+    /// (see ``cachedRevision(at:)``). Where they do not - a directory written by an
+    /// older `swift-transformers` leaves no sidecar - the candidate's files are
+    /// hashed against the pin instead, once per process. That is the cheaper of the
+    /// two honest options by a wide margin: on this package's largest such cache,
+    /// 624 MB, hashing takes about half a second against re-downloading the lot.
     public nonisolated func localPath(
         for repo: String,
         matching globs: [String]
     ) -> URL? {
         Self.firstCompletePath(
             in: candidatePaths(for: repo),
-            matching: globs
+            matching: globs,
+            pin: ModelPins.pin(for: repo)
         )
     }
     
@@ -192,11 +269,226 @@ public actor ModelDownloader {
     /// Select the highest-priority complete candidate. Python snapshot candidates
     /// are ordered newest-first; keeping selection separate also makes
     /// interrupted-snapshot behavior deterministic to test.
+    ///
+    /// - Parameter pin: When non-nil, a candidate must also be shown to hold this
+    ///   revision. `nil` accepts any, which is the behaviour for repositories that
+    ///   carry no pin.
     nonisolated static func firstCompletePath(
         in candidates: [URL],
-        matching globs: [String]
+        matching globs: [String],
+        pin: ModelPin? = nil
     ) -> URL? {
-        candidates.first { hasRequiredFiles(at: $0, patterns: globs) }
+        candidates.first { candidate in
+            guard hasRequiredFiles(at: candidate, patterns: globs) else { return false }
+            guard let pin else { return true }
+            return isPinned(candidate, matching: globs, pin: pin)
+        }
+    }
+
+    /// Whether a cached directory can be shown to hold the pinned revision.
+    ///
+    /// Recorded provenance first, because it costs a string comparison. Failing that,
+    /// the pinned hashes, because a directory whose bytes are the pinned bytes *is*
+    /// the pinned revision whatever the cache forgot to write down - and re-fetching
+    /// content already on disk to learn that is the expensive way to find out.
+    ///
+    /// A candidate with neither is rejected: unknown provenance and nothing to check
+    /// it against is exactly the case pinning exists to refuse.
+    nonisolated static func isPinned(
+        _ candidate: URL,
+        matching globs: [String],
+        pin: ModelPin
+    ) -> Bool {
+        let needed = filesNeedingProvenance(at: candidate, matching: globs, pin: pin)
+
+        switch cachedRevision(at: candidate, covering: needed) {
+        case .recorded(let revision):
+            guard revision == pin.revision else { return false }
+            // Free extra check: the sidecar's second line is the etag, and for the
+            // LFS files a pin hashes, the Hub's etag *is* the SHA-256. Where both
+            // exist they must agree, which catches a sidecar that names the pinned
+            // revision beside content downloaded as something else.
+            //
+            // This says the file arrived as the pinned bytes, not that it still is
+            // them - proving that on every load means hashing gigabytes on every
+            // launch, which this package measured and rejected. Corruption after
+            // download is caught when it changes what loads, not here.
+            return recordedDigestsAgree(with: pin, at: candidate, covering: needed)
+
+        case .conflicting:
+            // Two revisions in one directory. Hashing would let it through on the
+            // strength of the pinned weights alone while the file that disagrees -
+            // a `config.json`, a voice - is not hashed by anything and would be
+            // loaded as if it belonged. A cache that contradicts itself is not a
+            // cache hit.
+            return false
+
+        case .unrecorded:
+            // Nothing recorded: a directory written before this library wrote
+            // sidecars, where content is the only evidence available. It stands in
+            // for provenance only if it covers *everything* being asked for.
+            //
+            // Hashes are published for LFS files, which in practice means the
+            // weights. A legacy cache whose weights hash correctly can still hold a
+            // `config.json`, a tokenizer or a voice from anywhere at all, and those
+            // are loaded too. Accepting on the weights alone would pin the large
+            // file and wave the rest through - so a cache that cannot account for
+            // every requested file is refused, and re-downloaded at the pinned
+            // revision, after which its sidecars answer the question exactly.
+            guard needed.allSatisfy({ pin.fileHashes[$0] != nil }) else { return false }
+            return PinnedContentCache.shared.matchesPinnedHashes(
+                candidate,
+                pin: pin,
+                covering: needed
+            )
+        }
+    }
+
+    /// What a cache directory says about which revision it holds.
+    enum CachedRevision: Equatable {
+        /// Every file that matters names this commit.
+        case recorded(String)
+        /// Files name different commits; the directory is a mixture.
+        case conflicting
+        /// Nothing on disk records a commit for the files that matter.
+        case unrecorded
+    }
+
+    /// The files whose provenance has to be established before this candidate can be
+    /// called pinned: exactly what the caller asked for.
+    ///
+    /// Deliberately not "everything pinned that happens to be installed". A
+    /// repository publishes one file per precision and a cache accumulates several
+    /// over time - this one holds five builds of MossFormer2 SR, downloaded on
+    /// different days. Folding those in meant an fp16 weight nobody asked for, added
+    /// before this library recorded provenance, could veto an fp32 load whose own
+    /// files are recorded and correct. What is not being loaded is not evidence
+    /// about what is.
+    private nonisolated static func filesNeedingProvenance(
+        at candidate: URL,
+        matching globs: [String],
+        pin: ModelPin
+    ) -> [String] {
+        relativeFileEntries(at: candidate, includeUnusableEntries: false)
+            .filter { entry in globs.contains { path(entry, matches: $0) } }
+            .sorted()
+    }
+
+    /// The commit a cached snapshot holds, as recorded by whoever downloaded it.
+    ///
+    /// Two layouts, both of which already carry the answer:
+    ///
+    /// - The Python `hf` cache stores each snapshot under its own commit, at
+    ///   `models--owner--name/snapshots/<commit>`, so the directory name is the
+    ///   revision.
+    /// - The Swift Hub cache is a flat `owner/name` directory, but
+    ///   `swift-transformers` writes a sidecar per downloaded file at
+    ///   `.cache/huggingface/download/<file>.metadata` whose first line is the commit
+    ///   the file came from.
+    ///
+    /// `nil` when neither is available, or when the sidecars disagree - a directory
+    /// assembled from two revisions is not "at" either of them.
+    ///
+    /// - Parameter covering: Repository-relative files whose provenance is being
+    ///   claimed. In the flat layout each is answered by its own sidecar, so any one
+    ///   of them present on disk *without* a sidecar means this directory's revision
+    ///   is unknown, whatever the other sidecars say. Reading "some sidecars agree"
+    ///   as "the directory is at that revision" is how a legacy weight sitting beside
+    ///   a freshly downloaded `config.json` would have been accepted as pinned - and
+    ///   accepted without hashing, which is the check that would have caught it.
+    nonisolated static func cachedRevision(
+        at candidate: URL,
+        covering files: [String]
+    ) -> CachedRevision {
+        // One directory per commit, and its files are that commit's by construction.
+        if isCommitHash(candidate.lastPathComponent),
+           candidate.deletingLastPathComponent().lastPathComponent == "snapshots" {
+            return .recorded(candidate.lastPathComponent)
+        }
+
+        let metadataRoot = candidate
+            .appendingPathComponent(".cache")
+            .appendingPathComponent("huggingface")
+            .appendingPathComponent("download")
+
+        var revision: String?
+        var sawUnrecorded = false
+        for file in files {
+            // A file that is not installed needs no provenance: a cache holding fp16
+            // alone says nothing about the fp32 the pin also covers.
+            guard FileManager.default.fileExists(
+                atPath: candidate.appendingPathComponent(file).path
+            ) else { continue }
+
+            guard let commit = recordedCommit(
+                atMetadataPath: metadataRoot.appendingPathComponent(file + ".metadata")
+            ) else {
+                sawUnrecorded = true
+                continue
+            }
+
+            if let revision, revision != commit { return .conflicting }
+            revision = commit
+        }
+
+        // A recorded revision only speaks for the whole directory when it speaks for
+        // every file in it. One file without a sidecar makes this a legacy cache,
+        // whatever the others say - which is what stops a freshly downloaded config
+        // vouching for a weight that predates it.
+        guard let revision, !sawUnrecorded else { return .unrecorded }
+        return .recorded(revision)
+    }
+
+    /// Whether every sidecar that records a digest agrees with the pinned hash for
+    /// that file. Files without a pinned hash, or whose sidecar records a non-digest
+    /// etag, are not evidence either way.
+    private nonisolated static func recordedDigestsAgree(
+        with pin: ModelPin,
+        at candidate: URL,
+        covering files: [String]
+    ) -> Bool {
+        let metadataRoot = candidate
+            .appendingPathComponent(".cache")
+            .appendingPathComponent("huggingface")
+            .appendingPathComponent("download")
+
+        for file in files {
+            guard let expected = pin.fileHashes[file] else { continue }
+            guard let recorded = recordedDigest(
+                atMetadataPath: metadataRoot.appendingPathComponent(file + ".metadata")
+            ) else { continue }
+            if recorded != expected { return false }
+        }
+        return true
+    }
+
+    /// The etag line of a sidecar, when it looks like a SHA-256.
+    private nonisolated static func recordedDigest(atMetadataPath path: URL) -> String? {
+        guard let contents = try? String(contentsOf: path, encoding: .utf8) else { return nil }
+        let lines = contents.split(separator: "\n")
+        guard lines.count >= 2 else { return nil }
+        let etag = lines[1]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        guard etag.count == 64, etag.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else {
+            return nil
+        }
+        return etag
+    }
+
+    /// The commit from one `swift-transformers` download sidecar, whose first line is
+    /// the commit hash.
+    private nonisolated static func recordedCommit(atMetadataPath path: URL) -> String? {
+        guard let contents = try? String(contentsOf: path, encoding: .utf8),
+              let first = contents.split(separator: "\n").first
+        else { return nil }
+        let commit = first.trimmingCharacters(in: .whitespacesAndNewlines)
+        return isCommitHash(commit) ? commit : nil
+    }
+
+    /// A 40-character lowercase hex Git commit, matching the Hub's own pattern.
+    nonisolated static func isCommitHash(_ value: String) -> Bool {
+        value.count == 40 && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 
     private nonisolated func candidatePaths(for repo: String) -> [URL] {
@@ -405,6 +697,7 @@ public actor ModelDownloader {
             )
         }
         try await RepositoryCacheAccess.shared.withExclusiveAccess(to: repo) {
+            PinnedContentCache.shared.invalidate()
             let home = FileManager.default.homeDirectoryForCurrentUser
             try Self.removeRepositoryCacheEntries(for: repo, homeDirectory: home)
             guard let roots = Self.repositoryCacheRoots(for: repo, homeDirectory: home)
@@ -631,11 +924,23 @@ public actor ModelDownloader {
     }
     
     /// Clear all cached models
+    ///
+    /// Waits for every in-flight download, deletion and verification to finish, and
+    /// holds new ones off until it returns. Per-repository operations already took
+    /// ``RepositoryCacheAccess`` and this did not, so a clear could delete a
+    /// snapshot's files while `downloadAndGetPath` was still writing them or hashing
+    /// them - and being on this actor was no protection, because the actor is
+    /// reentrant across the download's awaits.
+    ///
     /// - Throws: FileManager errors if deletion fails
-    public func clearCache() throws {
-        try Self.clearCache(
-            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
-        )
+    public func clearCache() async throws {
+        try await RepositoryCacheAccess.shared.withGlobalExclusiveAccess {
+            try Self.clearCache(
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+            )
+            // Nothing on disk is what it was; discard what we concluded about it.
+            PinnedContentCache.shared.invalidate()
+        }
     }
     
     /// List all cached repository IDs

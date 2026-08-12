@@ -1,9 +1,19 @@
 import Foundation
-import MLX
 
-/// Embedding loader for USS conditioning vectors
-public class EmbeddingLoader {
-    
+/// The seven conditioning targets USS ships presets for.
+///
+/// This used to also load them: seven ~2 KB `.safetensors` resources, one per case,
+/// read from the module bundle during `load()`. Each turned out to be a normalised
+/// multi-hot vector over the AudioSet class list - n classes at 1/n, zero elsewhere -
+/// so `AudioToolCore.SoundEmbedding`'s presets reconstruct them exactly from the
+/// indices alone, and the files and the loader are both gone.
+///
+/// The enum stays. It is what the provider's convenience API is keyed on, and "the
+/// seven bundled targets" remains a useful thing to name. Anything outside these
+/// seven is a `SoundEmbedding` built by the caller: the model takes any 527-d vector
+/// and never saw this enum.
+public enum EmbeddingLoader {
+
     /// Available embedding types
     public enum EmbeddingType: String, CaseIterable, Sendable {
         case speech = "speech"
@@ -13,50 +23,5 @@ public class EmbeddingLoader {
         case things = "things"
         case animal = "animal"
         case human = "human"
-        
-        var filename: String {
-            return "\(rawValue)_embedding_527d.safetensors"
-        }
-    }
-    
-    /// Load embedding from .safetensors file
-    public static func loadEmbedding(type: EmbeddingType, from directory: String) throws -> MLXArray {
-        let path = "\(directory)/\(type.filename)"
-        let url = URL(fileURLWithPath: path)
-        
-        // Load safetensors file
-        let arrays = try MLX.loadArrays(url: url)
-        
-        // Get the embedding array by key
-        guard let embedding = arrays["embedding"] else {
-            throw EmbeddingError.noArrayFound
-        }
-        
-        // Ensure it's the expected shape (527,)
-        guard embedding.shape.count == 1 && embedding.shape[0] == 527 else {
-            throw EmbeddingError.unexpectedShape(embedding.shape)
-        }
-        
-        // Add batch dimension
-        return embedding.reshaped([1, 527])
-    }
-}
-
-// MARK: - Error Types
-
-public enum EmbeddingError: Error, LocalizedError {
-    case fileNotFound(String)
-    case noArrayFound
-    case unexpectedShape([Int])
-    
-    public var errorDescription: String? {
-        switch self {
-        case .fileNotFound(let path):
-            return "Embedding file not found: \(path)"
-        case .noArrayFound:
-            return "No array found in numpy file"
-        case .unexpectedShape(let shape):
-            return "Unexpected embedding shape: \(shape). Expected (527,)"
-        }
     }
 }

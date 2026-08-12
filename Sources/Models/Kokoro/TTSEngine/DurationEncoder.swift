@@ -33,7 +33,7 @@ final class DurationEncoder: Module {
   ///   - dModel: Model dimension size (hidden size of features)
   ///   - styDim: Style embedding dimension (for speaker/prosody conditioning)
   ///   - nlayers: Number of LSTM/AdaLN layer pairs to create
-  init(weights: [String: MLXArray], dModel: Int, styDim: Int, nlayers: Int) {
+  init(weights: [String: MLXArray], dModel: Int, styDim: Int, nlayers: Int) throws {
     var lstmsArr: [Module] = []
     
     // Build nlayers pairs of (LSTM, AdaLayerNorm)
@@ -44,22 +44,22 @@ final class DurationEncoder: Module {
           LSTM(
             inputSize: dModel + styDim,  // Input includes both features and style
             hiddenSize: dModel / 2,       // Half size because bidirectional
-            wxForward: weights["predictor.text_encoder.lstms.\(i).weight_ih_l0"]!,
-            whForward: weights["predictor.text_encoder.lstms.\(i).weight_hh_l0"]!,
-            biasIhForward: weights["predictor.text_encoder.lstms.\(i).bias_ih_l0"]!,
-            biasHhForward: weights["predictor.text_encoder.lstms.\(i).bias_hh_l0"]!,
-            wxBackward: weights["predictor.text_encoder.lstms.\(i).weight_ih_l0_reverse"]!,
-            whBackward: weights["predictor.text_encoder.lstms.\(i).weight_hh_l0_reverse"]!,
-            biasIhBackward: weights["predictor.text_encoder.lstms.\(i).bias_ih_l0_reverse"]!,
-            biasHhBackward: weights["predictor.text_encoder.lstms.\(i).bias_hh_l0_reverse"]!
+            wxForward: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).weight_ih_l0"),
+            whForward: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).weight_hh_l0"),
+            biasIhForward: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).bias_ih_l0"),
+            biasHhForward: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).bias_hh_l0"),
+            wxBackward: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).weight_ih_l0_reverse"),
+            whBackward: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).weight_hh_l0_reverse"),
+            biasIhBackward: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).bias_ih_l0_reverse"),
+            biasHhBackward: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).bias_hh_l0_reverse")
           )
         )
       // Odd indices: Create adaptive layer normalization
       } else {
         lstmsArr.append(
           AdaLayerNorm(
-            weight: weights["predictor.text_encoder.lstms.\(i).fc.weight"]!,
-            bias: weights["predictor.text_encoder.lstms.\(i).fc.bias"]!
+            weight: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).fc.weight"),
+            bias: try KokoroWeights.require(weights, "predictor.text_encoder.lstms.\(i).fc.bias")
           )
         )
       }

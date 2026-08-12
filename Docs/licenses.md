@@ -32,10 +32,24 @@ licences.
 
 ### USS conditioning embeddings
 
-`Sources/Models/USS/Embeddings/*.safetensors` contains seven approximately 2 KB
-conditioning vectors. They select an AudioSet class group for USS; they are not
-the ResUNet30 model weights. Their generation record is being reconstructed and
-will be published alongside the USS model manifest.
+USS is conditioned on a 527-dimensional vector over the AudioSet classes, which
+selects what the separator extracts. It is an input, not a model weight.
+
+Seven of these shipped as `Sources/Models/USS/Embeddings/*.safetensors`, ~2 KB
+each. They are gone, and the code reproduces them exactly. The generation rule is
+USS's own `at_soft` conditioning, and it is complete in one line:
+
+> a 527-dimensional zero vector, 1.0 at each AudioSet index in the group,
+> divided by the number of indices in the group.
+
+So each vector holds two distinct values, `0` and `1/n`, and is fully described
+by its class list. Those lists are in `SoundEmbedding+Presets.swift`, and
+`SoundEmbeddingParityTests` pins each reconstructed preset to the SHA-256 of the
+original conversion's float32 payload.
+
+No audio and no audio-tagging model is involved in producing them — they are
+hand-authored groupings, not inference output. The only upstream material they
+derive from is the AudioSet ontology covered above.
 
 ## Test fixtures
 

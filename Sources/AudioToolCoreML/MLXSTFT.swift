@@ -113,6 +113,17 @@ public func mlxSTFT(
 
 // MARK: - MLX ISTFT
 
+/// The analysis window as the synthesis side sees it: zero-padded out to `nFFT`
+/// when the caller windows a shorter frame, and returned untouched otherwise.
+private func paddedSynthesisWindow(
+    _ window: MLXArray,
+    nFFT: Int,
+    winLength: Int
+) -> MLXArray {
+    guard winLength < nFFT else { return window }
+    return MLX.padded(window, widths: [IntOrPair([0, nFFT - winLength])])
+}
+
 /// ISTFT using MLX (overlap-add with scatter operations)
 /// - Parameters:
 ///   - realPart: Real part of STFT [batch, freq, time]
@@ -142,15 +153,24 @@ public func mlxISTFT(
     
     // Get windowed time-domain frames via irfft
     let timeFrames = irfft(stftTransposed, n: nFFT, axis: -1)
-    let windowedFrames = timeFrames * window
+
+    // `timeFrames` is nFFT wide. The forward transform windows a `winLength` frame
+    // and zero-pads it up to nFFT, so the synthesis window is that same window
+    // zero-padded - not the bare `winLength` window, which cannot broadcast against
+    // an nFFT-wide frame at all. Only the equal-length case ever ran in practice
+    // (the GAN configuration sets winLength == nFFT), so the mismatch sat unnoticed
+    // behind a public, generic API.
+    let synthesisWindow = paddedSynthesisWindow(window, nFFT: nFFT, winLength: winLength)
+    let windowedFrames = timeFrames * synthesisWindow
     
     let batchSize = windowedFrames.shape[0]
     let numFrames = windowedFrames.shape[1]
     let frameLength = windowedFrames.shape[2]
     let olaLen = (numFrames - 1) * hopLength + frameLength
     
-    // Create normalization buffer with window squared
-    let windowSquared = window * window
+    // Create normalization buffer with window squared. Squares the padded window
+    // for the same reason: the scatter below writes `frameLength` values per frame.
+    let windowSquared = synthesisWindow * synthesisWindow
     var normBuffer = MLXArray.zeros([olaLen], dtype: .float32)
     
     // Pre-compute positions for scatter operations

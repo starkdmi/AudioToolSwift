@@ -70,6 +70,9 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     
     private var model: MossFormer2_SR_48K?
     private var args: AttrDict = AttrDict()
+
+    /// One load at a time; see ``ModelLoadGate``.
+    private let loadGate = ModelLoadGate()
     private let weightsPath: String?
     private let configPath: String?
     private let precision: ModelPrecision
@@ -124,7 +127,13 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     }
     
     /// Load model with config and weights (downloads if not cached)
+    ///
+    /// Concurrent calls share one load; see ``ModelLoadGate``.
     public func load() async throws {
+        try await loadGate.run { [self] in try await performLoad() }
+    }
+
+    private func performLoad() async throws {
         // Before the first allocation, not at the first chunk boundary.
         // `trimIfNeeded` used to be the only thing that applied these, so a
         // provider ran its load and its opening chunks under MLX's own default
@@ -872,6 +881,12 @@ extension MossFormer2SR48KProvider: ManagedModel {
     public func checkIfLoaded() async -> Bool { model != nil }
 
     public func unload() async {
+        // Cancel first: a load mid-download must not publish over this unload.
+        // Bracketed: the gate stays shut until this method's state reset is
+        // done, so a concurrent load cannot publish a model into the gap and
+        // have it wiped by the lines below.
+        let teardown = await loadGate.beginTeardown()
+        defer { loadGate.endTeardown(teardown) }
         model = nil
         GPU.clearCache()
     }

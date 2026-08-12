@@ -155,10 +155,13 @@ public enum BenchmarkInput {
 
     /// Input for one case, honouring the run's source setting.
     ///
-    /// `channels` comes from the case, not the run: `DemucsProvider` declares
-    /// `inputChannels == 2` and rejects mono outright, so a benchmark that fed
-    /// every model a mono buffer measured ten models and reported
-    /// `channelCountMismatch` for two.
+    /// `channels` comes from the case, not the run. It was originally a workaround:
+    /// `DemucsProvider` rejected mono outright, so a benchmark feeding every model a
+    /// mono buffer measured ten models and reported `channelCountMismatch` for two.
+    /// That guard is gone - Demucs converts any layout itself now - but the per-case
+    /// count stays, for the reason that should have been the reason all along: a
+    /// music separator works on stereo cues, so measuring it on a duplicated mono
+    /// channel would measure something the model is not for.
     public static func make(
         source: Source,
         seconds: Double,

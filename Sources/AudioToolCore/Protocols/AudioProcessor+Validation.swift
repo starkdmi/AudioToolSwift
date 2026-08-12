@@ -45,6 +45,27 @@ public extension AudioProcessor {
         }
     }
 
+    /// Validate only the sample rate, for a provider that adapts any channel layout
+    /// itself.
+    ///
+    /// The rate is never negotiable - resampling inside a provider is the thing the
+    /// note above exists to prevent - but the channel count sometimes is. A provider
+    /// may declare ``AudioProcessor/inputChannels`` to describe the tensor its model
+    /// takes while accepting anything it can correctly convert to that tensor, and
+    /// then this is the check it wants: rejecting a layout it already knows how to
+    /// handle would make its own conversion unreachable.
+    ///
+    /// Use it only where that conversion demonstrably exists and understands
+    /// interleaving. The default remains ``validateSampleRate(_:)``.
+    func validateInputRate(_ audio: AudioBuffer) throws {
+        guard audio.sampleRate == sampleRate else {
+            throw AudioToolError.sampleRateMismatch(
+                expected: sampleRate,
+                found: audio.sampleRate
+            )
+        }
+    }
+
 
     /// Preferred spelling for new code. `validateSampleRate` remains as a source-
     /// compatible alias because providers outside this package already call it.

@@ -27,7 +27,7 @@ class AdainResBlk1d: Module {
     styleDim: Int = 64,
     actv: LeakyReLU = LeakyReLU(negativeSlope: 0.2),
     upsample: String = "none"
-  ) {
+  ) throws {
     self.actv = actv
     self.dimIn = dimIn
     upsampleType = upsample
@@ -38,9 +38,9 @@ class AdainResBlk1d: Module {
       self._pool.wrappedValue = Identity()
     } else {
       self._pool.wrappedValue = ConvWeighted(
-        weightG: weights[weightKeyPrefix + ".pool.weight_g"]!,
-        weightV: weights[weightKeyPrefix + ".pool.weight_v"]!,
-        bias: weights[weightKeyPrefix + ".pool.bias"]!,
+        weightG: try KokoroWeights.require(weights, weightKeyPrefix + ".pool.weight_g"),
+        weightV: try KokoroWeights.require(weights, weightKeyPrefix + ".pool.weight_v"),
+        bias: try KokoroWeights.require(weights, weightKeyPrefix + ".pool.bias"),
         stride: 2,
         padding: 1,
         groups: dimIn
@@ -49,17 +49,17 @@ class AdainResBlk1d: Module {
 
     // Initialize all conv/norm layers inline (not in separate method)
     self._conv1.wrappedValue = ConvWeighted(
-      weightG: weights[weightKeyPrefix + ".conv1.weight_g"]!,
-      weightV: weights[weightKeyPrefix + ".conv1.weight_v"]!,
-      bias: weights[weightKeyPrefix + ".conv1.bias"]!,
+      weightG: try KokoroWeights.require(weights, weightKeyPrefix + ".conv1.weight_g"),
+      weightV: try KokoroWeights.require(weights, weightKeyPrefix + ".conv1.weight_v"),
+      bias: try KokoroWeights.require(weights, weightKeyPrefix + ".conv1.bias"),
       stride: 1,
       padding: 1
     )
 
     self._conv2.wrappedValue = ConvWeighted(
-      weightG: weights[weightKeyPrefix + ".conv2.weight_g"]!,
-      weightV: weights[weightKeyPrefix + ".conv2.weight_v"]!,
-      bias: weights[weightKeyPrefix + ".conv2.bias"]!,
+      weightG: try KokoroWeights.require(weights, weightKeyPrefix + ".conv2.weight_g"),
+      weightV: try KokoroWeights.require(weights, weightKeyPrefix + ".conv2.weight_v"),
+      bias: try KokoroWeights.require(weights, weightKeyPrefix + ".conv2.bias"),
       stride: 1,
       padding: 1
     )
@@ -67,21 +67,21 @@ class AdainResBlk1d: Module {
     self._norm1.wrappedValue = AdaIN1d(
       styleDim: styleDim,
       numFeatures: dimIn,
-      fcWeight: weights[weightKeyPrefix + ".norm1.fc.weight"]!,
-      fcBias: weights[weightKeyPrefix + ".norm1.fc.bias"]!
+      fcWeight: try KokoroWeights.require(weights, weightKeyPrefix + ".norm1.fc.weight"),
+      fcBias: try KokoroWeights.require(weights, weightKeyPrefix + ".norm1.fc.bias")
     )
 
     self._norm2.wrappedValue = AdaIN1d(
       styleDim: styleDim,
       numFeatures: dimIn,
-      fcWeight: weights[weightKeyPrefix + ".norm2.fc.weight"]!,
-      fcBias: weights[weightKeyPrefix + ".norm2.fc.bias"]!
+      fcWeight: try KokoroWeights.require(weights, weightKeyPrefix + ".norm2.fc.weight"),
+      fcBias: try KokoroWeights.require(weights, weightKeyPrefix + ".norm2.fc.bias")
     )
 
     if learned_sc {
       self._conv1x1.wrappedValue = ConvWeighted(
-        weightG: weights[weightKeyPrefix + ".conv1x1.weight_g"]!,
-        weightV: weights[weightKeyPrefix + ".conv1x1.weight_v"]!,
+        weightG: try KokoroWeights.require(weights, weightKeyPrefix + ".conv1x1.weight_g"),
+        weightV: try KokoroWeights.require(weights, weightKeyPrefix + ".conv1x1.weight_v"),
         bias: nil,
         stride: 1,
         padding: 0

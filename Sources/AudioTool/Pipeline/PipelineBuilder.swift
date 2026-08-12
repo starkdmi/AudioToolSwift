@@ -102,6 +102,11 @@ public struct PipelineBuilder: Sendable {
     }
     
     /// Add speaker separation
+    ///
+    /// - Parameter speakers: 2 (WHAMR) or 3 (3spk) - the two models that exist. Any
+    ///   other count throws ``AudioToolError/pipelineConfigurationInvalid(_:)`` when
+    ///   the pipeline runs; the builder itself cannot throw without breaking the
+    ///   chaining API.
     public func separate(speakers: Int, useOriginal: Bool = false) -> PipelineBuilder {
         var builder = self
         builder.stages.append(PipelineStage(

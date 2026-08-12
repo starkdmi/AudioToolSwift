@@ -186,10 +186,18 @@ final class ModelCatalogAgreementTests: XCTestCase {
                 entry.requiredFiles.isEmpty,
                 "\(entry.id) lists no files required for verification"
             )
-            XCTAssertTrue(
-                Set(entry.requiredFiles).isSubset(of: Set(entry.files)),
-                "\(entry.id) requires files its download manifest does not request"
-            )
+            // Pattern-aware rather than a set-subset of the pattern strings. The
+            // invariant is that everything required is covered by the manifest, and a
+            // required concrete path is covered by a glob that matches it -
+            // `silero-vad-…mlmodelc/coremldata.bin` by `silero-vad-…mlmodelc/**`. A
+            // string subset can only see literal manifests.
+            for required in entry.requiredFiles {
+                XCTAssertTrue(
+                    entry.files.contains { ModelDownloader.path(required, matches: $0) }
+                        || entry.files.contains(required),
+                    "\(entry.id) requires '\(required)', which its download manifest does not request"
+                )
+            }
             XCTAssertFalse(entry.repo.isEmpty, "\(entry.id) has no repo")
         }
     }

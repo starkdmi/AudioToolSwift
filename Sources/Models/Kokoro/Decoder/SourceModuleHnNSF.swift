@@ -20,7 +20,7 @@ class SourceModuleHnNSF: Module {
     sineAmp: Float = 0.1,
     addNoiseStd: Float = 0.003,
     voicedThreshold: Float = 0
-  ) {
+  ) throws {
     self.sineAmp = sineAmp
     noiseStd = addNoiseStd
 
@@ -36,8 +36,8 @@ class SourceModuleHnNSF: Module {
 
     // To merge source harmonics into a single excitation
     lLinear = Linear(
-      weight: weights["decoder.generator.m_source.l_linear.weight"]!,
-      bias: weights["decoder.generator.m_source.l_linear.bias"]!
+      weight: try KokoroWeights.require(weights, "decoder.generator.m_source.l_linear.weight"),
+      bias: try KokoroWeights.require(weights, "decoder.generator.m_source.l_linear.bias")
     )
 
     super.init()

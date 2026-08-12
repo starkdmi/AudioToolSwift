@@ -386,66 +386,8 @@ public class USSInference {
     }
 }
 
-/// Run USS inference on audio file
-public func runUSS(
-    audioPath: String,
-    modelPath: String,
-    embeddingType: EmbeddingLoader.EmbeddingType,
-    embeddingsDir: String,
-    outputDir: String,
-    compile: Bool = false
-) throws {
-    // Load audio
-    // let audioLoader = AudioLoader()
-    // let audio = try audioLoader.loadAudio(from: audioPath)
-    // AudioUtils
-    let config = AudioLoader.Configuration(
-         targetSampleRate: 32000,
-         maxFileSize: .max, // Skip file size validation
-         maxDuration: .greatestFiniteMagnitude,
-         enableFloat16: false,
-         normalizationMode: .none,
-         resamplingMethod: .avAudioConverter(
-             algorithm: AVSampleRateConverterAlgorithm_Mastering,
-             quality: .max
-         )
-    )
-    let audioLoader = AudioLoader(config: config)
-    let audio = try audioLoader.loadMono(from: URL(fileURLWithPath: audioPath)).reshaped([1, -1])
-
-    // Load model
-    let model = ResUNet30()
-    try WeightLoader.loadWeights(model: model, from: modelPath)
-    // MLX Swift doesn't expose training setter, weights are loaded in eval mode
-    
-    // Load embedding
-    let conditioning = try EmbeddingLoader.loadEmbedding(type: embeddingType, from: embeddingsDir)
-    
-    // Create inference pipeline
-    let inference = USSInference(model: model, compile: compile, segmentBatchSize: 1)
-    
-    // Run separation
-    let separated = inference.separate(
-        audio: audio,
-        conditioning: conditioning,
-        compile: compile
-    )
-    
-    // Save results
-    let audioSaver = AudioSaver()
-    let baseName = URL(fileURLWithPath: audioPath).deletingPathExtension().lastPathComponent
-    
-    // Handle different output shapes
-    let outputAudio: MLXArray
-    if separated.ndim == 3 {
-        // (batch, channels, samples) -> extract first batch and channel
-        outputAudio = separated[0, 0, 0...]
-    } else if separated.ndim == 2 {
-        // (batch, samples) -> extract first batch
-        outputAudio = separated[0, 0...]
-    } else {
-        // Just use as is
-        outputAudio = separated
-    }
-    try audioSaver.save(outputAudio, to: "\(outputDir)/\(baseName)_\(embeddingType.rawValue).wav")
-}
+// `runUSS` lived here: a file-in, file-out convenience that loaded audio, weights
+// and a conditioning vector from paths and wrote a wav. Nothing in the package
+// called it, and the only thing it still needed from this module was the embedding
+// file loader, which is gone - the seven conditioning vectors are class lists in
+// `SoundEmbedding` now. `USSMLXProvider` is the supported entry point.

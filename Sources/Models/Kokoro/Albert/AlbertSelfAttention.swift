@@ -16,22 +16,22 @@ class AlbertSelfAttention: Module {
   @ModuleInfo var dense: Linear
   @ModuleInfo var layerNorm: LayerNormInference
 
-  init(weights: [String: MLXArray], config: AlbertModelArgs, layerNum: Int, innerGroupNum: Int) {
+  init(weights: [String: MLXArray], config: AlbertModelArgs, layerNum: Int, innerGroupNum: Int) throws {
     numAttentionHeads = config.numAttentionHeads
     attentionHeadSize = config.hiddenSize / config.numAttentionHeads
     allHeadSize = numAttentionHeads * attentionHeadSize
 
-    self._query.wrappedValue = Linear(weight: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.query.weight"]!,
-                   bias: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.query.bias"]!)
-    self._key.wrappedValue = Linear(weight: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.key.weight"]!,
-                 bias: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.key.bias"]!)
-    self._value.wrappedValue = Linear(weight: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.value.weight"]!,
+    self._query.wrappedValue = Linear(weight: try KokoroWeights.require(weights, "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.query.weight"),
+                   bias: try KokoroWeights.require(weights, "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.query.bias"))
+    self._key.wrappedValue = Linear(weight: try KokoroWeights.require(weights, "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.key.weight"),
+                 bias: try KokoroWeights.require(weights, "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.key.bias"))
+    self._value.wrappedValue = Linear(weight: try KokoroWeights.require(weights, "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.value.weight"),
                    bias: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.value.bias"])
-    self._dense.wrappedValue = Linear(weight: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.dense.weight"]!,
-                   bias: weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.dense.bias"]!)
+    self._dense.wrappedValue = Linear(weight: try KokoroWeights.require(weights, "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.dense.weight"),
+                   bias: try KokoroWeights.require(weights, "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.dense.bias"))
 
-    let layerNormWeights = weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.LayerNorm.weight"]!
-    let layerNormBiases = weights["bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.LayerNorm.bias"]!
+    let layerNormWeights = try KokoroWeights.require(weights, "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.LayerNorm.weight")
+    let layerNormBiases = try KokoroWeights.require(weights, "bert.encoder.albert_layer_groups.\(layerNum).albert_layers.\(innerGroupNum).attention.LayerNorm.bias")
 
     guard layerNormWeights.count == config.hiddenSize, layerNormBiases.count == config.hiddenSize else {
       fatalError("Wrong shape for AlbertSelfAttention LayerNorm bias or weights!")

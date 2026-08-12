@@ -42,42 +42,42 @@ final class ProsodyPredictor: Module {
   ///   - weights: Dictionary of pretrained model weights
   ///   - styleDim: Dimension of style embeddings for AdaIN conditioning
   ///   - dHid: Hidden dimension size for internal representations
-  public init(weights: [String: MLXArray], styleDim: Int, dHid: Int) {
+  public init(weights: [String: MLXArray], styleDim: Int, dHid: Int) throws {
     // Initialize shared bidirectional LSTM
     // Processes concatenated hidden features and style embeddings
     self._shared.wrappedValue = LSTM(
       inputSize: dHid + styleDim,
       hiddenSize: dHid / 2,  // Half size because bidirectional (forward + backward)
-      wxForward: weights["predictor.shared.weight_ih_l0"]!,
-      whForward: weights["predictor.shared.weight_hh_l0"]!,
-      biasIhForward: weights["predictor.shared.bias_ih_l0"]!,
-      biasHhForward: weights["predictor.shared.bias_hh_l0"]!,
-      wxBackward: weights["predictor.shared.weight_ih_l0_reverse"]!,
-      whBackward: weights["predictor.shared.weight_hh_l0_reverse"]!,
-      biasIhBackward: weights["predictor.shared.bias_ih_l0_reverse"]!,
-      biasHhBackward: weights["predictor.shared.bias_hh_l0_reverse"]!
+      wxForward: try KokoroWeights.require(weights, "predictor.shared.weight_ih_l0"),
+      whForward: try KokoroWeights.require(weights, "predictor.shared.weight_hh_l0"),
+      biasIhForward: try KokoroWeights.require(weights, "predictor.shared.bias_ih_l0"),
+      biasHhForward: try KokoroWeights.require(weights, "predictor.shared.bias_hh_l0"),
+      wxBackward: try KokoroWeights.require(weights, "predictor.shared.weight_ih_l0_reverse"),
+      whBackward: try KokoroWeights.require(weights, "predictor.shared.weight_hh_l0_reverse"),
+      biasIhBackward: try KokoroWeights.require(weights, "predictor.shared.bias_ih_l0_reverse"),
+      biasHhBackward: try KokoroWeights.require(weights, "predictor.shared.bias_hh_l0_reverse")
     )
 
     // Initialize F0 (pitch) prediction branch
     // Three residual blocks: maintain -> upsample -> refine
     self._F0.wrappedValue = [
       // Block 0: Process features at original resolution
-      AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.F0.0", dimIn: dHid, dimOut: dHid, styleDim: styleDim),
+      try AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.F0.0", dimIn: dHid, dimOut: dHid, styleDim: styleDim),
       // Block 1: Upsample and reduce dimensions
-      AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.F0.1", dimIn: dHid, dimOut: dHid / 2, styleDim: styleDim, upsample: "true"),
+      try AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.F0.1", dimIn: dHid, dimOut: dHid / 2, styleDim: styleDim, upsample: "true"),
       // Block 2: Refine at higher temporal resolution
-      AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.F0.2", dimIn: dHid / 2, dimOut: dHid / 2, styleDim: styleDim),
+      try AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.F0.2", dimIn: dHid / 2, dimOut: dHid / 2, styleDim: styleDim),
     ]
 
     // Initialize N (voicing) prediction branch
     // Parallel structure to F0 branch
     self._N.wrappedValue = [
       // Block 0: Process features at original resolution
-      AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.N.0", dimIn: dHid, dimOut: dHid, styleDim: styleDim),
+      try AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.N.0", dimIn: dHid, dimOut: dHid, styleDim: styleDim),
       // Block 1: Upsample and reduce dimensions
-      AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.N.1", dimIn: dHid, dimOut: dHid / 2, styleDim: styleDim, upsample: "true"),
+      try AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.N.1", dimIn: dHid, dimOut: dHid / 2, styleDim: styleDim, upsample: "true"),
       // Block 2: Refine at higher temporal resolution
-      AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.N.2", dimIn: dHid / 2, dimOut: dHid / 2, styleDim: styleDim),
+      try AdainResBlk1d(weights: weights, weightKeyPrefix: "predictor.N.2", dimIn: dHid / 2, dimOut: dHid / 2, styleDim: styleDim),
     ]
 
     // Initialize F0 projection layer (multi-channel -> single channel)
@@ -86,8 +86,8 @@ final class ProsodyPredictor: Module {
       outputChannels: 1,
       kernelSize: 1,  // 1x1 convolution for channel reduction
       padding: 0,
-      weight: weights["predictor.F0_proj.weight"]!,
-      bias: weights["predictor.F0_proj.bias"]!
+      weight: try KokoroWeights.require(weights, "predictor.F0_proj.weight"),
+      bias: try KokoroWeights.require(weights, "predictor.F0_proj.bias")
     )
 
     // Initialize N projection layer (multi-channel -> single channel)
@@ -96,8 +96,8 @@ final class ProsodyPredictor: Module {
       outputChannels: 1,
       kernelSize: 1,  // 1x1 convolution for channel reduction
       padding: 0,
-      weight: weights["predictor.N_proj.weight"]!,
-      bias: weights["predictor.N_proj.bias"]!
+      weight: try KokoroWeights.require(weights, "predictor.N_proj.weight"),
+      bias: try KokoroWeights.require(weights, "predictor.N_proj.bias")
     )
   }
 

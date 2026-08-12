@@ -41,7 +41,8 @@ public extension AudioEngine {
     ///   - provider: MossFormerGANCoreMLProvider instance
     ///   - model: Enhancement model identifier (default: .mossformerGAN)
     func configure(with provider: MossFormerGANCoreMLProvider, for model: EnhancementModel = .mossformerGAN) async throws {
-        try await provider.load()
+        // A load the residency manager knows about, then registration.
+        try await self.preload(provider)
         self.register(enhancer: provider, for: model)
     }
 }
