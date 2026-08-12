@@ -85,7 +85,21 @@ public final class ModelCatalog: @unchecked Sendable {
     }
     
     // MARK: - Model Catalog
-    
+
+    /// Every `sizeBytes` below is the sum of the blobs that variant's own `files`
+    /// manifest matches on the Hub, measured 2026-08-12 — not the repository total,
+    /// and not an estimate.
+    ///
+    /// They were round numbers before, and round numbers drift out of contact with
+    /// the thing they describe: super-resolution was declared at 180 MB against a
+    /// real 439 MB, having been copied from the SE entry beside it, so a host
+    /// showing that figure before a download understated it by 2.4x. Kokoro was out
+    /// by 1.8x, Whisper Large by 2.1x, and the SS trio by 12% each. A wrong size is
+    /// worse than no size: it is shown to a user deciding whether to download on a
+    /// metered connection.
+    ///
+    /// `Scripts/catalog-sizes.py` re-derives the whole table and prints a diff
+    /// against what is written here. Re-run it whenever a checkpoint is re-uploaded.
     private static func createModelCatalog() -> [ModelDefinition] {
         [
             // MARK: Speech Enhancement
@@ -106,7 +120,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "mossformer2_se_fp32",
                         name: "MossFormer2 SE (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 180_000_000,
+                        sizeBytes: 221_178_088,
                         repo: ModelRepository.mossFormer2SE48K,
                         files: ModelFiles.standard(.fp32),
                         requiredFiles: ModelFiles.standardRequired(.fp32)
@@ -115,7 +129,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "mossformer2_se_fp16",
                         name: "MossFormer2 SE (FP16)",
                         quantization: .fp16,
-                        sizeBytes: 90_000_000,
+                        sizeBytes: 110_652_628,
                         repo: ModelRepository.mossFormer2SE48K,
                         files: ModelFiles.standard(.fp16),
                         requiredFiles: ModelFiles.standardRequired(.fp16)
@@ -142,7 +156,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "frcrn_se_fp32",
                         name: "FRCRN SE (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 56_000_000,
+                        sizeBytes: 56_002_160,
                         repo: ModelRepository.frcrnSE16K,
                         files: ModelFiles.standard(.fp32),
                         requiredFiles: ModelFiles.standardRequired(.fp32)
@@ -199,7 +213,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "mossformer2_ss_2spk_16k_fp32",
                         name: "MossFormer2 SS 2-speaker 16 kHz (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 200_000_000,
+                        sizeBytes: 223_095_144,
                         repo: ModelRepository.mossFormer2SS2Spk16K,
                         files: ModelFiles.standard(.fp32),
                         requiredFiles: ModelFiles.standardRequired(.fp32)
@@ -208,7 +222,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "mossformer2_ss_3spk_8k_fp32",
                         name: "MossFormer2 SS 3-speaker 8 kHz (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 200_000_000,
+                        sizeBytes: 224_145_816,
                         repo: ModelRepository.mossFormer2SS3Spk8K,
                         files: ModelFiles.standard(.fp32),
                         requiredFiles: ModelFiles.standardRequired(.fp32)
@@ -217,7 +231,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "mossformer2_ss_2spk_whamr_8k_fp32",
                         name: "MossFormer2 SS 2-speaker WHAMR 8 kHz (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 200_000_000,
+                        sizeBytes: 223_095_144,
                         repo: ModelRepository.mossFormer2SS2SpkWHAMR8K,
                         files: ModelFiles.standard(.fp32),
                         requiredFiles: ModelFiles.standardRequired(.fp32)
@@ -236,9 +250,28 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "mossformer2_sr_fp32",
                         name: "MossFormer2 SR (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 180_000_000,
+                        sizeBytes: 438_668_788,
                         repo: ModelRepository.mossFormer2SR48K,
                         files: ModelFiles.standard(.fp32)
+                    ),
+                    // int8 was published and pinned on 2026-08-12 and is the second
+                    // half of `MLXSuperResolutionProvider.supportedPrecisions`, so a
+                    // caller can already select it - it just had no catalog entry to
+                    // be downloaded or sized through. fp16 is absent because its
+                    // forward pass returns NaN, int6 and int4 because they are
+                    // strictly dominated by int8 and were never uploaded; the
+                    // provider documents all three exclusions.
+                    //
+                    // No `requiredFiles` narrowing here, unlike every other
+                    // `standard` variant: SR is the one provider that opens the
+                    // config.json, so both files are genuinely required.
+                    ModelVariant(
+                        id: "mossformer2_sr_int8",
+                        name: "MossFormer2 SR (INT8)",
+                        quantization: .int8,
+                        sizeBytes: 307_581_821,
+                        repo: ModelRepository.mossFormer2SR48K,
+                        files: ModelFiles.standard(.int8)
                     ),
                 ]
             ),
@@ -254,7 +287,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "uss_fp32",
                         name: "USS (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 120_000_000,
+                        sizeBytes: 106_522_912,
                         repo: ModelRepository.uss,
                         files: ModelFiles.uss(.fp32)
                     ),
@@ -262,7 +295,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "uss_fp16",
                         name: "USS (FP16)",
                         quantization: .fp16,
-                        sizeBytes: 60_000_000,
+                        sizeBytes: 53_279_412,
                         repo: ModelRepository.uss,
                         files: ModelFiles.uss(.fp16)
                     ),
@@ -301,7 +334,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "kokoro_tts_bf16",
                         name: "Kokoro TTS (BF16)",
                         quantization: .bf16,
-                        sizeBytes: 180_000_000,
+                        sizeBytes: 327_117_503,
                         repo: ModelRepository.kokoroBF16,
                         files: ModelFiles.kokoro
                     ),
@@ -318,7 +351,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "chatterbox_tts_fp32",
                         name: "ChatterBox TTS (FP32)",
                         quantization: .fp32,
-                        sizeBytes: 2_400_000_000,
+                        sizeBytes: 2_711_415_628,
                         repo: ModelRepository.chatterboxFP32,
                         files: ModelFiles.chatterboxDownload(for: .fp32),
                         requiredFiles: ModelFiles.chatterboxRequired(for: .fp32)
@@ -333,21 +366,28 @@ public final class ModelCatalog: @unchecked Sendable {
                 category: .transcription,
                 description: "Accurate speech-to-text transcription",
                 variants: [
+                    // Both repositories ship `weights.npz`, not safetensors. The
+                    // manifest asked for `*.safetensors` and so matched nothing but
+                    // the 269-byte config: a pre-download of Whisper Large fetched
+                    // 269 bytes and reported success, and the declared size was a
+                    // 1.5 GB guess against a real 3.1 GB. `ModelPins` had it right
+                    // for both repositories all along - it pins `weights.npz` - so
+                    // the catalog was the half that disagreed.
                     ModelVariant(
                         id: "whisper_large_v3",
                         name: "Whisper Large v3",
                         quantization: .fp16,
-                        sizeBytes: 1_500_000_000,
+                        sizeBytes: 3_083_520_685,
                         repo: "mlx-community/whisper-large-v3-mlx",
-                        files: ["*.safetensors", "config.json"]
+                        files: ["weights.npz", "config.json"]
                     ),
                     ModelVariant(
                         id: "whisper_small",
                         name: "Whisper Small",
                         quantization: .fp16,
-                        sizeBytes: 250_000_000,
+                        sizeBytes: 481_307_858,
                         repo: "mlx-community/whisper-small-mlx",
-                        files: ["*.safetensors", "config.json"]
+                        files: ["weights.npz", "config.json"]
                     ),
                 ]
             ),
@@ -369,7 +409,7 @@ public final class ModelCatalog: @unchecked Sendable {
                         id: "silero_vad_coreml",
                         name: "Silero VAD (CoreML)",
                         quantization: .fp16,
-                        sizeBytes: 1_100_000,
+                        sizeBytes: 1_063_425,
                         repo: ModelRepository.sileroVADCoreML,
                         files: ["silero-vad-unified-256ms-v6.2.1.mlmodelc/**"],
                         // `requiredFiles` defaults to `files`, and a single recursive

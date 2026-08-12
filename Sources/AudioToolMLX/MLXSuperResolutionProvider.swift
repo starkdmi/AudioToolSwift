@@ -30,13 +30,13 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     
     /// Supported precisions.
     ///
-    /// Only fp32 is published; the rest are conversions of it and exist locally.
-    /// Listed anyway because the loader handles them and the benchmark sweeps them
-    /// - and because the answer they produce is worth having written down: on this
-    /// model quantization is close to pointless. Only 168 `Linear` modules quantize
-    /// against a Generator that is almost entirely convolutions, so int4 is 0.65x
-    /// the fp32 size where SE reaches 0.30x, and fp16 at 0.50x is smaller than every
-    /// quantized variant.
+    /// fp32 and int8 are published; the other three conversions exist only locally,
+    /// and the exclusions below say why each stays that way. The measurements are
+    /// kept in `MODEL-PRECISIONS.md` regardless, because the answer they produce is
+    /// worth having written down: on this model quantization is close to pointless.
+    /// Only 168 `Linear` modules quantize against a Generator that is almost entirely
+    /// convolutions, so int4 is 0.65x the fp32 size where SE reaches 0.30x, and fp16
+    /// at 0.50x is smaller than every quantized variant.
     ///
     /// **fp16 is excluded because it does not work.** The fp16 conversion returns
     /// NaN for every sample - 143872 of 143872 - while its checkpoint contains no
