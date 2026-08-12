@@ -9,26 +9,35 @@ It reflects the licences and provenance published by upstream maintainers as of
 
 ## Data included in this repository
 
-### AudioSet ontology — CC BY-SA 4.0
+### AudioSet class labels — CC BY 4.0
 
 `Sources/AudioToolCore/Types/SoundEmbedding+AudioSet.swift` contains the 527
 AudioSet display names and machine IDs transcribed from
 `class_labels_indices.csv`. `SoundEmbedding+Presets.swift` groups indices into
 seven package presets.
 
-- **Source:** [Google Research AudioSet](https://research.google.com/audioset/download.html)
-- **Licence:** [Creative Commons Attribution-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-sa/4.0/)
+- **Source:** [Google Research AudioSet](https://research.google.com/audioset/download.html),
+  `class_labels_indices.csv`
+- **Licence:** [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 - **Attribution:** Jort F. Gemmeke et al., “AudioSet: An ontology and
   human-labeled dataset for audio events,” ICASSP 2017.
 - **Modifications:** display names and IDs were transcribed into Swift arrays;
   package-specific preset groupings were added.
 
-Google distinguishes the dataset licence (CC BY 4.0) from the ontology licence
-(CC BY-SA 4.0). The package contains ontology identifiers, not AudioSet audio or
-segment annotations. The generated arrays are not Apache-2.0 material. CC BY-SA
-requires attribution, an indication of changes, and ShareAlike treatment for
-adaptations; Apache-2.0 is not on Creative Commons' list of BY-SA-compatible
-licences.
+Google licenses the AudioSet **dataset** under CC BY 4.0 and the **ontology**
+under CC BY-SA 4.0, and its download page draws that line itself.
+`class_labels_indices.csv` is distributed with the dataset, and it is the only
+AudioSet file this package was built from — `ontology.json` was not used. What is
+reproduced here is the label set the model's 527-way output vector is indexed by:
+names, machine IDs and order. None of the ontology's hierarchy, descriptions,
+positive-example references or restriction flags appears.
+
+So the obligations that attach are CC BY 4.0's — attribution and an indication of
+changes, both given above — and not ShareAlike. The generated arrays are not
+Apache-2.0 material either way, and the attribution stands whichever of the two
+licences a reader thinks applies; the difference is only whether ShareAlike
+reaches them, and on the reasoning above it does not. This is an engineering
+provenance record, not legal advice.
 
 ### USS conditioning embeddings
 
@@ -49,7 +58,7 @@ original conversion's float32 payload.
 
 No audio and no audio-tagging model is involved in producing them — they are
 hand-authored groupings, not inference output. The only upstream material they
-derive from is the AudioSet ontology covered above.
+derive from is the AudioSet class list covered above.
 
 ## Test fixtures
 
@@ -116,6 +125,15 @@ No model weights are tracked in this repository. The package does name and
 download default repositories, so a host application must surface and comply
 with the applicable model terms. A runtime download does not turn a third-party
 model into Apache-2.0 material.
+
+**Every repository below is pinned.** `ModelPins` records a commit and the
+SHA-256 of each file for every configured repository, and `ModelDownloader`
+resolves each download against that revision and verifies the bytes it wrote
+before returning a path. A host therefore gets the same weights, under the same
+published terms, as the ones audited here — an upstream change to a default
+branch cannot silently alter either. The exceptions are the ASR, diarization and
+Sortformer models, which FluidAudio downloads itself and which are pinned by its
+package version rather than by this table.
 
 No configured model carries a non-commercial clause. MIT, Apache-2.0 and CC BY
 4.0 all permit commercial use, and NVIDIA's Open Model License explicitly says
