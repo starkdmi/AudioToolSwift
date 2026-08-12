@@ -46,8 +46,9 @@ struct ModelPinTests {
 
     @Test("Unpinned repositories resolve to the default branch")
     func testUnpinnedRepositoriesFallBackToMain() {
-        // The three unpublished conversions cannot be pinned yet - there is no
-        // revision to pin to - so they must keep working exactly as before.
+        // `unpublished` is empty as of 2026-08-12 - USS, FRCRN and Demucs shipped and
+        // are pinned - so this loop guards the next conversion to be listed there
+        // rather than anything currently in the catalog.
         for repo in ModelPins.unpublished {
             #expect(ModelPins.pin(for: repo) == nil)
             #expect(ModelPins.revision(for: repo) == "main")
@@ -121,7 +122,11 @@ struct ModelIntegrityTests {
         let root = try makeSnapshot(["model_fp32.safetensors": Data([1, 2, 3])])
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let report = try ModelDownloader.shared.verify(repo: ModelRepository.uss, at: root)
+        // A coordinate deliberately absent from the registry. This used to be
+        // `ModelRepository.uss`, which was unpinned only because it was unpublished;
+        // now that every catalog repository is pinned, the case needs a repository
+        // that is not one of them rather than one that happens not to be pinned yet.
+        let report = try ModelDownloader.shared.verify(repo: "nobody/nothing", at: root)
         #expect(!report.isPinned)
         #expect(report.passed)
         #expect(report.verified.isEmpty)

@@ -82,8 +82,10 @@ public struct LocalWeights: Sendable {
         /// `resunet30_fp16.safetensors` is a 1152-byte alias file beginning
         /// `book....mark....` that nothing below Finder can follow. `file(1)` calls
         /// it "MacOS Alias file". So fp16 was rejected by the size floor below and
-        /// every fp16 benchmark fell through to HuggingFace - where `USS_MLX` is
-        /// unpublished, making the default USS configuration unrunnable.
+        /// every fp16 benchmark fell through to HuggingFace - where `USS_MLX` was at
+        /// the time unpublished, making the default USS configuration unrunnable. The
+        /// repository has been public since 2026-08-12, so that fallback now works;
+        /// the local path is still preferred, to keep a benchmark run off the network.
         ///
         /// `USSSwift/Models` holds both as ordinary files, 53 MB and 106 MB.
         public static func uss(_ precision: ModelPrecisionName) -> String {

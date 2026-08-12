@@ -62,16 +62,12 @@ public enum ModelPins {
 
     /// Repositories that are deliberately unpinned, with the reason.
     ///
-    /// These are the three conversions that are not published yet, so there is no
-    /// revision to pin to. They are listed rather than omitted because "absent from
-    /// `all`" and "known to be unpublished" are different states, and the release
-    /// checklist needs to tell them apart. Pin them in the same commit that makes
-    /// them public.
-    public static let unpublished: Set<String> = [
-        ModelRepository.uss,
-        ModelRepository.frcrnSE16K,
-        ModelRepository.demucs,
-    ]
+    /// Empty since 2026-08-12: USS, FRCRN and Demucs were published that day and
+    /// pinned below, in line with the rule this list existed to enforce. Kept rather
+    /// than deleted because "absent from `all`" and "known to be unpublished" remain
+    /// different states, and the next unpublished conversion belongs here until it
+    /// ships.
+    public static let unpublished: Set<String> = []
 
     /// Fetched from the Hub on 2026-08-12 and frozen here.
     ///
@@ -92,10 +88,63 @@ public enum ModelPins {
                 "model_int4.safetensors": "dfe3a01376e6a3985bf9638f07b78cf30f06159534a48e485d51e15ecc81d358",
             ]
         ),
+        // Re-pinned 2026-08-12, when `model_int8.safetensors` was uploaded.
+        // `model_fp32.safetensors` is unchanged across the move - same hash as at
+        // revision f568847f.
+        //
+        // Three precisions `MODEL-PRECISIONS.md` measures are deliberately absent
+        // from the repository, so this table pins two files against the doc's four
+        // rows. A measurement is worth publishing whether or not the checkpoint is;
+        // a checkpoint is worth publishing only if something should download it.
+        //
+        // - `model_fp16`: forward pass is all-NaN.
+        // - `model_int6`, `model_int4`: strictly dominated by int8. Quantization
+        //   reaches only the linear layers here, so on this convolution-heavy model
+        //   it changes neither speed nor memory - int6 and int4 buy 11 MiB and
+        //   21 MiB over int8 while giving up 12 dB and 24 dB. No caller should pick
+        //   either, and the catalog exposes fp32 alone.
         "starkdmi/MossFormer2_SR_48K_MLX": ModelPin(
-            revision: "f568847f16d23af4720b302b3dfea0db6558c8f9",
+            revision: "e0d987da4b084ae03cf8e14cd35d9b778068fd79",
             fileHashes: [
                 "model_fp32.safetensors": "6061573a4ccd41731afdcb94bb65bf019c2058988caa4472ae396cd03e8d704a",
+                "model_int8.safetensors": "086a8ae3d8349d1a9ecc6bee4346106f0f16860701fb9e4ef15fb35b5dbe248c",
+            ]
+        ),
+        // Published 2026-08-12. USS names its checkpoints after the architecture
+        // rather than "model" - see `ModelFiles.uss(_:)`.
+        "starkdmi/USS_MLX": ModelPin(
+            revision: "8a14820edde1baa00402cf716b41c485913382e1",
+            fileHashes: [
+                "resunet30_fp32.safetensors": "28132369445c3196ce0237cd13db52f72d724af4b99f6b08390897a3cdacb1dc",
+                "resunet30_fp16.safetensors": "8dfc858b4f343d0dabff807668adea08fa80bd408123b412c01819571a224555",
+            ]
+        ),
+        // Published 2026-08-12. One checkpoint per stem, each emitting all four
+        // sources - see `ModelFiles.demucsStems`. The four sibling `.json` are
+        // per-stem architecture configs; no load path opens them, so they are
+        // uploaded for provenance and left out of this table like every other
+        // non-LFS asset.
+        "starkdmi/Demucs_MLX": ModelPin(
+            revision: "57b2a970b084ff3693bd92c2dcc8b30ab7b11057",
+            fileHashes: [
+                "drums.safetensors": "cc77206f79e543deffc92f3f93167e8d05cc90fd2d5285622ece2c5d64159fdd",
+                "bass.safetensors": "d71a63b45171e773f486c375d5079c37b65ff4787d80b3d9b4815ef6b327945b",
+                "other.safetensors": "65144751ac6661ffc26bf6fe7857853c90a8d2bea077061f0b7927197ecef5e7",
+                "vocals.safetensors": "3a92bc147648589974c9be14808fde04d5440fe24a66d8dc363da0e96302d21d",
+            ]
+        ),
+        // Published 2026-08-12, by making an existing private repository public and
+        // adding the safetensors conversion. Uploaded as `model_fp32.safetensors` to
+        // match `ModelFiles.standard(_:)`, which is what the provider resolves
+        // through; the local file is named `frcrn_se_16k.safetensors`.
+        //
+        // The repository still carries a `weights.npz` from the private era. Nothing
+        // downloads it - the manifest names the safetensors alone - and it is left in
+        // place rather than deleted.
+        "starkdmi/FRCRN_SE_16K_MLX": ModelPin(
+            revision: "f0b77c3e2f681bef215005154dcb057932694be5",
+            fileHashes: [
+                "model_fp32.safetensors": "487b2a5846db5421f554d6e446fc121b71c1bd526ae963bb51b287924825933f",
             ]
         ),
         "starkdmi/MossFormer2_SS_2SPK_16K_MLX": ModelPin(
@@ -205,6 +254,23 @@ public enum ModelPins {
                 "model.safetensors": "113acb0c29997a3015af84bec2c8f967cb7b15f8959d1c26b9628b921e324c40",
                 "tokenizer.json": "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795",
                 "tokenizer.model": "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c",
+            ]
+        ),
+        // Published 2026-08-12. Two compiled packages side by side; a caller loads
+        // one. `Manifest.json` is small enough that the Hub does not store it in
+        // LFS, so it has no hash here for the reason `fileHashes` documents - the
+        // revision covers it.
+        "starkdmi/MossFormer_GAN_SE_16K_CoreML": ModelPin(
+            revision: "8961405a395be865ca3fd629816868ac8906a4a4",
+            fileHashes: [
+                "MossFormerGAN_256frames.mlpackage/Data/com.apple.CoreML/model.mlmodel":
+                    "32dc37b3905d1d4a202ec8dba94d15ec0704fec6a0f27f838cd5bdb95e93396a",
+                "MossFormerGAN_256frames.mlpackage/Data/com.apple.CoreML/weights/weight.bin":
+                    "ab5450f48d508006135f7953897a61e2cef6aa6717c219b53107331ad5375105",
+                "MossFormerGAN_256frames_FP16.mlpackage/Data/com.apple.CoreML/model.mlmodel":
+                    "f4d86febdc1579f05f614b0e29d8c88b0a520765c7a11804fc090e237735b453",
+                "MossFormerGAN_256frames_FP16.mlpackage/Data/com.apple.CoreML/weights/weight.bin":
+                    "49225b4a0089c977b0be44a4cb29804d42db2aae6672d10a054e1d7642b38e43",
             ]
         ),
         "FluidInference/silero-vad-coreml": ModelPin(
