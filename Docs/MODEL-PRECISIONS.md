@@ -38,8 +38,13 @@ output**. It is what the precision costs, not how good the model is.
 | --- | ---: | ---: | ---: | ---: | --- |
 | fp32 | 418 MiB | 2.1x | 4149 MiB | reference | **recommended** - quantization changes neither speed nor memory here |
 | int8 | 293 MiB | 2.1x | 3985 MiB | 62.5 dB | situational - 30% smaller for 62 dB, if download size is the constraint |
-| int6 | 282 MiB | 2.1x | 3975 MiB | 50.8 dB | not recommended - no speed or memory gain, 51 dB |
-| int4 | 272 MiB | 2.0x | 4058 MiB | 38.1 dB | not recommended - no speed or memory gain, 38 dB |
+| int6 | 282 MiB | 2.1x | 3975 MiB | 50.8 dB | not published - no speed or memory gain, 51 dB |
+| int4 | 272 MiB | 2.0x | 4058 MiB | 38.1 dB | not published - no speed or memory gain, 38 dB |
+
+**Only fp32 and int8 are published.** The remaining rows are measurements
+rather than downloads - int6 (strictly dominated by int8); int4 (strictly
+dominated by int8). They are kept because the comparison is the point: it is
+what shows what quantizing this model does and does not buy.
 
 Measured on an Apple M1 Pro (16 GB) over 30 s of audio, three timed
 runs per configuration. Speed is realtime factor - higher is faster.
@@ -99,7 +104,7 @@ compiled, so these are two files rather than one model with a switch.
 | --- | --- | --- |
 | MossFormerGAN SE (CoreML) | **FP16** | FP32 |
 | MossFormer2 SE 48 kHz | **fp16** | int6, int4 |
-| MossFormer2 SR | **fp32** | fp16 (returns silence-as-NaN), int6, int4 |
+| MossFormer2 SR | **fp32** | fp16 (returns silence-as-NaN), int6, int4 - none published |
 | USS ResUNet30 | **fp32** | - |
 | Chatterbox TTS | **8bit** or **4bit** | fp16, 6bit |
 

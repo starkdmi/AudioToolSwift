@@ -44,7 +44,15 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     /// cast. The integer widths are unaffected: they pack only the `Linear` weights
     /// and every activation stays fp32. Nothing here reports that at run time, which
     /// is why it is a supported-precision decision rather than a caller's problem.
-    public static let supportedPrecisions: [ModelPrecision] = [.fp32, .int8, .int6, .int4]
+    ///
+    /// **int6 and int4 are excluded because they are not published.** Both were
+    /// measured - the numbers are in `MODEL-PRECISIONS.md` - and both are strictly
+    /// dominated by int8, which is 11 MiB and 21 MiB larger for 12 dB and 24 dB
+    /// better at identical speed and memory. Since quantization changes nothing but
+    /// download size on this model, a width that is bigger *and* worse than int8 has
+    /// no use, so neither was uploaded. Listing them here would name a repository
+    /// path that 404s for anyone without a local conversion.
+    public static let supportedPrecisions: [ModelPrecision] = [.fp32, .int8]
     
     // AudioUpscaler conformance
     public nonisolated var inputSampleRate: Int { 16000 }

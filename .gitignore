@@ -111,6 +111,7 @@ DerivedData/
 Parity/artifacts/
 Parity/__pycache__/
 Parity/adapters/__pycache__/
+Scripts/__pycache__/
 Parity/weights/
 
 # Benchmark reports. `audio-tool-bench` writes here by default, and the numbers

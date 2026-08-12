@@ -37,8 +37,13 @@ signal - it is the cost of the precision change, not the model's accuracy.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | fp32 | 418 MiB | 1.00x | 2.1x | 4149 MiB | reference | - | good |
 | int8 | 293 MiB | 0.70x | 2.1x | 3985 MiB | 62.5 dB | 0.011 | ok |
-| int6 | 282 MiB | 0.68x | 2.1x | 3975 MiB | 50.8 dB | 0.031 | avoid |
-| int4 | 272 MiB | 0.65x | 2.0x | 4058 MiB | 38.1 dB | 0.100 | avoid |
+| int6 | 282 MiB | 0.68x | 2.1x | 3975 MiB | 50.8 dB | 0.031 | avoid, unpublished |
+| int4 | 272 MiB | 0.65x | 2.0x | 4058 MiB | 38.1 dB | 0.100 | avoid, unpublished |
+
+**Only fp32 and int8 are published.** The remaining rows are measurements
+rather than downloads - int6 (strictly dominated by int8); int4 (strictly
+dominated by int8). They are kept because the comparison is the point: it is
+what shows what quantizing this model does and does not buy.
 
 Speed and memory from 5 report(s), latest `bench-MacBookPro18-3-20260811-172314-9c602ee0.json`.
 

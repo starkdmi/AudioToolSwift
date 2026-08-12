@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,12 @@ MODELS = {
     # its checkpoint holds no non-finite weight, so the forward pass overflows. It
     # would render as a row of dashes and read like missing data rather than a
     # result. `MossFormer2SR48KProvider.supportedPrecisions` is where that lives.
+    #
+    # int6 and int4 stay here even though that same list no longer offers them and
+    # neither is on the Hub. This table is the record of what quantizing this model
+    # costs, and dropping the two rows that make the point - bigger than int8 *and*
+    # worse, at identical speed and memory - would leave the recommendation above
+    # them unevidenced. `UNPUBLISHED` marks them so neither table reads as an offer.
     "mossformer2_sr_48k": (
         "mlx.mossformer2_sr_48k",
         "mossformer2_sr_48k_direct",
@@ -108,6 +115,33 @@ KNOWN_SIZES: dict[str, dict[str, int]] = {
         "model_int8.safetensors": 90_089_394,
         "model_int6.safetensors": 78_686_048,
         "model_int4.safetensors": 67_282_702,
+    },
+    "mossformer2_sr_48k": {
+        "model_fp32.safetensors": 438_668_396,
+        "model_fp16.safetensors": 219_412_855,
+        "model_int8.safetensors": 307_581_429,
+        "model_int6.safetensors": 296_178_117,
+        "model_int4.safetensors": 284_774_853,
+    },
+}
+
+
+# Precisions that were measured but are not on the Hub, and why.
+#
+# Not the same thing as a verdict, which is why it is a separate table: "avoid" is
+# advice about a checkpoint a reader can still download, and MossFormer2 SE
+# publishes int6 and int4 despite both carrying that mark. These rows have no file
+# behind them at all, so a reader treating one as an option is looking for
+# something that 404s.
+#
+# The rows stay in the table regardless. The comparison is the deliverable - it is
+# what shows that quantizing SR buys size and nothing else - and deleting the row
+# would delete the evidence for the recommendation above it.
+UNPUBLISHED: dict[str, dict[str, str]] = {
+    "mossformer2_sr_48k": {
+        "fp16": "all-NaN forward pass",
+        "int6": "strictly dominated by int8",
+        "int4": "strictly dominated by int8",
     },
 }
 
@@ -216,6 +250,7 @@ def report_for(model: str, bench: list[Path], public: bool = False) -> str:
         raise SystemExit(f"{model}: no fp32 artifact to measure against - run Parity/generate.py")
 
     marks = VERDICTS.get(model, {})
+    unpublished = UNPUBLISHED.get(model, {})
     if public:
         lines = [
             "| precision | size | speed | memory | quality vs fp32 | |",
@@ -255,15 +290,21 @@ def report_for(model: str, bench: list[Path], public: bool = False) -> str:
             spectral = f"{log_spectral_distance(measured[:n], reference[:n]):.3f}"
 
         mark, reason = marks.get(precision, ("", ""))
+        unavailable = unpublished.get(precision)
         if public:
+            # "not published" outranks the verdict badge: whether a reader should
+            # want it is moot when there is nothing to download.
             badge = {"good": "**recommended**", "ok": "situational",
                      "avoid": "not recommended", "broken": "**do not use**"}.get(mark, "")
+            if unavailable:
+                badge = "not published"
             note = f"{badge} - {reason}" if reason else badge
             lines.append(f"| {precision} | {size_text} | {rtf} | {peak} | {quality} | {note} |")
         else:
+            tag = f"{mark}, unpublished" if unavailable else mark
             lines.append(
                 f"| {precision} | {size_text} | {ratio} | {rtf} | {peak} | {quality} "
-                f"| {spectral} | {mark} |"
+                f"| {spectral} | {tag} |"
             )
 
     return "\n".join(lines)
@@ -289,6 +330,28 @@ def main() -> None:
 
     print(f"\n## {args.model}\n")
     print(report_for(args.model, bench, public=args.public))
+
+    # Only the precisions this model actually renders. `UNPUBLISHED` records
+    # availability for every precision that was measured, including ones no table
+    # shows - SR's fp16 is unpublished *and* omitted from `MODELS`, and a note
+    # explaining a row the reader cannot see is worse than no note.
+    rendered = [p for p, _ in MODELS[args.model][4]]
+    absent = {p: why for p, why in UNPUBLISHED.get(args.model, {}).items() if p in rendered}
+    if absent:
+        published = [p for p in rendered if p not in absent]
+        # Named individually rather than counted: a reader deciding what to download
+        # needs to know which rows are measurements and which are options.
+        reasons = "; ".join(f"{p} ({why})" for p, why in absent.items())
+        # Wrapped rather than printed as one long line, to match the fixed notes
+        # below and keep the generated markdown diffable.
+        print("\n" + textwrap.fill(
+            f"**Only {' and '.join(published)} are published.** The remaining rows "
+            f"are measurements rather than downloads - {reasons}. They are kept "
+            f"because the comparison is the point: it is what shows what quantizing "
+            f"this model does and does not buy.",
+            width=76,
+        ))
+
     if args.public:
         # No report filename and no host: a model card is read by people who do not
         # have this machine, and a run identifier they cannot reproduce reads as
