@@ -36,8 +36,17 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     private let segmentSamples: Int = 25500
     
     private var model: MLModel?
-    private let modelPath: String
+    private let modelPath: String?
+    private let precision: CoreMLGANPrecision
     private let computeUnits: MLComputeUnits
+
+    /// Where the compiled packages come from when no path is given.
+    public static let repo = ModelRepository.mossFormerGANSE16KCoreML
+
+    /// The conversions the repository publishes. Core ML fixes precision when the
+    /// package is compiled, so these are two files rather than two ways of running
+    /// one - see ``CoreMLGANPrecision``.
+    public static let supportedPrecisions = CoreMLGANPrecision.allCases
 
     /// One load at a time; see ``ModelLoadGate``.
     private let loadGate = ModelLoadGate()
@@ -45,10 +54,23 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     // MLX STFT window
     private let mlxWindow: MLXArray
     
-    public init(modelPath: String, computeUnits: MLComputeUnits = .cpuAndGPU) {
+    /// - Parameters:
+    ///   - modelPath: An `.mlpackage` (or compiled `.mlmodelc`) to load instead of
+    ///     the published one. `nil` resolves `precision` through the cache and then
+    ///     HuggingFace, like every other provider here.
+    ///   - precision: Which conversion to fetch when `modelPath` is `nil`. FP16 by
+    ///     default: it is faster than the fp32 package and uses 5.5x less memory,
+    ///     the clearest precision choice of any model in this package.
+    ///   - computeUnits: Core ML compute units.
+    public init(
+        modelPath: String? = nil,
+        precision: CoreMLGANPrecision = .fp16,
+        computeUnits: MLComputeUnits = .cpuAndGPU
+    ) {
         self.modelPath = modelPath
+        self.precision = precision
         self.computeUnits = computeUnits
-        
+
         // Create periodic Hann window for MLX STFT
         self.mlxWindow = createPeriodicHannWindow(length: winLength)
     }
@@ -65,20 +87,97 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     private func performLoad() async throws {
         let config = MLModelConfiguration()
         config.computeUnits = computeUnits
-        
-        var modelURL = URL(fileURLWithPath: modelPath)
-        
+
+        let packageURL = try await resolvePackageURL()
+        try Task.checkCancellation()
+
         // If it's an .mlpackage, compile it first
-        if modelPath.hasSuffix(".mlpackage") {
-            let compiledURL = try await MLModel.compileModel(at: modelURL)
-            modelURL = compiledURL
-        }
-        
+        let modelURL = packageURL.pathExtension == "mlpackage"
+            ? try await Self.compiledModel(for: packageURL)
+            : packageURL
+
         let candidate = try await MLModel.load(contentsOf: modelURL, configuration: config)
         // An `unload()` that landed during compilation cancels this load; publishing
         // here anyway would resurrect the provider behind it.
         try Task.checkCancellation()
         model = candidate
+    }
+
+    /// Explicit path if given, otherwise the cache, otherwise HuggingFace.
+    ///
+    /// The same three-step resolve the MLX providers do. This one took a path and
+    /// nothing else until the packages were published, which is why the benchmark
+    /// needed `--coreml-gan` to run the case at all.
+    private func resolvePackageURL() async throws -> URL {
+        if let modelPath { return URL(fileURLWithPath: modelPath) }
+
+        if let cached = ModelDownloader.shared.localPath(
+            for: Self.repo,
+            matching: ModelFiles.mossFormerGANCoreMLRequired(precision)
+        ) {
+            return cached.appendingPathComponent(precision.packageName)
+        }
+
+        let directory = try await ModelDownloader.shared.downloadAndGetPath(
+            repo: Self.repo,
+            matching: ModelFiles.mossFormerGANCoreML(precision)
+        )
+        return directory.appendingPathComponent(precision.packageName)
+    }
+
+    /// The compiled `.mlmodelc` for `package`, compiled once and reused after.
+    ///
+    /// `MLModel.compileModel(at:)` writes into a temporary directory that the system
+    /// is free to clear, so compiling on every `load()` both repeated the work and
+    /// produced a result with no defined lifetime. That was tolerable while the only
+    /// source was a local checkout; once loading normally means loading a downloaded
+    /// package, recompiling per launch is the wrong default.
+    ///
+    /// Keyed on the size and modification date of the package's `model.mlmodel`, so
+    /// a re-pin to a different revision compiles afresh rather than serving the old
+    /// graph. Superseded entries are left in place: they only accumulate when those
+    /// bytes change, which for a pinned download means a deliberate re-pin, and
+    /// deleting a directory this code did not create is the more expensive mistake.
+    private static func compiledModel(for package: URL) async throws -> URL {
+        let fileManager = FileManager.default
+        let source = package.appendingPathComponent("Data/com.apple.CoreML/model.mlmodel")
+        let attributes = try? fileManager.attributesOfItem(atPath: source.path)
+        let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let key = "\(package.deletingPathExtension().lastPathComponent)-\(size)-\(Int(modified))"
+
+        let directory = try compiledModelsDirectory()
+        let destination = directory.appendingPathComponent("\(key).mlmodelc")
+        if fileManager.fileExists(atPath: destination.path) { return destination }
+
+        let compiled = try await MLModel.compileModel(at: package)
+        do {
+            try fileManager.moveItem(at: compiled, to: destination)
+            return destination
+        } catch {
+            // Lost a race with another process, or the cache is not writable. An
+            // already-present destination is as good as the one just compiled;
+            // otherwise this session uses the temporary copy and compiles again next
+            // launch, which is the previous behaviour rather than a new failure.
+            return fileManager.fileExists(atPath: destination.path) ? destination : compiled
+        }
+    }
+
+    /// Where compiled models are kept. Application Support rather than Caches: a
+    /// purge between launches would be silently recovered from, but only by paying
+    /// the compile again on a path that is otherwise offline.
+    private static func compiledModelsDirectory() throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let directory = base
+            .appendingPathComponent("AudioTool", isDirectory: true)
+            .appendingPathComponent("CompiledModels", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
     
     public func process(_ input: AudioBuffer) async throws -> AudioBuffer {

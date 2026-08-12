@@ -9,6 +9,7 @@ import XCTest
 import AudioToolCore
 import AudioToolUSS
 import AudioToolTTS
+import AudioToolCoreML
 @testable import AudioToolMLX
 
 /// What the catalog advertises has to be what the providers fetch.
@@ -48,6 +49,7 @@ final class ModelCatalogAgreementTests: XCTestCase {
             (FRCRNSE16KProvider.repo, "frcrn_se_fp32", "FRCRN SE"),
             (DemucsProvider.repo, "demucs_fp32", "Demucs"),
             (USSMLXProvider.repo, "uss_fp32", "USS"),
+            (MossFormerGANCoreMLProvider.repo, "mossformer_gan_se_coreml_fp16", "MossFormerGAN SE CoreML"),
         ]
 
         for (providerRepo, variantID, label) in pairs {
@@ -155,6 +157,49 @@ final class ModelCatalogAgreementTests: XCTestCase {
         XCTAssertTrue(chatterbox.files.contains("conds.safetensors"))
         XCTAssertTrue(chatterbox.files.contains("s3tokenizer.safetensors"))
         XCTAssertFalse(chatterbox.requiredFiles.contains("conds.safetensors"))
+    }
+
+    /// The Core ML packages are directories, which breaks two assumptions the
+    /// safetensors entries never had to state.
+    func testMossFormerGANCoreMLAdvertisesOnePackagePerPrecision() throws {
+        let pairs: [(CoreMLGANPrecision, String)] = [
+            (.fp16, "mossformer_gan_se_coreml_fp16"),
+            (.fp32, "mossformer_gan_se_coreml_fp32"),
+        ]
+
+        for (precision, variantID) in pairs {
+            let entry = try variant(variantID)
+            XCTAssertEqual(entry.files, ModelFiles.mossFormerGANCoreML(precision))
+            XCTAssertEqual(entry.requiredFiles, ModelFiles.mossFormerGANCoreMLRequired(precision))
+            XCTAssertEqual(entry.quantization, precision.quantization)
+
+            // A compiled model is a directory of parts that are individually
+            // useless, so `requiredFiles` has to name the parts rather than lean on
+            // the recursive glob - which any one entry would satisfy. Same reasoning
+            // as the Silero VAD entry.
+            XCTAssertGreaterThan(entry.requiredFiles.count, 1)
+            for required in entry.requiredFiles {
+                XCTAssertTrue(
+                    required.hasPrefix(precision.packageName),
+                    "\(variantID) requires '\(required)', which is outside its own package"
+                )
+            }
+        }
+
+        // Both packages sit side by side in one repository, so a manifest that
+        // globbed the repository root would download 21 MB in order to load 8. Each
+        // precision must name only its own.
+        let fp16 = try variant("mossformer_gan_se_coreml_fp16")
+        let fp32 = try variant("mossformer_gan_se_coreml_fp32")
+        XCTAssertEqual(fp16.repo, fp32.repo)
+        for pattern in fp16.files {
+            for required in fp32.requiredFiles {
+                XCTAssertFalse(
+                    ModelDownloader.path(required, matches: pattern),
+                    "the FP16 manifest '\(pattern)' also matches the FP32 package"
+                )
+            }
+        }
     }
 
     func testMossFormerEnhancementAdvertisesOnlySupportedPrecisions() {

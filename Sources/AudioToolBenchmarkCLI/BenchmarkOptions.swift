@@ -278,8 +278,9 @@ Limits
                                capped by the GPU's recommended working set)
 
 Inputs
-      --coreml-gan <path>  MossFormerGAN .mlpackage. It has no HuggingFace repo,
-                           so without this the CoreML case is skipped.
+      --coreml-gan <path>  MossFormerGAN .mlpackage to measure instead of the
+                           published FP32 one. Optional - both CoreML precisions
+                           download without it.
                            Also read from AUDIOTOOL_BENCH_COREML_GAN.
       --weights-root <dir> Use weights already on this machine instead of fetching
                            them. Defaults to the sibling research checkout when one

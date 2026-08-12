@@ -150,6 +150,41 @@ public final class ModelCatalog: @unchecked Sendable {
                 ]
             ),
             
+            ModelDefinition(
+                id: "mossformer_gan_se_coreml",
+                name: "MossFormerGAN Speech Enhancement (CoreML)",
+                category: .speechEnhancement,
+                description: "Speech enhancement for 16kHz audio, running on CoreML",
+                // The only Core ML model this package downloads for itself; the
+                // Silero VAD entry below is listed for pre-download but fetched at
+                // runtime by FluidAudio. Core ML fixes precision at conversion time,
+                // so these are two compiled packages rather than one variant with a
+                // quantization switch - which is also why `files` names a package
+                // instead of globbing the repository root.
+                //
+                // Sizes are the compiled packages as uploaded, not estimates.
+                variants: [
+                    ModelVariant(
+                        id: "mossformer_gan_se_coreml_fp16",
+                        name: "MossFormerGAN SE (CoreML FP16)",
+                        quantization: .fp16,
+                        sizeBytes: 7_938_742,
+                        repo: ModelRepository.mossFormerGANSE16KCoreML,
+                        files: ModelFiles.mossFormerGANCoreML(.fp16),
+                        requiredFiles: ModelFiles.mossFormerGANCoreMLRequired(.fp16)
+                    ),
+                    ModelVariant(
+                        id: "mossformer_gan_se_coreml_fp32",
+                        name: "MossFormerGAN SE (CoreML FP32)",
+                        quantization: .fp32,
+                        sizeBytes: 14_126_289,
+                        repo: ModelRepository.mossFormerGANSE16KCoreML,
+                        files: ModelFiles.mossFormerGANCoreML(.fp32),
+                        requiredFiles: ModelFiles.mossFormerGANCoreMLRequired(.fp32)
+                    ),
+                ]
+            ),
+
             // MARK: Speech Separation
             ModelDefinition(
                 id: "mossformer2_ss",

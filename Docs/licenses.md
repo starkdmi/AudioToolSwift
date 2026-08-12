@@ -141,7 +141,7 @@ are not a blanket non-commercial licence, but they do bind distribution.
 | FluidAudio streaming Sortformer | NVIDIA Open Model License, from the NVIDIA base model | A copy of the agreement and a NOTICE containing “Licensed by NVIDIA Corporation under the NVIDIA Open Model License” |
 | TranslateGemma `mlx-community/translategemma-4b-it-4bit` | Gemma Terms of Use | Downstream restrictions, a copy of the terms, modification notices, and the prescribed NOTICE outside a hosted service. Surface acceptance in the host; do not present it as an Apache model |
 | RUAccent caller-supplied assets | MIT in the current GitHub/Hugging Face release; older PyPI metadata and revisions say Apache-2.0 | Neither downloaded nor bundled by this package. The host pins and documents the exact local model/dictionary revision and retains that revision's notice |
-| MossFormerGAN Core ML caller-supplied model | Apache-2.0, from the Alibaba base model | Not supplied by this package. The host documents its conversion, source revision, hashes and notices |
+| MossFormerGAN Core ML `starkdmi/MossFormer_GAN_SE_16K_CoreML` | Apache-2.0, from base `alibabasglab/MossFormerGAN_SE_16K` | Apache attribution and NOTICE material |
 
 Primary model sources:
 
@@ -149,7 +149,8 @@ Primary model sources:
   [MossFormer2 SE](https://huggingface.co/alibabasglab/MossFormer2_SE_48K),
   [MossFormer2 SS](https://huggingface.co/alibabasglab/MossFormer2_SS_16K),
   [WHAMR base](https://huggingface.co/alibabasglab/mossformer2-whamr-2spk),
-  and [FRCRN](https://huggingface.co/alibabasglab/FRCRN_SE_16K)
+  [FRCRN](https://huggingface.co/alibabasglab/FRCRN_SE_16K),
+  and [MossFormerGAN SE](https://huggingface.co/alibabasglab/MossFormerGAN_SE_16K)
 - [ByteDance USS](https://github.com/bytedance/uss) and
   [published USS checkpoint](https://huggingface.co/RSNuts/Universal_Source_Separation)
 - [Maintained Demucs v4 source](https://github.com/adefossez/demucs),

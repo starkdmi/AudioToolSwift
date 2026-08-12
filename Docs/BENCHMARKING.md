@@ -66,30 +66,44 @@ measurements and only two of them belong in a comparison.
 
 ## What it runs
 
-Twelve cases, MLX and CoreML:
+Twenty-two cases, MLX and CoreML. Where a model publishes more than one
+precision, each is its own case — that comparison is what `MODEL-PRECISIONS.md`
+is built from:
 
 | id | model |
 | --- | --- |
 | `mlx.frcrn_se_16k` | FRCRN speech enhancement, 16 kHz |
-| `mlx.mossformer2_se_48k.fp32` / `.fp16` | MossFormer2 speech enhancement, 48 kHz |
-| `coreml.mossformer_gan_se_16k` | MossFormerGAN enhancement, CoreML |
+| `mlx.mossformer2_se_48k.` `fp32` / `fp16` / `int8` / `int6` / `int4` | MossFormer2 speech enhancement, 48 kHz |
+| `coreml.mossformer_gan_se_16k.fp32` / `.fp16` | MossFormerGAN enhancement, CoreML |
 | `mlx.mossformer2_ss.2spk` | Speaker separation, 2 speakers, 16 kHz |
 | `mlx.mossformer2_ss.3spk` | Speaker separation, 3 speakers, 8 kHz |
 | `mlx.mossformer2_ss.2spk_whamr` | Speaker separation, WHAMR, 8 kHz |
-| `mlx.mossformer2_sr_48k` | Super resolution, 16 kHz in, 48 kHz out |
+| `mlx.mossformer2_sr_48k.fp32` / `.int8` | Super resolution, 16 kHz in, 48 kHz out |
 | `mlx.demucs.vocals` | Demucs, vocals stem only |
 | `mlx.demucs.all_stems` | Demucs, all four stems |
 | `mlx.uss.fp16` / `.fp32` | USS ResUNet30 |
+| `mlx.chatterbox.` `fp32` / `fp16` / `8bit` / `6bit` / `4bit` | Chatterbox TTS |
+
+Each model lists the precisions it publishes, so this table changes when a
+checkpoint is uploaded or withdrawn. Super resolution is the one to read twice:
+fp16 is absent because its forward pass is all-NaN, and int6/int4 because both are
+strictly dominated by int8 and were never uploaded.
+
+Chatterbox is measured in a column of its own: its RTF counts audio *generated*
+per second of wall time, where every other case counts audio *consumed*. The two
+denominators are not comparable, which is why `rateBasis` exists rather than the
+number simply being dropped in beside the others.
 
 The FluidAudio-backed VAD, transcription and diarization providers are deliberately
 absent: they wrap a third-party pipeline, and their numbers describe that project
-rather than this one. TTS is absent for a different reason — a text-to-speech RTF
-has a different denominator, and putting it in the same column as an
-audio-to-audio RTF would make two rows mean different things. Both are small
-additions to `BenchmarkCatalog` if the question ever calls for them.
+rather than this one. That one is a small addition to `BenchmarkCatalog` if the
+question ever calls for it.
 
-`coreml.mossformer_gan_se_16k` has no HuggingFace repository — it is a
-`.mlpackage` you supply:
+Both CoreML cases download like every other one. CoreML fixes precision when the
+package is compiled, so FP32 and FP16 are two separate files rather than one model
+with a switch — which is why they are two cases and not one.
+
+To measure a `.mlpackage` you built yourself instead of the published one:
 
 ```bash
 audio-tool-bench --coreml-gan /path/to/MossFormerGAN_256frames.mlpackage
@@ -97,8 +111,10 @@ audio-tool-bench --coreml-gan /path/to/MossFormerGAN_256frames.mlpackage
 export AUDIOTOOL_BENCH_COREML_GAN=/path/to/MossFormerGAN_256frames.mlpackage
 ```
 
-Without it that case reports as *skipped*, not failed. A machine that does not have
-an optional input is not broken.
+That overrides the FP32 case only, since it names one file. Until 2026-08-12 it was
+required rather than optional — the packages had no repository, so without a path
+the whole case reported as *skipped*, and FP16 was measured only when its package
+happened to sit beside the FP32 one in a checkout.
 
 ## Weights already on the machine
 
@@ -291,9 +307,8 @@ audio-tool-bench -f enhancement -s 60 -n 10
 # One heavy case with a long cooldown
 audio-tool-bench -c mlx.demucs.all_stems --cooldown 30
 
-# Everything, tagged, with the CoreML model
-audio-tool-bench -t "$(git rev-parse --short HEAD)" \
-  --coreml-gan ../Models/mossformer_gan_se_coreml/MossFormerGAN_256frames.mlpackage
+# Everything, tagged
+audio-tool-bench -t "$(git rev-parse --short HEAD)"
 ```
 
 `--filter` matches on id, category or backend, so `-f mlx`, `-f separation` and

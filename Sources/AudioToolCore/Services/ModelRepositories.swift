@@ -66,6 +66,14 @@ public enum ModelRepository {
     /// Demucs music separation.
     public static let demucs = "starkdmi/Demucs_MLX"
 
+    /// MossFormerGAN speech enhancement, 16 kHz, compiled for Core ML.
+    ///
+    /// The only Core ML model this package downloads itself. It was the last
+    /// conversion without a repository - the provider took a filesystem path and
+    /// nothing else, so the benchmark needed `--coreml-gan` and skipped the case
+    /// without it. Published 2026-08-12.
+    public static let mossFormerGANSE16KCoreML = "starkdmi/MossFormer_GAN_SE_16K_CoreML"
+
     /// Base for Kokoro's precision-specific MLX conversions.
     public static let kokoroBase = "mlx-community/Kokoro-82M"
 
@@ -85,6 +93,40 @@ public enum ModelRepository {
     /// fetch goes through FluidAudio's own downloader, which this package does not
     /// call and cannot pin; that one is fixed by the FluidAudio dependency version.
     public static let sileroVADCoreML = "FluidInference/silero-vad-coreml"
+}
+
+// MARK: - Core ML Precisions
+
+/// Which of the two compiled MossFormerGAN packages to load.
+///
+/// A dedicated two-case type rather than ``ModelPrecision``, because Core ML fixes
+/// precision when the package is compiled: these are two separate files, not one
+/// model with a switch, and there is no int8 package for a wider type to name.
+///
+/// FP16 is the recommendation - measured faster (4.2x against 3.7x) and 5.5x lower
+/// peak memory, at 61 dB against the fp32 conversion. See `MODEL-PRECISIONS.md`.
+public enum CoreMLGANPrecision: String, Sendable, CaseIterable, Hashable {
+    case fp32
+    case fp16
+
+    /// The package as it was compiled and uploaded.
+    public var packageName: String {
+        switch self {
+        case .fp32: "MossFormerGAN_256frames.mlpackage"
+        case .fp16: "MossFormerGAN_256frames_FP16.mlpackage"
+        }
+    }
+
+    /// How the catalog labels this conversion.
+    ///
+    /// ``Quantization`` rather than ``ModelPrecision``: the catalog's type is the
+    /// display one, and these two never name a file - the package does that.
+    public var quantization: Quantization {
+        switch self {
+        case .fp32: .fp32
+        case .fp16: .fp16
+        }
+    }
 }
 
 // MARK: - File Layouts
@@ -146,6 +188,34 @@ public enum ModelFiles {
     /// The weight file for one Demucs stem.
     public static func demucsStem(_ stem: String) -> String {
         "\(stem).safetensors"
+    }
+
+    /// One compiled MossFormerGAN package, whole.
+    ///
+    /// A recursive glob because an `.mlpackage` is a directory, and `*` does not
+    /// cross a path separator - the same reason the Silero VAD entry names
+    /// `.mlmodelc/**`. Naming the package rather than globbing the repository root
+    /// matters here: both precisions live side by side, so `*.mlpackage/**` would
+    /// fetch 21 MB to load 8.
+    public static func mossFormerGANCoreML(_ precision: CoreMLGANPrecision) -> [String] {
+        ["\(precision.packageName)/**"]
+    }
+
+    /// What a MossFormerGAN package must have on disk before Core ML can compile it.
+    ///
+    /// A single `**` is satisfied by *any one* entry inside the directory, so an
+    /// interrupted download that left one file behind would otherwise report the
+    /// variant as installed. These three are what `MLModel.compileModel(at:)`
+    /// cannot proceed without.
+    public static func mossFormerGANCoreMLRequired(
+        _ precision: CoreMLGANPrecision
+    ) -> [String] {
+        let package = precision.packageName
+        return [
+            "\(package)/Manifest.json",
+            "\(package)/Data/com.apple.CoreML/model.mlmodel",
+            "\(package)/Data/com.apple.CoreML/weights/weight.bin",
+        ]
     }
 
     /// Kokoro weights, voice embeddings, and architecture configuration.

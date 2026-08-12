@@ -21,14 +21,21 @@ public struct CoreMLProviders {
     
     /// Create MossFormer GAN SE 16K provider (CoreML)
     /// - Parameters:
-    ///   - modelPath: Path to .mlpackage file
+    ///   - modelPath: Path to an .mlpackage. `nil` downloads the published one.
+    ///   - precision: Which conversion to fetch when `modelPath` is `nil`
+    ///     (default: FP16, which is faster and far lighter than FP32)
     ///   - computeUnits: CoreML compute units (default: cpuAndGPU)
     /// - Returns: MossFormerGANCoreMLProvider instance
     public static func mossformerGANSE16K(
-        modelPath: String,
+        modelPath: String? = nil,
+        precision: CoreMLGANPrecision = .fp16,
         computeUnits: MLComputeUnits = .cpuAndGPU
     ) -> MossFormerGANCoreMLProvider {
-        MossFormerGANCoreMLProvider(modelPath: modelPath, computeUnits: computeUnits)
+        MossFormerGANCoreMLProvider(
+            modelPath: modelPath,
+            precision: precision,
+            computeUnits: computeUnits
+        )
     }
 }
 

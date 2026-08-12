@@ -245,16 +245,24 @@ public enum BenchmarkCatalog {
 
     /// Inputs the catalog needs that cannot be discovered.
     public struct CatalogOptions: Sendable {
-        /// Path to `MossFormerGAN_*.mlpackage`. The CoreML enhancer takes a file
-        /// rather than a repository, so without one that case reports as skipped.
+        /// An `.mlpackage` to measure instead of the published FP32 one.
         ///
-        /// Falls back to the research checkout's copy when one is present, which is
-        /// why this case now runs unattended on a development machine.
+        /// An override rather than a requirement since the packages were published:
+        /// the case downloads without it. Falls back to the research checkout's copy
+        /// when one is present, which keeps a development machine off the network.
         public var coreMLGANModelPath: String?
 
         /// The FP16 conversion, when the checkout has one beside the fp32 file.
         /// Not settable from `--coreml-gan`, which names one file.
         public var coreMLGANFP16ModelPath: String?
+
+        /// The local override for one conversion, if there is one.
+        public func coreMLGANPath(for precision: CoreMLGANPrecision) -> String? {
+            switch precision {
+            case .fp32: coreMLGANModelPath
+            case .fp16: coreMLGANFP16ModelPath
+            }
+        }
 
         /// Weights already on this machine. See ``LocalWeights``.
         public var localWeights: LocalWeights
@@ -343,73 +351,47 @@ public enum BenchmarkCatalog {
             ))
         }
 
-        if let modelPath = options.coreMLGANModelPath {
-            // One case per compiled `.mlpackage`. CoreML fixes precision at
-            // conversion time rather than at load, so fp32 and fp16 are two files
-            // and cannot be one case with a parameter - which also means the
-            // comparison here is between two conversions of one graph, not between
-            // two ways of running it.
-            //
-            // The fp16 variant is only benchmarked when it sits beside the fp32 one
-            // in the checkout; `--coreml-gan` names a single file, and deriving a
-            // sibling path from it would guess.
-            let variants: [(suffix: String, label: String, path: String)] = [
-                ("", "FP32", modelPath)
-            ] + (options.coreMLGANFP16ModelPath.map {
-                [(".fp16", "FP16", $0)]
-            } ?? [])
-
-            for variant in variants {
-                cases.append(BenchmarkCase(
-                    id: "coreml.mossformer_gan_se_16k\(variant.suffix)",
-                    label: "MossFormerGAN SE 16 kHz (CoreML \(variant.label))",
-                    category: "enhancement",
-                    backend: "coreml",
-                    sampleRate: 16000,
-                    // Measured peak 1631 MiB for the fp32 conversion, 30 s at
-                    // 16 kHz. Almost none of it is CoreML - mlxPeakDuringRunBytes is
-                    // 5 MiB - because the STFT, ISTFT and segment stitching either
-                    // side of the model run in MLX.
-                    estimatedMemoryBytes: 1_700_000_000,
-                    weightsPreCached: { FileManager.default.fileExists(atPath: variant.path) },
-                    weightsSource: { .local },
-                    unavailableReason: {
-                        FileManager.default.fileExists(atPath: variant.path)
-                            ? nil
-                            : "CoreML model not found at \(variant.path)"
-                    },
-                    makeWorkload: {
-                        let provider = MossFormerGANCoreMLProvider(modelPath: variant.path)
-                        return transform(
-                            load: { try await provider.load() },
-                            process: { try await provider.process($0) },
-                            unload: { await provider.unload() }
-                        )
-                    }
-                ))
-            }
-        } else {
+        // One case per compiled `.mlpackage`. CoreML fixes precision at conversion
+        // time rather than at load, so fp32 and fp16 are two files and cannot be one
+        // case with a parameter - which also means the comparison here is between two
+        // conversions of one graph, not between two ways of running it.
+        //
+        // Both run unconditionally now that the packages are published. They used to
+        // be gated on `--coreml-gan`, which names one file: the whole case was
+        // skipped without it, and fp16 ran only when its package happened to sit
+        // beside the fp32 one in a checkout. That made the recommended precision the
+        // one most likely to go unmeasured.
+        for precision in MossFormerGANCoreMLProvider.supportedPrecisions {
+            let local = options.coreMLGANPath(for: precision)
+            let files = ModelFiles.mossFormerGANCoreMLRequired(precision)
             cases.append(BenchmarkCase(
-                id: "coreml.mossformer_gan_se_16k",
-                label: "MossFormerGAN SE 16 kHz (CoreML)",
+                id: "coreml.mossformer_gan_se_16k.\(precision.rawValue)",
+                label: "MossFormerGAN SE 16 kHz (CoreML \(precision.rawValue.uppercased()))",
                 category: "enhancement",
                 backend: "coreml",
                 sampleRate: 16000,
-                estimatedMemoryBytes: 700_000_000,
-                weightsPreCached: { nil },
-                unavailableReason: {
-                    "no .mlpackage supplied - pass --coreml-gan <path> or set "
-                        + "AUDIOTOOL_BENCH_COREML_GAN. Unlike the MLX models this one "
-                        + "has no HuggingFace repository to download from."
+                // Measured peaks, 30 s at 16 kHz: 1631 MiB for the fp32 conversion
+                // and 302 MiB for fp16. Almost none of either is CoreML -
+                // mlxPeakDuringRunBytes is 5 MiB - because the STFT, ISTFT and
+                // segment stitching either side of the model run in MLX. Which is
+                // also why one estimate cannot serve both: the gap between them is
+                // the model, and it is 5.5x.
+                estimatedMemoryBytes: precision == .fp32 ? 1_700_000_000 : 400_000_000,
+                weightsPreCached: {
+                    local != nil || cached(MossFormerGANCoreMLProvider.repo, files)
+                },
+                weightsSource: {
+                    source(local: local, repo: MossFormerGANCoreMLProvider.repo, files: files)
                 },
                 makeWorkload: {
-                    // Unreachable: the runner checks availability first. A workload
-                    // that throws is still better than a fatalError in a benchmark
-                    // that is meant to survive one bad case.
-                    BenchmarkWorkload(
-                        load: { throw CaseUnavailable.noCoreMLModel },
-                        run: { _ in throw CaseUnavailable.noCoreMLModel },
-                        unload: {}
+                    let provider = MossFormerGANCoreMLProvider(
+                        modelPath: local,
+                        precision: precision
+                    )
+                    return transform(
+                        load: { try await provider.load() },
+                        process: { try await provider.process($0) },
+                        unload: { await provider.unload() }
                     )
                 }
             ))
@@ -483,9 +465,8 @@ public enum BenchmarkCatalog {
                     // The one case where `config.json` is not decoration: this provider
                     // reads its architecture out of it rather than hardcoding one, so
                     // both files have to be present for a load to succeed. The
-                    // quantized checkpoints share the fp32 config - the bit width comes
-                    // off the filename, since only fp32 is published and the rest are
-                    // local conversions.
+                    // quantized checkpoint shares the fp32 config - the bit width comes
+                    // off the filename.
                     weightsPreCached: {
                         cached(MossFormer2SR48KProvider.repo, ModelFiles.standard(precision))
                     },
@@ -726,15 +707,6 @@ public enum BenchmarkCatalog {
     }
 }
 
-enum CaseUnavailable: Error, CustomStringConvertible {
-    case noCoreMLModel
-
-    var description: String {
-        switch self {
-        case .noCoreMLModel: "no CoreML model path was supplied"
-        }
-    }
-}
 
 // MARK: - Selection
 
