@@ -214,7 +214,13 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     private var exaggeration: Float = 0.5
     private var t3Temperature: Float = 0.8
     private var t3CfgWeight: Float = 0.5
-    private var t3RepetitionPenalty: Float = 2.0
+    /// Upstream `mtl_tts.generate`'s default. It was 2.0, inherited from the vendored
+    /// Python port rather than from the model authors, and 2.0 is what made generation
+    /// run away: with T3's stopping heuristics disabled it loops to the token limit -
+    /// 40 s and 32 s of audio for two sentences that take ~3 s to say - while 1.2
+    /// terminates on its own EOS every time, and does so before any of those heuristics
+    /// bite. They were containing a problem this value created.
+    private var t3RepetitionPenalty: Float = 1.2
     private var t3MinP: Float = 0.05
     private var t3TopP: Float = 1.0
     private var seed: UInt64 = 0
@@ -835,7 +841,9 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     ///   - exaggeration: Emotion/intensity control (0.0-1.0+). Higher = more expressive, faster speech. Default: 0.5
     ///   - temperature: Sampling temperature for speech tokens, greater than 0. Higher = more variation. Default: 0.8
     ///   - cfgWeight: Classifier-free guidance weight, 0 or greater. Lower = slower/more deliberate. Default: 0.5
-    ///   - repetitionPenalty: Penalty for repeating tokens, greater than 0. Default: 2.0
+    ///   - repetitionPenalty: Penalty for repeating tokens, greater than 0. Default: 1.2
+    ///     (upstream's value). Raising it towards 2.0 makes the model loop instead of
+    ///     emitting EOS; see ``t3RepetitionPenalty``.
     ///   - minP: Minimum probability threshold for sampling, 0...1. Default: 0.05
     ///   - topP: Nucleus sampling threshold, 0...1. Default: 1.0
     ///   - seed: Random seed for reproducible results. Default: 0, which draws a
@@ -858,7 +866,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         exaggeration: Float = 0.5,
         temperature: Float = 0.8,
         cfgWeight: Float = 0.5,
-        repetitionPenalty: Float = 2.0,
+        repetitionPenalty: Float = 1.2,
         minP: Float = 0.05,
         topP: Float = 1.0,
         seed: UInt64 = 0
@@ -998,9 +1006,26 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
         let fullWav = s3Gen(speechTokens: speechTokens.asType(.int32), refDict: useRefDict, finalize: true)
         try Task.checkCancellation()
         let wavMono = fullWav.ndim == 1 ? fullWav : fullWav[0]
-        
+
         // Convert to samples
-        let samples = wavMono.asArray(Float.self)
+        var samples = wavMono.asArray(Float.self)
+
+        // Drop the final speech token's audio.
+        //
+        // Upstream `mtl_tts.generate` truncates the waveform to `n_tokens - 1` tokens'
+        // worth of samples: the last token is emitted just before EOS with degraded
+        // attention and decodes to ~40 ms of noise. This is the multilingual model's own
+        // fix for the end-of-utterance artifact - `tts.py` has no equivalent - and it is
+        // deterministic, unlike the VAD trim below, which infers the boundary from the
+        // very noise this removes.
+        let speechTokenCount = speechTokens.dim(speechTokens.ndim - 1)
+        if speechTokenCount > 1 {
+            let keep = (speechTokenCount - 1) * (sampleRate / S3_TOKEN_RATE)
+            if keep < samples.count {
+                samples.removeLast(samples.count - keep)
+            }
+        }
+
         var audioBuffer = AudioToolCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
         
         // Apply VAD trimming if enabled (removes start/end artifacts like breathing/noise)
@@ -1147,8 +1172,11 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
                 }
             }
         }
-        
-        return processedText
+
+        // Upstream applies `punc_norm` immediately before tokenization. RUAccent runs
+        // first so it sees natural text; `puncNorm` only rewrites punctuation and
+        // whitespace, so it leaves the stress marks RUAccent inserts alone.
+        return puncNorm(processedText)
     }
     
     // MARK: - AudioProcessor Conformance

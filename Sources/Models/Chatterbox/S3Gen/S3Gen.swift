@@ -14,6 +14,9 @@ public let S3GEN_SR = 24000
 public let S3_SR = 16000
 public let SPEECH_VOCAB_SIZE = 6561
 
+/// Speech tokens per second. One token decodes to `S3GEN_SR / S3_TOKEN_RATE` = 960 samples.
+public let S3_TOKEN_RATE = 25
+
 // MARK: - S3Token2Mel
 
 /// S3Gen CFM decoder: speech tokens -> mel spectrograms
