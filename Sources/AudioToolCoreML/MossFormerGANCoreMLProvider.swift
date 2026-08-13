@@ -14,6 +14,59 @@ import AudioToolCore
 import MLX
 import MLXNN
 
+// MARK: - Segment Stitching
+
+/// How consecutive Core ML invocations are stitched back together.
+///
+/// Every case keeps each invocation at exactly 25500 samples. That is not a tuning
+/// choice: 25500 samples is 256 STFT frames, which is the `group_size=256` the
+/// inter-path attention was trained with (`generator.py:542`), and the traced graph
+/// collapses grouping to a single group of whatever length it is handed. At 256 it
+/// reproduces the original architecture exactly; at any other length it does not,
+/// which is why 512 frames measured 0.9445 and 101 frames 0.9218 against 256's
+/// 0.9894. So the segment length is fixed and only the stitching varies.
+public enum CoreMLGANStitching: String, Sendable, CaseIterable {
+
+    /// Consecutive segments, hard-concatenated. One inference per 1.594 s.
+    ///
+    /// The default, and the right one. Each segment is inferred with no knowledge
+    /// of its neighbours (the inter-path FSMN alone reaches +/-19 frames, about
+    /// 119 ms) and the reconstructions are butted together, so the joins are not
+    /// mathematically continuous: 3-4 of 18 boundaries on a 30 s clip carry a step,
+    /// the worst a single-sample jump of 40% of signal RMS.
+    ///
+    /// That reads worse than it is. A one-sample step scores enormously on any
+    /// derivative measure and carries almost no energy. Against `discardEdges25`
+    /// the whole output differs by -32 dB, mostly below 500 Hz, and only 4.7% of
+    /// that difference falls within +/-50 ms of a boundary - which is less than the
+    /// 6.0% of the file those windows occupy, so the residue is not seam-related at
+    /// all. Blind A/B on 6 s and 30 s clips: no audible difference, at the
+    /// transitions or overall. See Docs/chunking_research.md section 2d.
+    case none
+
+    /// 25% overlap, centre of each segment kept, edges discarded.
+    ///
+    /// The policy the original PyTorch decode path uses for long audio
+    /// (`helpers.py`: `stride = window * 0.75`, then give up `(window - stride) / 2`
+    /// at each side). Discards rather than blends, so there are no crossfade
+    /// weights to normalise and no way to reintroduce the `sum(w**2)` bug that made
+    /// overlap look bad in the first place. Removes the step discontinuities; costs
+    /// 33% more inference (measured 3.85x -> 3.08x real time).
+    ///
+    /// Opt in only if you want the mathematically clean reconstruction or hit
+    /// content where it matters. It is not the default because it is not audible:
+    /// see the note on ``none``.
+    case discardEdges25
+
+    /// Fraction of the segment advanced between invocations.
+    var strideFraction: Double {
+        switch self {
+        case .none: return 1.0
+        case .discardEdges25: return 0.75
+        }
+    }
+}
+
 // MARK: - MossFormer GAN CoreML Provider
 
 /// CoreML MossFormer GAN Speech Enhancement (16kHz)
@@ -39,6 +92,7 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     private let modelPath: String?
     private let precision: CoreMLGANPrecision
     private let computeUnits: MLComputeUnits
+    private let stitching: CoreMLGANStitching
 
     /// Where the compiled packages come from when no path is given.
     public static let repo = ModelRepository.mossFormerGANSE16KCoreML
@@ -62,14 +116,19 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
     ///     default: it is faster than the fp32 package and uses 5.5x less memory,
     ///     the clearest precision choice of any model in this package.
     ///   - computeUnits: Core ML compute units.
+    ///   - stitching: How consecutive segments are joined for audio longer than
+    ///     1.594 s. See ``CoreMLGANStitching``. `.none` is the cheaper mode and is
+    ///     what the published parity fixtures were generated against.
     public init(
         modelPath: String? = nil,
         precision: CoreMLGANPrecision = .fp16,
-        computeUnits: MLComputeUnits = .cpuAndGPU
+        computeUnits: MLComputeUnits = .cpuAndGPU,
+        stitching: CoreMLGANStitching = .none
     ) {
         self.modelPath = modelPath
         self.precision = precision
         self.computeUnits = computeUnits
+        self.stitching = stitching
 
         // Create periodic Hann window for MLX STFT
         self.mlxWindow = createPeriodicHannWindow(length: winLength)
@@ -191,8 +250,12 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
             return try await processSegment(input.samples, model: model)
         }
         
-        // Process in segments without overlap (as per model recommendation)
-        return try await processWithChunking(input.samples, model: model)
+        switch stitching {
+        case .none:
+            return try await processWithChunking(input.samples, model: model)
+        case .discardEdges25:
+            return try await processWithChunkingDiscardEdges(input.samples, model: model)
+        }
     }
     
     // MARK: - Background Extraction
@@ -216,8 +279,12 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
             return try await processSegmentWithBackground(input.samples, model: model)
         }
         
-        // Process in segments without overlap
-        return try await processWithChunkingAndBackground(input.samples, model: model)
+        switch stitching {
+        case .none:
+            return try await processWithChunkingAndBackground(input.samples, model: model)
+        case .discardEdges25:
+            return try await processWithChunkingDiscardEdgesAndBackground(input.samples, model: model)
+        }
     }
     
     /// Process a single segment with background extraction using MLX
@@ -505,6 +572,107 @@ public actor MossFormerGANCoreMLProvider: SpeechEnhancer {
         return AudioBuffer(samples: enhancedSegments, sampleRate: sampleRate, channels: 1)
     }
     
+    // MARK: - Discard-Edges Stitching
+
+    /// One planned inference: which window to run, and which slice of its output
+    /// survives into the result.
+    private struct EdgePlan {
+        /// Offset of the 25500-sample window into the input.
+        let start: Int
+        /// First index of the segment output that is kept.
+        let keepFrom: Int
+        /// One past the last index kept.
+        let keepTo: Int
+    }
+
+    /// Windows advance by 75% of the segment, and each contributes only its centre.
+    ///
+    /// `giveUp` is `(segment - stride) / 2`, so the kept spans abut: chunk `i` starts
+    /// one sample before chunk `i-1` ends, which the write order resolves. Integer
+    /// division makes `keep` one sample wider than `stride`; that single-sample
+    /// double-write is exactly what the PyTorch reference does and is why the spans
+    /// cannot leave a gap.
+    ///
+    /// The first window keeps its leading edge and the last keeps its trailing edge:
+    /// there is no neighbour out there to supply those samples, and they carry no
+    /// seam. The final window is end-aligned rather than zero-padded, so the tail is
+    /// inferred with real audio around it.
+    private func edgePlans(totalSamples: Int) -> [EdgePlan] {
+        precondition(totalSamples > segmentSamples, "caller routes shorter input to the single-segment path")
+
+        let stride = Int(Double(segmentSamples) * stitching.strideFraction)
+        let giveUp = (segmentSamples - stride) / 2
+
+        var starts: [Int] = []
+        var pos = 0
+        while pos + segmentSamples <= totalSamples {
+            starts.append(pos)
+            pos += stride
+        }
+        if let last = starts.last, last + segmentSamples < totalSamples {
+            starts.append(totalSamples - segmentSamples)
+        }
+
+        return starts.enumerated().map { index, start in
+            EdgePlan(
+                start: start,
+                keepFrom: index == 0 ? 0 : giveUp,
+                keepTo: index == starts.count - 1 ? segmentSamples : segmentSamples - giveUp
+            )
+        }
+    }
+
+    private func processWithChunkingDiscardEdges(
+        _ samples: [Float], model: MLModel
+    ) async throws -> AudioBuffer {
+        var output = [Float](repeating: 0, count: samples.count)
+
+        for plan in edgePlans(totalSamples: samples.count) {
+            try Task.checkCancellation()
+            let segment = Array(samples[plan.start..<(plan.start + segmentSamples)])
+            let result = try await processSegment(segment, model: model)
+            Self.copyKept(result.samples, plan, into: &output)
+        }
+
+        return AudioBuffer(samples: output, sampleRate: sampleRate, channels: 1)
+    }
+
+    private func processWithChunkingDiscardEdgesAndBackground(
+        _ samples: [Float], model: MLModel
+    ) async throws -> EnhancedWithBackground {
+        var enhanced = [Float](repeating: 0, count: samples.count)
+        var background = [Float](repeating: 0, count: samples.count)
+
+        for plan in edgePlans(totalSamples: samples.count) {
+            try Task.checkCancellation()
+            let segment = Array(samples[plan.start..<(plan.start + segmentSamples)])
+            let result = try await processSegmentWithBackground(segment, model: model)
+            Self.copyKept(result.enhanced.samples, plan, into: &enhanced)
+            Self.copyKept(result.background.samples, plan, into: &background)
+        }
+
+        return EnhancedWithBackground(
+            enhanced: AudioBuffer(samples: enhanced, sampleRate: sampleRate, channels: 1),
+            background: AudioBuffer(samples: background, sampleRate: sampleRate, channels: 1)
+        )
+    }
+
+    /// Copies `plan`'s kept span from a segment output into the destination, clamped
+    /// to both buffers.
+    private static func copyKept(_ segment: [Float], _ plan: EdgePlan, into output: inout [Float]) {
+        let keepTo = min(plan.keepTo, segment.count)
+        guard plan.keepFrom < keepTo else { return }
+
+        let destination = plan.start + plan.keepFrom
+        let count = min(keepTo - plan.keepFrom, output.count - destination)
+        guard count > 0 else { return }
+
+        output.replaceSubrange(
+            destination..<(destination + count),
+            with: segment[plan.keepFrom..<(plan.keepFrom + count)]
+        )
+    }
+
     // MARK: - MLX Power Compression
     
     /// Power compress spectrogram using MLX (matches Python exactly)
