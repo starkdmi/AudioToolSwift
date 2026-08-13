@@ -164,6 +164,7 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/Models/MossFormer2SE",
+            exclude: ["LICENSE"],
             swiftSettings: modelSwiftSettings
         ),
         .target(
@@ -176,6 +177,7 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/Models/FRCRN",
+            exclude: ["LICENSE"],
             swiftSettings: modelSwiftSettings
         ),
         .target(
@@ -187,6 +189,7 @@ let package = Package(
                 .product(name: "MLXFast", package: "mlx-swift"),
             ],
             path: "Sources/Models/MossFormer2SS",
+            exclude: ["LICENSE"],
             swiftSettings: modelSwiftSettings
         ),
         .target(
@@ -199,6 +202,7 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/Models/MossFormer2SR",
+            exclude: ["LICENSE"],
             swiftSettings: modelSwiftSettings
         ),
         .target(
@@ -211,6 +215,7 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/Models/Demucs",
+            exclude: ["LICENSE"],
             swiftSettings: modelSwiftSettings
         ),
         .target(
@@ -222,6 +227,7 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/Models/USS",
+            exclude: ["LICENSE"],
             // No resources. The ResUNet30 weights this target used to bundle (~106 MB)
             // come from HuggingFace, and the seven 527-d AudioSet conditioning vectors
             // that replaced them are gone too: each was a normalised multi-hot vector
@@ -259,6 +265,7 @@ let package = Package(
                 .product(name: "AudioUtils", package: "SwiftAudio"),
             ],
             path: "Sources/Models/Chatterbox",
+            exclude: ["LICENSE"],
             swiftSettings: modelSwiftSettings
         ),
 

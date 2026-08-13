@@ -200,20 +200,57 @@ Primary model sources:
 These directories are compiled as AudioToolSwift targets rather than resolved as
 separate packages.
 
+Every directory below now carries its own `LICENSE` with the applicable
+upstream notice, and each is `exclude`d from its SwiftPM target so the file
+ships with the source without being treated as a resource.
+`THIRD_PARTY_NOTICES.md` at the repository root aggregates them for anyone
+distributing a compiled binary.
+
 | Path | Principal upstream | Licence |
 |---|---|---|
 | `Sources/Models/MossFormer2SE/` | ClearerVoice / local MLX port | Apache-2.0 |
 | `Sources/Models/MossFormer2SS/` | ClearerVoice / local MLX port | Apache-2.0; WHAMR weights separately MIT |
 | `Sources/Models/MossFormer2SR/` | ClearerVoice / local MLX port | Apache-2.0 |
 | `Sources/Models/FRCRN/` | ClearerVoice / local MLX port | Apache-2.0 |
-| `Sources/Models/USS/` | ByteDance USS / local MLX port | Apache-2.0 |
-| `Sources/Models/Demucs/` | adefossez/demucs HTDemucs-ft / local MLX port | MIT for code and official weights |
-| `Sources/Models/Kokoro/` | mlalma/kokoro-ios | MIT, notice at `Sources/Models/Kokoro/LICENSE` |
-| `Sources/Models/Chatterbox/` | Resemble AI Chatterbox / local MLX port | MIT |
+| `Sources/Models/USS/` | ByteDance USS / local MLX port | Apache-2.0, © 2023 ByteDance |
+| `Sources/Models/Demucs/` | adefossez/demucs HTDemucs-ft / local MLX port | MIT for code and official weights, © Meta Platforms |
+| `Sources/Models/Kokoro/` | mlalma/kokoro-ios | MIT, © 2025 Lassi Maksimainen |
+| `Sources/Models/Chatterbox/` | Resemble AI Chatterbox / local MLX port | MIT, © 2025 Resemble AI; **plus** Kokoro MIT, see below |
 
-Individual files also record algorithms adapted from other ports. Any
-consolidated notice must preserve every applicable upstream notice rather than
-assigning one blanket licence to a mixed-provenance directory.
+ClearerVoice-Studio's own `LICENSE` is the stock Apache-2.0 text with the
+copyright placeholder left unfilled, so no individual holder can be named for
+the four ports derived from it. ByteDance USS ships the Apache-2.0 short-form
+notice rather than the full text, which is why GitHub's detector reports that
+repo as "Other" rather than Apache-2.0 — it is Apache-2.0.
+
+### Mixed-provenance code
+
+`Sources/Models/Chatterbox/S3Gen/HiFiGAN/HiFiGAN.swift` sits in the Chatterbox
+tree, but its signal-processing and building-block helpers are adapted from the
+Kokoro Swift implementation vendored at `Sources/Models/Kokoro/`. This was
+verified by comparison, not taken from the file's header comment: `unwrap` and
+`interpolate1d` are character-for-character identical to their counterparts in
+`Sources/Models/Kokoro/Decoder/MLXSTFT.swift` and
+`Sources/Models/Kokoro/BuildingBlocks/Interpolate.swift` apart from whitespace
+and `MLX.` qualification. `Sources/Models/Chatterbox/LICENSE` therefore carries
+both the Resemble AI and the Lassi Maksimainen notices.
+
+The header previously credited "mlx-audio-swift"; the matching code is
+mlalma/kokoro-ios, which is what the notice now names.
+
+`Sources/Models/Chatterbox/S3Gen/Conformer/` is an original port written for
+this project. Its three files previously carried a bare "Ported from Python
+MLX" comment that implied an unnamed upstream; the comment has been removed and
+no third-party attribution is owed for them.
+
+`Sources/Models/Demucs/STFT.swift` used to credit `iliasaz/kokoro-swift` for an
+`istft_1` function and a commented-out `kokoroSTFT` block. That repository
+exists but publishes **no licence at all**, so the code carried no grant to
+redistribute. Both were dead — `kokoroSTFT` was inside a `/* */` block and
+`istft_1` had no caller in the package, having been superseded by
+`mlxOptimizedISTFT` — so both were deleted rather than documented. The live
+STFT/iSTFT path in that file is original work and the directory is now cleanly
+Meta-MIT.
 
 ## SwiftPM dependencies
 
