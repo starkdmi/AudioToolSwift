@@ -1,7 +1,16 @@
 // Copyright © 2025
 // HiFiGAN - Complete HiFi-GAN vocoder for S3Gen
-// Based on mlx-audio-swift Kokoro implementation
 // Pure MLX Swift port matching Python MLX hifigan.py
+//
+// The signal-processing and building-block helpers in this file
+// (interpolate, interpolate1d, unwrap, mlxStft, mlxIstft, MLXSTFT,
+// InstanceNorm1d, ConvWeighted, weightNorm, ReflectionPad1d, Upsample,
+// SineGen, SourceModuleHnNSF) are adapted from the Kokoro Swift
+// implementation vendored at Sources/Models/Kokoro/.
+//
+// Upstream: https://github.com/mlalma/kokoro-ios
+// MIT License, Copyright (c) 2025 Lassi Maksimainen
+// Licence text: Sources/Models/Kokoro/LICENSE
 
 import Foundation
 import MLX

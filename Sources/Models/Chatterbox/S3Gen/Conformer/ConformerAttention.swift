@@ -1,6 +1,5 @@
 // Copyright © 2025
 // ConformerAttention - Multi-headed attention for Conformer encoder
-// Ported from Python MLX
 
 import Foundation
 import MLX

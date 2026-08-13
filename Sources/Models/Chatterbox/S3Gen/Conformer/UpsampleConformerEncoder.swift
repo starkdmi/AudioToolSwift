@@ -1,6 +1,5 @@
 // Copyright © 2025
 // UpsampleConformerEncoder - Conformer encoder with upsampling for S3Gen
-// Ported from Python MLX
 
 import Foundation
 import MLX

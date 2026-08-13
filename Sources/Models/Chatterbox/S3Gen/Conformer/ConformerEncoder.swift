@@ -1,6 +1,5 @@
 // Copyright © 2025
 // ConformerEncoder - Conformer encoder layer for S3Gen
-// Ported from Python MLX
 
 import Foundation
 import MLX
