@@ -513,37 +513,6 @@ let package = Package(
             ],
             swiftSettings: commonSwiftSettings
         ),
-        // Parity against the MLX Python references. Opt-in twice over:
-        // RUN_PARITY_TESTS=1 and the artifacts being present on disk. See
-        // Parity/README.md for how the artifacts are generated and why they are
-        // published with the weights rather than committed.
-        //
-        // Measure first, then assert. Note the TEST_RUNNER_ prefix: xcodebuild
-        // consumes bare variables itself and does not forward them to the test
-        // process, so the unprefixed form runs and skips everything while still
-        // reporting success.
-        //   TEST_RUNNER_RUN_PARITY_TESTS=1 TEST_RUNNER_PARITY_RECORD=1 \
-        //     xcodebuild test -only-testing:AudioToolParityTests
-        // Under `swift test`, use the names without the prefix.
-        .testTarget(
-            name: "AudioToolParityTests",
-            dependencies: [
-                "AudioTool",
-                "AudioToolCore",
-                "AudioToolMLX",
-                "AudioToolCoreML",
-                "AudioToolUSS",
-                "USSMLXSwift",
-                // Chatterbox conditioning. See the AudioToolCLI note above: the
-                // MisakiSwift dynamic-library problem that once made this target
-                // unlinkable is fixed in the forked manifest.
-                "AudioToolTTS",
-                "AudioToolTestSupport",
-                .product(name: "AudioUtils", package: "SwiftAudio"),
-            ],
-            path: "Tests/AudioToolParityTests",
-            swiftSettings: commonSwiftSettings
-        ),
         // Run with: xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' -only-testing:AudioToolMLXTranslationTests
         .testTarget(
             name: "AudioToolMLXTranslationTests",

@@ -104,7 +104,7 @@ public enum ModelRepository {
 /// model with a switch, and there is no int8 package for a wider type to name.
 ///
 /// FP16 is the recommendation - measured faster (4.2x against 3.7x) and 5.5x lower
-/// peak memory, at 61 dB against the fp32 conversion. See `MODEL-PRECISIONS.md`.
+/// peak memory, at 61 dB against the fp32 conversion. See `model-precisions.md`.
 public enum CoreMLGANPrecision: String, Sendable, CaseIterable, Hashable {
     case fp32
     case fp16

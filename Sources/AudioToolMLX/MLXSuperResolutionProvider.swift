@@ -32,7 +32,7 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     ///
     /// fp32 and int8 are published; the other three conversions exist only locally,
     /// and the exclusions below say why each stays that way. The measurements are
-    /// kept in `MODEL-PRECISIONS.md` regardless, because the answer they produce is
+    /// kept in `model-precisions.md` regardless, because the answer they produce is
     /// worth having written down: on this model quantization is close to pointless.
     /// Only 168 `Linear` modules quantize against a Generator that is almost entirely
     /// convolutions, so int4 is 0.65x the fp32 size where SE reaches 0.30x, and fp16
@@ -46,7 +46,7 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     /// is why it is a supported-precision decision rather than a caller's problem.
     ///
     /// **int6 and int4 are excluded because they are not published.** Both were
-    /// measured - the numbers are in `MODEL-PRECISIONS.md` - and both are strictly
+    /// measured - the numbers are in `model-precisions.md` - and both are strictly
     /// dominated by int8, which is 11 MiB and 21 MiB larger for 12 dB and 24 dB
     /// better at identical speed and memory. Since quantization changes nothing but
     /// download size on this model, a width that is bigger *and* worse than int8 has
@@ -339,7 +339,7 @@ public actor MossFormer2SR48KProvider: AudioUpscaler {
     /// all of it and returns a single answer.
     ///
     /// Calling `bandwidthSub` per chunk instead - which this provider did until
-    /// now, and which `Parity/adapters/mossformer2_sr.py` still mirrored, so the
+    /// now, and which the Python reference used for validation also mirrored, so the
     /// suite could not see it - redetects that handover every `stride` samples.
     /// Measured over 136 s of speech it ranged from 187.5 Hz to 6937.5 Hz against
     /// a single global 4875 Hz, and the assembled output differed from the

@@ -95,7 +95,7 @@ ff -i "$TMP/caro_davy.wav" -i "$TMP/bill_boerst.wav" \
     -ar 8000 -ac 1 -c:a pcm_s16le "$FA/mix_8k.wav"
 
 # The same mixture at 16 kHz, for the 2SPK 16K separation model. Same recipe as
-# mix_8k so the two rates differ only in bandwidth; the SS parity cases need an
+# mix_8k so the two rates differ only in bandwidth; SS conversion validation needs an
 # overlapping mixture at each model's own rate, from a CC0 source.
 ff -i "$TMP/caro_davy.wav" -i "$TMP/bill_boerst.wav" \
     -filter_complex \
@@ -148,7 +148,7 @@ ff -i "$TMP/music.mp3" -i "$TMP/caro_davy.wav" \
     -map '[out]' -map_metadata -1 -fflags +bitexact -flags:a +bitexact \
     -ar 44100 -ac 2 -c:a pcm_s16le "$FA/speech_music.wav"
 
-# USS runs at 32 kHz and its parity case needs a window holding both speech and
+# USS runs at 32 kHz and its conversion check needs a window holding both speech and
 # music, since it separates by AudioSet condition. Derived from the fixture above
 # rather than re-mixed, so the two stay the same material.
 ff -i "$FA/speech_music.wav" \

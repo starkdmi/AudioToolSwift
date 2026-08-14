@@ -649,12 +649,12 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     /// T3's encoder-conditioning speech tokens, from the reference audio.
     ///
     /// Its own method because it has two callers with nothing else in common:
-    /// `generate` needs it to build `T3Cond`, and the parity suite needs it without
-    /// generating, since everything past this point samples. It is not folded into
-    /// `rebuildReferenceConditioning` because it does not have to be - it depends on
-    /// nothing that `setReferenceAudio` computes, only on the stored reference audio,
-    /// and computing it eagerly would charge every caller for a tokenizer pass they
-    /// may never use.
+    /// `generate` needs it to build `T3Cond`; conversion validation also reads it
+    /// without generating, since everything past this point samples. It is not
+    /// folded into `rebuildReferenceConditioning` because it does not have to be -
+    /// it depends on nothing that `setReferenceAudio` computes, only on the stored
+    /// reference audio, and computing it eagerly would charge every caller for a
+    /// tokenizer pass they may never use.
     ///
     /// The 6 s window is T3's encoder-conditioning length, separate from the 10 s
     /// decoder window `rebuildReferenceConditioning` applies; on a reference shorter
@@ -697,7 +697,7 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
 
     /// The conditioning this provider is holding, keyed as `conds.safetensors` keys it.
     ///
-    /// Exists for the parity suite. Conditioning is the deterministic half of
+    /// Exists for conversion validation. Conditioning is the deterministic half of
     /// Chatterbox - everything past it samples - so it is the part that can be held
     /// to a reference at all, and it is private state otherwise. Reading it through
     /// the provider rather than rebuilding the sequence in the test is deliberate:

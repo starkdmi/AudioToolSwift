@@ -22,9 +22,9 @@ import AudioToolCore
 /// This is sound because inference cost in this catalog is a function of length
 /// and sample rate, not content: these are convolutional and attention models run
 /// over fixed-size chunks, with no early exit and no data-dependent branching. The
-/// one thing synthetic input cannot measure is output *quality*, which is what the
-/// parity suite is for - `Tests/AudioToolParityTests` compares against recorded
-/// reference tensors, and nothing here duplicates that.
+/// one thing synthetic input cannot measure is output *quality*. Completed
+/// cross-implementation comparisons are recorded in `Docs/conversion.md`, and
+/// nothing here duplicates them.
 ///
 /// Pass `--input` for a real file when the question is about a specific recording.
 public enum BenchmarkInput {

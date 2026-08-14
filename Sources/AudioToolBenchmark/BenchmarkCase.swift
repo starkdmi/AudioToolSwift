@@ -201,7 +201,8 @@ public enum BenchmarkCatalog {
     /// Quality is deliberately not here. Everything downstream of conditioning
     /// samples, so two precisions do not produce comparable waveforms even with a
     /// fixed seed; what a precision costs is measured on the conditioning
-    /// embeddings instead. See `Scripts/quantization-report.py`.
+    /// embeddings instead. The recorded comparison is in
+    /// `Docs/model-precisions.md`.
     ///
     /// **Read the cross-precision rates with care.** Within one precision the
     /// measurement is tight - standard deviation of 0.02 s over three runs. Across

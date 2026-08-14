@@ -200,12 +200,12 @@ public actor MossFormer2SSProvider: SpeechSeparator, ChunkedProgressProvider {
         // out at an arbitrary and often very loud level, and this is the step that
         // makes them usable.
         //
-        // This mirrors `_normalize` in Parity/adapters/mossformer2_ss.py, which is
-        // why the published tensors are named `speaker_N_normalized`. Mixture
-        // consistency - sharing the residual so sum(sources) == mixture - is a
-        // defensible alternative that keeps relative gains, but it is a *different*
-        // output contract: swapping it in here alone put every SS parity case at
-        // -19 to -44 dB. If it is wanted, the reference has to move first.
+        // This mirrors `_normalize` in the Python reference used during
+        // validation. Mixture consistency - sharing the residual so
+        // sum(sources) == mixture - is a defensible alternative that keeps
+        // relative gains, but it is a *different* output contract: swapping it
+        // in here alone put every SS validation case at -19 to -44 dB. If it is
+        // wanted, the reference has to move first.
         let inputRMS = Self.rootMeanSquare(audio.samples)
         let normalized = results.map { buffer in
             AudioBuffer(

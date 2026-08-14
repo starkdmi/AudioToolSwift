@@ -92,7 +92,7 @@ public enum ModelPins {
         // `model_fp32.safetensors` is unchanged across the move - same hash as at
         // revision f568847f.
         //
-        // Three precisions `MODEL-PRECISIONS.md` measures are deliberately absent
+        // Three precisions `model-precisions.md` measures are deliberately absent
         // from the repository, so this table pins two files against the doc's four
         // rows. A measurement is worth publishing whether or not the checkpoint is;
         // a checkpoint is worth publishing only if something should download it.

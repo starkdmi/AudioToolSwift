@@ -52,7 +52,7 @@ final class IncrementalOverlapAddTests: MLXTestCase {
         return result
     }
 
-    /// The exact geometry of the failing SR parity case: 4 s chunks at 50% overlap,
+    /// The exact geometry of the failing SR conversion check: 4 s chunks at 50% overlap,
     /// 48 kHz, Hann blend. Scaled down by 100x in length - the seam behaviour is a
     /// function of the chunk/stride ratio, not the absolute count.
     func testHannBlendMatchesTheReferenceAlgorithm() {

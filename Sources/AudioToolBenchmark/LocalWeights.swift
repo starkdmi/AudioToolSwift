@@ -11,7 +11,7 @@ import Foundation
 ///
 /// Every provider here takes an explicit `weightsPath:` alongside its downloading
 /// initialiser, and on a development machine the weights usually already exist -
-/// under `Models/` in the sibling checkout, or staged under `Parity/weights`. Making
+/// under `Models/` in the sibling checkout. Making
 /// the benchmark fetch its own copy from HuggingFace when a usable one is sitting
 /// next to it wastes gigabytes and, worse, makes the whole suite unrunnable offline
 /// or on a machine whose HuggingFace cache is cold.

@@ -47,17 +47,16 @@ Sources:
 | `multi_speaker.wav` | 17.5 s, 16 kHz stereo | stereo VAD / multi-speaker loading | spatialised Caro/Bill dialogue | `a7d47fcc1b4b84e27b525ee8a8076204f0d52ff6963118722932b1943c2b6d82` |
 | `speech_long.wav` | 25.5 s, 22.05 kHz mono | streaming and pipeline integration | sequential Caro, Bill and Peter with short overlaps | `1ed049cc03de09774a552ee1426b1b76b065f248399690675d9f45d2cfa44586` |
 | `speech_music.wav` | 10 s, 44.1 kHz stereo | VAD over music / Demucs vocals | Caro mixed over “Distant Wonders” | `0d3e6a07c0755564829c214c04697c47f13e83dffa0556256e91daededb197d6` |
-| `speech_music_32k.wav` | 10 s, 32 kHz mono | USS parity | `speech_music.wav` at USS's own rate | `8f8df2c10b943ab3fd0d1953f9ac0596d824e8b2b289be8897fc86d26429e910` |
-| `speech_24k.wav` | 3 s, 24 kHz mono | Chatterbox conditioning parity | Caro at S3Gen's own rate | `60c9fa9b39679b3ef8285dc45a999e23e520a6b5013994e864afef57135e28c4` |
+| `speech_music_32k.wav` | 10 s, 32 kHz mono | USS conversion validation | `speech_music.wav` at USS's own rate | `8f8df2c10b943ab3fd0d1953f9ac0596d824e8b2b289be8897fc86d26429e910` |
+| `speech_24k.wav` | 3 s, 24 kHz mono | Chatterbox conversion validation | Caro at S3Gen's own rate | `60c9fa9b39679b3ef8285dc45a999e23e520a6b5013994e864afef57135e28c4` |
 
 Gain changes, fades, delays, panning, resampling and PCM encoding are specified
 in `Scripts/fetch-fixtures.sh`. The new separation mixtures intentionally are
 not byte-equivalent to the old conversion-validation inputs.
 
-The last three exist because a parity artifact stores its input samples rather
-than a path, so every parity case has to start from audio that can be
-redistributed. `mix_16k`, `speech_music_32k` and `speech_24k` give the 2SPK 16K,
-USS and Chatterbox cases a cleared input at each model's own rate.
+The last three were also used for cross-language conversion validation. They give
+the 2SPK 16K, USS and Chatterbox checks a redistributable input at each model's
+own rate.
 
 ## Music fixture — CC0
 
