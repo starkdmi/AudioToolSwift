@@ -190,11 +190,7 @@ public enum UpscalingModel: Sendable, Hashable {
 
 /// Available transcription models
 public enum TranscriptionModel: Sendable, Hashable {
-    case parakeet         // FluidAudio, ~200x RTF
-    case whisperTiny      // MLX
-    case whisperBase      // MLX
-    case whisperSmall     // MLX
-    case whisperLarge     // MLX, supports translation
+    case parakeet         // FluidAudio, ~200x RTF, multilingual (v3)
     case appleSpeech      // Native, iOS 26+
     
     /// Expected input sample rate for this model

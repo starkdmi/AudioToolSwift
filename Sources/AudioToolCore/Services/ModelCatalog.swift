@@ -38,8 +38,9 @@ public final class ModelCatalog: @unchecked Sendable {
     
     private init() {
         // Initialize with your model catalog
-        self.models = Self.createModelCatalog()
-        self.packages = Self.createPackageCatalog()
+        let models = Self.createModelCatalog()
+        self.models = models
+        self.packages = Self.createPackageCatalog(models: models)
     }
     
     // MARK: - Lookup
@@ -94,7 +95,7 @@ public final class ModelCatalog: @unchecked Sendable {
     /// the thing they describe: super-resolution was declared at 180 MB against a
     /// real 439 MB, having been copied from the SE entry beside it, so a host
     /// showing that figure before a download understated it by 2.4x. Kokoro was out
-    /// by 1.8x, Whisper Large by 2.1x, and the SS trio by 12% each. A wrong size is
+    /// by 1.8x and the SS trio by 12% each. A wrong size is
     /// worse than no size: it is shown to a user deciding whether to download on a
     /// metered connection.
     ///
@@ -360,38 +361,20 @@ public final class ModelCatalog: @unchecked Sendable {
             ),
             
             // MARK: Transcription
-            ModelDefinition(
-                id: "whisper",
-                name: "Whisper Transcription",
-                category: .transcription,
-                description: "Accurate speech-to-text transcription",
-                variants: [
-                    // Both repositories ship `weights.npz`, not safetensors. The
-                    // manifest asked for `*.safetensors` and so matched nothing but
-                    // the 269-byte config: a pre-download of Whisper Large fetched
-                    // 269 bytes and reported success, and the declared size was a
-                    // 1.5 GB guess against a real 3.1 GB. `ModelPins` had it right
-                    // for both repositories all along - it pins `weights.npz` - so
-                    // the catalog was the half that disagreed.
-                    ModelVariant(
-                        id: "whisper_large_v3",
-                        name: "Whisper Large v3",
-                        quantization: .fp16,
-                        sizeBytes: 3_083_520_685,
-                        repo: "mlx-community/whisper-large-v3-mlx",
-                        files: ["weights.npz", "config.json"]
-                    ),
-                    ModelVariant(
-                        id: "whisper_small",
-                        name: "Whisper Small",
-                        quantization: .fp16,
-                        sizeBytes: 481_307_858,
-                        repo: "mlx-community/whisper-small-mlx",
-                        files: ["weights.npz", "config.json"]
-                    ),
-                ]
-            ),
-            
+            //
+            // Nothing here. Transcription runs through `FluidAudioTranscriber`
+            // (Parakeet) and `AppleSpeechTranscriber`, neither of which downloads
+            // through this catalog: FluidAudio fetches its own weights in
+            // `AsrModels.downloadAndLoad`, and Apple's is part of the OS.
+            //
+            // Whisper Large v3 and Small used to be listed here, and were the only
+            // transcription entries. No `Transcriber` ever loaded them, so the two
+            // packages that bundled them promised a model that could not run -
+            // 3.08 GB of the podcaster pack's 3.20 GB was weights nothing could
+            // open. A catalog entry is a download offer, so an entry without a
+            // provider is worse than no entry. The `Transcriber` protocol is the
+            // extension point; add the provider first, then the catalog rows.
+
             // MARK: VAD
             ModelDefinition(
                 id: "silero_vad",
@@ -431,49 +414,74 @@ public final class ModelCatalog: @unchecked Sendable {
     
     // MARK: - Package Catalog
     
-    private static func createPackageCatalog() -> [ModelPackage] {
-        [
+    /// A package's `totalSizeBytes` is summed from its variants, never written by
+    /// hand.
+    ///
+    /// The figures here used to be hand-rounded and every one understated:
+    /// speech_studio_pro advertised 721 MB against 1.14 GB of actual weights, and
+    /// the since-removed podcaster pack 1.59 GB against 3.20 GB. They were guesses from before
+    /// the per-variant sizes were measured, and nothing updated them afterwards -
+    /// the same failure `createModelCatalog`'s note describes, one level up.
+    ///
+    /// Summing here makes that class of drift impossible: add a variant to a
+    /// package, or re-measure a checkpoint, and the total follows. The stored
+    /// property stays on ``ModelPackage`` because it is public, `Codable` API.
+    private static func createPackageCatalog(models: [ModelDefinition]) -> [ModelPackage] {
+        let sizes = Dictionary(
+            models.flatMap(\.variants).map { ($0.id, $0.sizeBytes) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        func package(
+            id: String,
+            name: String,
+            description: String,
+            variantIds: [String]
+        ) -> ModelPackage {
+            // A missing id contributes nothing rather than trapping: the catalog is
+            // read at launch, and `ModelDownloadTests` already fails the build on a
+            // package that names a variant which does not exist.
             ModelPackage(
+                id: id,
+                name: name,
+                description: description,
+                variantIds: variantIds,
+                totalSizeBytes: variantIds.reduce(0) { $0 + (sizes[$1] ?? 0) }
+            )
+        }
+
+        return [
+            package(
                 id: "speech_studio_essentials",
                 name: "Speech Studio Essentials",
                 description: "Core tools for speech processing: enhancement, VAD",
-                variantIds: ["mossformer2_se_fp16", "silero_vad_coreml"],
-                totalSizeBytes: 91_100_000
+                variantIds: ["mossformer2_se_fp16", "silero_vad_coreml"]
             ),
-            
-            ModelPackage(
+
+            package(
                 id: "speech_studio_pro",
                 name: "Speech Studio Pro",
-                description: "Complete toolkit: Enhancement, Separation, TTS, Transcription",
+                description: "Complete toolkit: Enhancement, Separation, TTS",
                 variantIds: [
                     "mossformer2_se_fp16",
                     "mossformer2_ss_2spk_16k_fp32",
                     "kokoro_tts_bf16",
-                    "whisper_small",
-                    "silero_vad_coreml"
-                ],
-                totalSizeBytes: 721_100_000
+                    "silero_vad_coreml",
+                ]
             ),
-            
-            ModelPackage(
+
+            package(
                 id: "music_production",
                 name: "Music Production",
                 description: "Tools for music: Source separation, Super resolution",
-                variantIds: ["demucs_fp32", "uss_fp32", "mossformer2_sr_fp32"],
-                totalSizeBytes: 636_123_696
+                variantIds: ["demucs_fp32", "uss_fp32", "mossformer2_sr_fp32"]
             ),
-            
-            ModelPackage(
-                id: "podcaster",
-                name: "Podcaster Pack",
-                description: "Perfect for podcast production: Enhancement, Transcription",
-                variantIds: [
-                    "mossformer2_se_fp16",
-                    "whisper_large_v3",
-                    "silero_vad_coreml"
-                ],
-                totalSizeBytes: 1_591_100_000
-            ),
+
+            // The podcaster pack was enhancement + Whisper + VAD. Without the
+            // Whisper variant it was `speech_studio_essentials` under a second
+            // name, so it is gone rather than duplicated: a podcast host wants
+            // essentials, and transcription arrives with a provider, not a
+            // download.
         ]
     }
 }

@@ -491,10 +491,6 @@ extension TranscriptionModel: ModelIdentifier {
     public var modelName: String {
         switch self {
         case .parakeet: return "parakeet_v3"
-        case .whisperTiny: return "whisper_tiny"
-        case .whisperBase: return "whisper_base"
-        case .whisperSmall: return "whisper_small"
-        case .whisperLarge: return "whisper_large_v3"
         case .appleSpeech: return "apple_speech"
         }
     }

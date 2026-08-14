@@ -67,8 +67,6 @@ VARIANTS: list[tuple[str, str, list[str]]] = [
     ("kokoro_tts_bf16", "mlx-community/Kokoro-82M-bf16",
      ["*.safetensors", "voices/*.npy", "config.json"]),
     ("chatterbox_tts_fp32", "starkdmi/chatterbox", CHATTERBOX),
-    ("whisper_large_v3", "mlx-community/whisper-large-v3-mlx", ["weights.npz", "config.json"]),
-    ("whisper_small", "mlx-community/whisper-small-mlx", ["weights.npz", "config.json"]),
     ("silero_vad_coreml", "FluidInference/silero-vad-coreml",
      ["silero-vad-unified-256ms-v6.2.1.mlmodelc/**"]),
 ]

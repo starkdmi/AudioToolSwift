@@ -151,8 +151,6 @@ are not a blanket non-commercial licence, but they do bind distribution.
 | Kokoro `mlx-community/Kokoro-82M-{bf16,4bit,6bit,8bit}` | Apache-2.0, from `hexgrad/Kokoro-82M` and the inspected MLX variants | Model attribution, plus `Sources/Models/Kokoro/LICENSE` for the vendored port |
 | Chatterbox `starkdmi/chatterbox` and precision-suffixed variants | MIT, from the base ResembleAI checkpoint and code | The Resemble AI MIT notice |
 | Chatterbox S3 tokenizer fallback `mlx-community/S3TokenizerV2` | Apache-2.0, via `FunAudioLLM/CosyVoice2-0.5B` | The CosyVoice2 upstream notice |
-| Whisper Large v3 `mlx-community/whisper-large-v3-mlx` | MIT, from OpenAI Whisper | The OpenAI MIT notice |
-| Whisper Small `mlx-community/whisper-small-mlx` | MIT, from OpenAI Whisper | The OpenAI MIT notice |
 | Silero VAD, via FluidAudio `FluidInference/silero-vad-coreml` | MIT | The upstream MIT notice |
 | FluidAudio Parakeet v2/v3 Core ML | CC BY 4.0, from the NVIDIA base models | Model name, creator, source, licence link, and a conversion/modification notice. The v3 card body says Apache-2.0, but its metadata and base model say CC BY 4.0; CC BY 4.0 controls |
 | FluidAudio offline speaker diarization | CC BY 4.0, from pyannote `speaker-diarization-community-1` | Attribution and modification notice. Upstream pyannote also gates initial access on accepting contact terms |
@@ -181,9 +179,6 @@ Primary model sources:
   [configured conversion](https://huggingface.co/starkdmi/chatterbox),
   [S3TokenizerV2](https://huggingface.co/mlx-community/S3TokenizerV2), and
   [CosyVoice2 base](https://huggingface.co/FunAudioLLM/CosyVoice2-0.5B)
-- [OpenAI Whisper licence](https://github.com/openai/whisper/blob/main/LICENSE),
-  [Whisper Large v3 MLX](https://huggingface.co/mlx-community/whisper-large-v3-mlx),
-  and [Whisper Small MLX](https://huggingface.co/mlx-community/whisper-small-mlx)
 - [Silero VAD Core ML](https://huggingface.co/FluidInference/silero-vad-coreml),
   [Parakeet v2 Core ML](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml),
   [Parakeet v3 Core ML](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml),

@@ -230,18 +230,6 @@ public enum ModelPins {
                 "kokoro-v1_0.safetensors": "fb2b8f22b906f2e70e7dae4c337457784b079fb44142d8f4da93d8a9ace905ed",
             ]
         ),
-        "mlx-community/whisper-large-v3-mlx": ModelPin(
-            revision: "49e6aa286ad60c14352c404340ded53710378a11",
-            fileHashes: [
-                "weights.npz": "05ff791ce3630fae47e7c51004e9666204d786246ec07cac6110af768099b40d",
-            ]
-        ),
-        "mlx-community/whisper-small-mlx": ModelPin(
-            revision: "45f3915923c7a79a5a5b5a7d909d39aeb0e5630e",
-            fileHashes: [
-                "weights.npz": "55b6674c9b339702d486e2b1573839a66f8ec8f821ed2886993ef717a86b09f5",
-            ]
-        ),
         "mlx-community/S3TokenizerV2": ModelPin(
             revision: "e0c9886f0e1c35ae85b1f27277416fb19fc72bec",
             fileHashes: [

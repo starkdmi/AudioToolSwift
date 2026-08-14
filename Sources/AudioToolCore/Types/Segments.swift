@@ -430,7 +430,7 @@ public struct SpeakerIdentification: Sendable, Equatable {
 /// ```swift
 /// let result = try await voice.pipeline()
 ///     .parallel {[
-///         PipelineBuilder().transcribe(.whisperLarge),
+///         PipelineBuilder().transcribe(.parakeet),
 ///         PipelineBuilder().diarize()
 ///     ]}
 ///     .mergeTranscriptionWithDiarization()
