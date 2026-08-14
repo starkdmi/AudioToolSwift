@@ -76,13 +76,13 @@ READMEs under `Tests/**/Fixtures/`.
 | `music.wav` | excerpt derived from “Distant Wonders,” *CC0 Instruments, Volume I* | CC0 1.0 |
 | Both copies of `speech_dialogue.wav` | mostly sequential mix of Voice-Zero `caro_davy.wav` and `bill_boerst.wav`, resampled to 16 kHz mono | CC0; mixing, gain, fades and resampling documented |
 | `mix_8k.wav` | overlapping mix of `caro_davy.wav` and `bill_boerst.wav`, resampled to 8 kHz mono | CC0; mixing, gain, fades and resampling documented |
-| `mix_16k.wav` | the same mixture at 16 kHz, for the 2SPK 16K parity case | CC0; mixing, gain, fades and resampling documented |
+| `mix_16k.wav` | the same mixture at 16 kHz, for 2SPK 16K conversion validation | CC0; mixing, gain, fades and resampling documented |
 | `mix3_8k.wav` | overlapping mix of `caro_davy.wav`, `bill_boerst.wav` and `peter_yearsley.wav`, resampled to 8 kHz mono | CC0; mixing, gain, fades and resampling documented |
 | `multi_speaker.wav` | spatialised stereo dialogue derived from `caro_davy.wav` and `bill_boerst.wav`, resampled to 16 kHz | CC0; mixing, gain, fades, panning and resampling documented |
 | `speech_long.wav` | 25.5-second sequence derived from all three Voice-Zero samples, resampled to 22.05 kHz mono | CC0; sequencing, gain, fades and resampling documented |
 | `speech_music.wav` | Voice-Zero `caro_davy.wav` mixed over the “Distant Wonders” excerpt at 44.1 kHz stereo | Both inputs CC0; mixing, gain, fades and resampling documented |
-| `speech_music_32k.wav` | `speech_music.wav` at 32 kHz mono, for the USS parity case | Both inputs CC0; resampling documented |
-| `speech_24k.wav` | Voice-Zero `caro_davy.wav`, first 3 s at 24 kHz mono, for the Chatterbox parity case | CC0; gain, fades and resampling documented |
+| `speech_music_32k.wav` | `speech_music.wav` at 32 kHz mono, for USS conversion validation | Both inputs CC0; resampling documented |
+| `speech_24k.wav` | Voice-Zero `caro_davy.wav`, first 3 s at 24 kHz mono, for Chatterbox conversion validation | CC0; gain, fades and resampling documented |
 
 The multi-speaker fixtures are deterministic mixtures of three small English
 Voice-Zero samples from the pinned Kyutai mirror revision
@@ -110,14 +110,6 @@ Primary fixture sources:
 - [Pinned Kyutai TTS voices provenance](https://huggingface.co/kyutai/tts-voices/blob/323332d33f997de8394f24a193e1a76df720e01a/README.md)
   and [Voice-Zero source project](https://github.com/OwenTyme/voice-zero)
 - [Internet Archive item metadata for CC0 Instruments](https://archive.org/details/MarchForHonor)
-
-### Parity artifacts
-
-`Parity/artifacts/` is generated, gitignored, and intended for publication
-alongside the weights (`Parity/README.md`). An artifact stores its **input
-samples**, not a path to a wav, so it carries a copy of whatever audio the case
-was built from. Every case therefore reads a committed fixture from the table
-above, and each sidecar records its source path and SHA-256.
 
 ## Model weights and runtime assets
 

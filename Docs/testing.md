@@ -40,9 +40,6 @@ TEST_RUNNER_RUN_MLX_TESTS=1 xcodebuild test \
 | Variable | Description |
 |----------|-------------|
 | `RUN_MLX_TESTS=1` | Enable MLX integration tests |
-| `RUN_PARITY_TESTS=1` | Enable parity tests against the MLX Python references |
-| `PARITY_RECORD=1` | Measure and report parity SNR instead of asserting |
-| `PARITY_DUMP_DIR=/path` | Write both sides of each parity comparison as wav |
 | `SKIP_MLX_TESTS=1` | Skip MLX tests in command-line builds |
 | `FRCRN_WEIGHTS=/path/to/model.safetensors` | FRCRN weights path |
 | `MOSSFORMER_GAN_WEIGHTS=/path/to/weights.npz` | MossFormer GAN weights path |
@@ -98,7 +95,7 @@ package `Fixtures/` directory.
 
 ## Performance
 
-Correctness is here; cost is in [BENCHMARKING.md](BENCHMARKING.md).
+Correctness is here; cost is in [running-benchmarks.md](running-benchmarks.md).
 `audio-tool-bench` measures whole models through their public API - load time,
 RTF, peak memory - one model per process, and writes a report carrying the
 machine it ran on. The two gated timing suites in the test targets

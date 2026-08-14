@@ -1,8 +1,8 @@
 # Benchmarks
 
 What each model costs on one machine. These are the numbers behind the README's
-table; [BENCHMARKING.md](BENCHMARKING.md) explains how to produce your own, and
-[MODEL-PRECISIONS.md](MODEL-PRECISIONS.md) compares precisions of the same model.
+table; [running-benchmarks.md](running-benchmarks.md) explains how to produce your own, and
+[model-precisions.md](model-precisions.md) compares precisions of the same model.
 
 **Machine:** Apple M1 Pro, 8 cores (6P/2E), 16 GB, macOS 26.5.
 **Method:** 30 s of synthetic audio at each model's own rate, one warm-up run and
@@ -64,7 +64,7 @@ are local only; run the harness yourself and you get your own.
 
 MossFormer2 SE, MossFormer2 SR, USS and Chatterbox each publish several
 checkpoints, and the smallest is rarely the right one — on some models a smaller
-checkpoint is slower and uses more memory. [MODEL-PRECISIONS.md](MODEL-PRECISIONS.md)
+checkpoint is slower and uses more memory. [model-precisions.md](model-precisions.md)
 has a table per model with size, speed, memory and quality against that model's
 own fp32 output.
 
@@ -78,7 +78,7 @@ TTS is measured separately because its rate has a different denominator: seconds
 of audio *generated* per second of wall time, where every case above counts audio
 *consumed*. Chatterbox at fp32 runs at 1.06x and at 8bit at 0.99x with 1.7 GiB
 less peak memory. The per-precision table is in
-[MODEL-PRECISIONS.md](MODEL-PRECISIONS.md).
+[model-precisions.md](model-precisions.md).
 
 ## What is not measured here
 

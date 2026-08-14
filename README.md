@@ -40,7 +40,7 @@ denominator and is not comparable to the rows above.
 Absolute numbers are hardware-specific; the ordering has been stable across the
 models measured so far. [Docs/benchmarks.md](Docs/benchmarks.md) has the full
 table with run dates, memory and methodology, and
-[Docs/MODEL-PRECISIONS.md](Docs/MODEL-PRECISIONS.md) says which checkpoint to
+[Docs/model-precisions.md](Docs/model-precisions.md) says which checkpoint to
 pick — the smallest is rarely the right one.
 
 ## Install
@@ -155,7 +155,7 @@ background as a second output instead of discarding it.
 `audio-tool-bench` measures the MLX and Core ML models on your own machine — 22
 cases, including Chatterbox TTS. The FluidAudio-backed and Apple-framework
 providers are deliberately out of scope, since their numbers describe those
-projects rather than this one. See [Docs/BENCHMARKING.md](Docs/BENCHMARKING.md).
+projects rather than this one. See [Docs/running-benchmarks.md](Docs/running-benchmarks.md).
 
 ## Requirements
 
@@ -174,11 +174,11 @@ projects rather than this one. See [Docs/BENCHMARKING.md](Docs/BENCHMARKING.md).
 | --- | --- |
 | [models.md](Docs/models.md) | Every model: what it is for, its rate, size and repository |
 | [architecture.md](Docs/architecture.md) | How the facade, providers and pipeline fit together |
-| [MODEL-PRECISIONS.md](Docs/MODEL-PRECISIONS.md) | Which checkpoint to download, measured |
+| [model-precisions.md](Docs/model-precisions.md) | Which checkpoint to download, measured |
 | [benchmarks.md](Docs/benchmarks.md) | Speed and memory, with methodology |
-| [BENCHMARKING.md](Docs/BENCHMARKING.md) | Running the benchmark harness yourself |
+| [running-benchmarks.md](Docs/running-benchmarks.md) | Running the benchmark harness yourself |
 | [conversion.md](Docs/conversion.md) | How the PyTorch models became MLX ports, and how parity is proven |
-| [TESTING.md](Docs/TESTING.md) | Test layers and what each one needs |
+| [testing.md](Docs/testing.md) | Test layers and what each one needs |
 | [licenses.md](Docs/licenses.md) | Provenance for every vendored port and every weight |
 
 ## Licence

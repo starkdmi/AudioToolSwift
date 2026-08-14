@@ -67,7 +67,7 @@ measurements and only two of them belong in a comparison.
 ## What it runs
 
 Twenty-two cases, MLX and CoreML. Where a model publishes more than one
-precision, each is its own case — that comparison is what `MODEL-PRECISIONS.md`
+precision, each is its own case — that comparison is what `model-precisions.md`
 is built from:
 
 | id | model |
@@ -202,9 +202,10 @@ inputs, not benchmark material, and a benchmark that needs a file only one check
 has cannot travel.
 
 This is sound because inference cost here is a function of length and rate, not
-content: fixed-size chunks, no early exit, no data-dependent branching. What
-synthetic input cannot measure is output *quality* — that is
-`Tests/AudioToolParityTests`, which compares against recorded reference tensors.
+content: fixed-size chunks, no early exit, no data-dependent branching. Synthetic
+input cannot measure output *quality*; the recorded precision comparisons are in
+[model-precisions.md](model-precisions.md), and cross-implementation validation is
+summarized in [conversion.md](conversion.md).
 
 For a specific recording:
 

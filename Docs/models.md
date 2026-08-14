@@ -2,7 +2,7 @@
 
 Every model this package can run, what it is for, and where its weights come
 from. Sizes are the default precision's download;
-[MODEL-PRECISIONS.md](MODEL-PRECISIONS.md) covers the alternatives and says which
+[model-precisions.md](model-precisions.md) covers the alternatives and says which
 one to pick. Speeds are in [benchmarks.md](benchmarks.md).
 
 Weights are never in this repository. They download from Hugging Face on first

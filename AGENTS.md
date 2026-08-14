@@ -117,7 +117,7 @@ Two layers, answering different questions.
 
 What each model costs on this machine - load time, RTF, peak memory, CPU time -
 written as JSON plus a markdown summary that carries the machine and the settings,
-so runs from different machines are comparable. See `Docs/BENCHMARKING.md`.
+so runs from different machines are comparable. See `Docs/running-benchmarks.md`.
 
 ```bash
 xcodebuild build -scheme audio-tool-bench -configuration Release \
