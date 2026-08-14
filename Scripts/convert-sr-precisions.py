@@ -24,14 +24,21 @@ you want to re-measure, not to produce something to ship.
 
 Usage:
     Scripts/convert-sr-precisions.py Parity/weights/MossFormer2_SR_48K_MLX
+
+Imports the reference wrapper from the sibling research checkout
+(`../Models/python/mossformer2_sr_mlx` relative to this repo). Set
+MOSSFORMER2_SR_MLX to point elsewhere.
 """
-import json, sys
+import json, os, sys
 from pathlib import Path
 import mlx.core as mx
 import mlx.nn as nn
 from mlx.utils import tree_flatten, tree_unflatten
 
-REF = Path("/path/to/clear_voice_research/Models/python/mossformer2_sr_mlx")
+REF = Path(
+    os.environ.get("MOSSFORMER2_SR_MLX")
+    or Path(__file__).resolve().parents[2] / "Models/python/mossformer2_sr_mlx"
+)
 sys.path.insert(0, str(REF))
 from mossformer2_sr_wrapper import MossFormer2_SR_48K
 
