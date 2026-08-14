@@ -145,9 +145,10 @@ by `MLXProcessLimitsTests`). `--gpu-cache-limit` and `--gpu-memory-limit` overri
 but only until a provider's `load()` reinstalls the production values - the report
 records both the requested and the effective figure.
 
-Scope is MLX and CoreML. FluidAudio-backed providers are excluded on purpose - they
-measure a third-party pipeline - and TTS is excluded because its RTF has a
-different denominator. Both are small additions to `BenchmarkCatalog`.
+Scope is MLX and CoreML - 22 cases. FluidAudio-backed providers are excluded on
+purpose: they measure a third-party pipeline. TTS *is* measured, in its own
+column, because its RTF counts audio generated rather than consumed
+(`RateBasis.output`) and the two denominators are not comparable.
 
 Case ids are an interface. Renaming one breaks comparison with every report already
 recorded; bump `BenchmarkReport.currentSchemaVersion` when a field changes meaning.

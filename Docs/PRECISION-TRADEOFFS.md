@@ -20,13 +20,17 @@ clean audio: it is what the precision costs, not what the model scores.
 
 | precision | size | vs fp32 | RTF | peak | SI-SDR vs fp32 | LSD | verdict |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| fp32 | 211 MiB | 1.00x | 15.6x | 1090 MiB | reference | - | ok |
-| fp16 | 106 MiB | 0.50x | 24.6x | 937 MiB | 70.1 dB | 0.007 | good |
-| int8 | 86 MiB | 0.41x | 21.2x | 968 MiB | 59.2 dB | 0.013 | ok |
-| int6 | 75 MiB | 0.36x | 21.1x | 941 MiB | 48.1 dB | 0.044 | avoid |
-| int4 | 64 MiB | 0.30x | 21.3x | 931 MiB | 39.0 dB | 0.152 | avoid |
+| fp32 | 211 MiB | 1.00x | 21.9x | 885 MiB | reference | - | ok |
+| fp16 | 106 MiB | 0.50x | 25.5x | 888 MiB | 70.1 dB | 0.007 | good |
+| int8 | 86 MiB | 0.41x | 21.9x | 978 MiB | 59.2 dB | 0.013 | ok |
+| int6 | 75 MiB | 0.36x | 22.2x | 967 MiB | 48.1 dB | 0.044 | avoid |
+| int4 | 64 MiB | 0.30x | 22.2x | 886 MiB | 39.0 dB | 0.152 | avoid |
 
-Speed and memory from 1 report(s), latest `bench-MacBookPro18-3-20260811-130916-a4e8f0d1.json`.
+Speed and memory from `bench-MacBookPro18-3-20260813-173110-9669e0df.json`, one
+prefetched session holding all five precisions. It supersedes
+`bench-…-20260811-130916-a4e8f0d1`, whose fp32 row (15.6x, 1090 MiB) was measured
+minutes after a download and read 29% slow; the rest of that ladder was ~4% slow
+for the same reason. Standard deviations here are 0.002-0.014 s.
 
 Quality is measured against this model's own fp32 output, not the clean
 signal - it is the cost of the precision change, not the model's accuracy.
@@ -102,7 +106,7 @@ that get compressed, which also explains its 68x worse timing variance.
 | model | choose | why |
 | --- | --- | --- |
 | MossFormerGAN SE (CoreML) | **FP16** | faster, 5.5x lower footprint, far more consistent |
-| MossFormer2 SE | **fp16** | 58% faster than fp32, lowest memory, 70.1 dB |
+| MossFormer2 SE | **fp16** | 16% faster than fp32, half the size, 70.1 dB |
 | MossFormer2 SR | **fp32** | quantization changes nothing measurable; fp16 returns NaN |
 | USS | **fp32** | fp16 is slower, uses more memory, and costs 57 dB |
 | Chatterbox | **fp32 or 8bit** | 8bit matches fp32 speed at 1.7 GiB less peak; fp16 is 37% slower |

@@ -119,9 +119,9 @@ happened to sit beside the FP32 one in a checkout.
 ## Weights already on the machine
 
 `--weights-root <dir>` points at a checkout holding weights, and defaults to the
-sibling research checkout when one is present - so on a development machine eleven
-of the twelve cases run with no downloads at all. Absent in a standalone clone, in
-which case everything resolves through HuggingFace exactly as before.
+sibling research checkout when one is present - so on a development machine most
+cases run with no downloads at all. Absent in a standalone clone, in which case
+everything resolves through HuggingFace exactly as before.
 
 Existence is not enough to be used: a file under a megabyte is treated as a stub
 rather than weights. That is not hypothetical - the checkout's

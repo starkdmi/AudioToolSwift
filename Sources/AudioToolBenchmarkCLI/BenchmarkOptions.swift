@@ -272,9 +272,9 @@ Pacing and isolation
       --stop-on-failure   Abort the run on the first failed case
 
 Limits
-      --gpu-cache-limit <MB>   MLX allocator cache ceiling (default 3072, which is
+      --gpu-cache-limit <MB>   MLX allocator cache ceiling (default 512, which is
                                what this package applies in production)
-      --gpu-memory-limit <MB>  MLX total allocation ceiling (default: 55% of RAM,
+      --gpu-memory-limit <MB>  MLX total allocation ceiling (default: 60% of RAM,
                                capped by the GPU's recommended working set)
 
 Inputs

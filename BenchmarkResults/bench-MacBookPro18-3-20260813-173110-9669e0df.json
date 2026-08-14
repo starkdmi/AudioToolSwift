@@ -1,0 +1,328 @@
+{
+  "configuration": {
+    "buildConfiguration": "release",
+    "cooldownSeconds": 8,
+    "gpuCacheLimitBytes": 536870912,
+    "gpuMemoryLimitBytes": 10307921508,
+    "inputSeconds": 30,
+    "inputSource": "synthetic",
+    "isolation": "process",
+    "iterations": 3,
+    "warmupIterations": 1
+  },
+  "finishedAt": "2026-08-13T17:32:31Z",
+  "results": [
+    {
+      "backend": "mlx",
+      "category": "enhancement",
+      "cpu": {
+        "systemSeconds": 0.740263,
+        "userSeconds": 1.6224150000000002,
+        "utilization": 0.33087358923070703,
+        "wallSeconds": 7.140727084
+      },
+      "effectiveGpuCacheLimitBytes": 536870912,
+      "effectiveGpuMemoryLimitBytes": 10307921508,
+      "environment": {
+        "lowPowerModeEnabled": false,
+        "powerSource": "ac",
+        "thermalStateAtEnd": "nominal",
+        "thermalStateAtStart": "nominal"
+      },
+      "gpuCacheLimitBytes": 536870912,
+      "gpuMemoryLimitBytes": 10307921508,
+      "id": "mlx.mossformer2_se_48k.fp32",
+      "inputFrames": 1440000,
+      "inputSampleRate": 48000,
+      "label": "MossFormer2 SE 48 kHz (FP32)",
+      "memory": {
+        "afterLoadFootprintBytes": 24035952,
+        "baselineFootprintBytes": 10764888,
+        "loadDeltaBytes": 13271064,
+        "mlxActiveAfterLoadBytes": 8,
+        "mlxCacheAtEndBytes": 486788848,
+        "mlxPeakDuringLoadBytes": 10928,
+        "mlxPeakDuringRunBytes": 861111312,
+        "peakFootprintBytes": 927892824,
+        "peakResidentBytes": 325451776,
+        "weightsMaterializedAtLoad": false
+      },
+      "outputFrames": 1440000,
+      "outputSampleRate": 48000,
+      "outputStreams": 1,
+      "status": "completed",
+      "timing": {
+        "firstRunSeconds": 1.57727875,
+        "iterationSeconds": [
+          1.358871125,
+          1.3714505830000001,
+          1.3764485
+        ],
+        "loadSeconds": 0.075924584,
+        "meanSeconds": 1.3689234026666668,
+        "medianSeconds": 1.3714505830000001,
+        "minSeconds": 1.358871125,
+        "realTimeFactor": 21.87464890960639,
+        "realTimeFactorBest": 22.077148780389308,
+        "stdDevSeconds": 0.009057097123281038
+      },
+      "weightsPreCached": true,
+      "weightsSource": "local"
+    },
+    {
+      "backend": "mlx",
+      "category": "enhancement",
+      "cpu": {
+        "systemSeconds": 0.691701,
+        "userSeconds": 1.639294,
+        "utilization": 0.3902484308675033,
+        "wallSeconds": 5.973105375
+      },
+      "effectiveGpuCacheLimitBytes": 536870912,
+      "effectiveGpuMemoryLimitBytes": 10307921508,
+      "environment": {
+        "lowPowerModeEnabled": false,
+        "powerSource": "ac",
+        "thermalStateAtEnd": "nominal",
+        "thermalStateAtStart": "nominal"
+      },
+      "gpuCacheLimitBytes": 536870912,
+      "gpuMemoryLimitBytes": 10307921508,
+      "id": "mlx.mossformer2_se_48k.fp16",
+      "inputFrames": 1440000,
+      "inputSampleRate": 48000,
+      "label": "MossFormer2 SE 48 kHz (FP16)",
+      "memory": {
+        "afterLoadFootprintBytes": 24117872,
+        "baselineFootprintBytes": 11256408,
+        "loadDeltaBytes": 12861464,
+        "mlxActiveAfterLoadBytes": 8,
+        "mlxCacheAtEndBytes": 513772656,
+        "mlxPeakDuringLoadBytes": 10928,
+        "mlxPeakDuringRunBytes": 843610476,
+        "peakFootprintBytes": 930792768,
+        "peakResidentBytes": 220250112,
+        "weightsMaterializedAtLoad": false
+      },
+      "outputFrames": 1440000,
+      "outputSampleRate": 48000,
+      "outputStreams": 1,
+      "status": "completed",
+      "timing": {
+        "firstRunSeconds": 1.231593334,
+        "iterationSeconds": [
+          1.176001792,
+          1.179316792,
+          1.164248875
+        ],
+        "loadSeconds": 0.060142,
+        "meanSeconds": 1.173189153,
+        "medianSeconds": 1.176001792,
+        "minSeconds": 1.164248875,
+        "realTimeFactor": 25.51016520899995,
+        "realTimeFactorBest": 25.76768648369963,
+        "stdDevSeconds": 0.00791793750215067
+      },
+      "weightsPreCached": true,
+      "weightsSource": "cache"
+    },
+    {
+      "backend": "mlx",
+      "category": "enhancement",
+      "cpu": {
+        "systemSeconds": 0.668175,
+        "userSeconds": 1.6244420000000002,
+        "utilization": 0.30741143722848513,
+        "wallSeconds": 7.457812958
+      },
+      "effectiveGpuCacheLimitBytes": 536870912,
+      "effectiveGpuMemoryLimitBytes": 10307921508,
+      "environment": {
+        "lowPowerModeEnabled": false,
+        "powerSource": "ac",
+        "thermalStateAtEnd": "nominal",
+        "thermalStateAtStart": "nominal"
+      },
+      "gpuCacheLimitBytes": 536870912,
+      "gpuMemoryLimitBytes": 10307921508,
+      "id": "mlx.mossformer2_se_48k.int8",
+      "inputFrames": 1440000,
+      "inputSampleRate": 48000,
+      "label": "MossFormer2 SE 48 kHz (INT8)",
+      "memory": {
+        "afterLoadFootprintBytes": 25985672,
+        "baselineFootprintBytes": 11190872,
+        "loadDeltaBytes": 14794800,
+        "mlxActiveAfterLoadBytes": 2696,
+        "mlxCacheAtEndBytes": 486788848,
+        "mlxPeakDuringLoadBytes": 10928,
+        "mlxPeakDuringRunBytes": 1035621136,
+        "peakFootprintBytes": 1025082832,
+        "peakResidentBytes": 211156992,
+        "weightsMaterializedAtLoad": false
+      },
+      "outputFrames": 1440000,
+      "outputSampleRate": 48000,
+      "outputStreams": 1,
+      "status": "completed",
+      "timing": {
+        "firstRunSeconds": 1.92014775,
+        "iterationSeconds": [
+          1.371389291,
+          1.367823958,
+          1.346340542
+        ],
+        "loadSeconds": 0.086415083,
+        "meanSeconds": 1.3618512636666666,
+        "medianSeconds": 1.367823958,
+        "minSeconds": 1.346340542,
+        "realTimeFactor": 21.932646978830004,
+        "realTimeFactorBest": 22.282623945524772,
+        "stdDevSeconds": 0.013550452568671783
+      },
+      "weightsPreCached": true,
+      "weightsSource": "cache"
+    },
+    {
+      "backend": "mlx",
+      "category": "enhancement",
+      "cpu": {
+        "systemSeconds": 0.62716,
+        "userSeconds": 1.522412,
+        "utilization": 0.30614919298462334,
+        "wallSeconds": 7.021321791
+      },
+      "effectiveGpuCacheLimitBytes": 536870912,
+      "effectiveGpuMemoryLimitBytes": 10307921508,
+      "environment": {
+        "lowPowerModeEnabled": false,
+        "powerSource": "ac",
+        "thermalStateAtEnd": "nominal",
+        "thermalStateAtStart": "nominal"
+      },
+      "gpuCacheLimitBytes": 536870912,
+      "gpuMemoryLimitBytes": 10307921508,
+      "id": "mlx.mossformer2_se_48k.int6",
+      "inputFrames": 1440000,
+      "inputSampleRate": 48000,
+      "label": "MossFormer2 SE 48 kHz (INT6)",
+      "memory": {
+        "afterLoadFootprintBytes": 25854576,
+        "baselineFootprintBytes": 11223616,
+        "loadDeltaBytes": 14630960,
+        "mlxActiveAfterLoadBytes": 2696,
+        "mlxCacheAtEndBytes": 486788848,
+        "mlxPeakDuringLoadBytes": 10928,
+        "mlxPeakDuringRunBytes": 962236096,
+        "peakFootprintBytes": 1013728672,
+        "peakResidentBytes": 199426048,
+        "weightsMaterializedAtLoad": false
+      },
+      "outputFrames": 1440000,
+      "outputSampleRate": 48000,
+      "outputStreams": 1,
+      "status": "completed",
+      "timing": {
+        "firstRunSeconds": 1.529112083,
+        "iterationSeconds": [
+          1.35297975,
+          1.349676209,
+          1.354034792
+        ],
+        "loadSeconds": 0.09059125,
+        "meanSeconds": 1.3522302503333334,
+        "medianSeconds": 1.35297975,
+        "minSeconds": 1.349676209,
+        "realTimeFactor": 22.173280863959715,
+        "realTimeFactorBest": 22.22755339388219,
+        "stdDevSeconds": 0.0022739005595500774
+      },
+      "weightsPreCached": true,
+      "weightsSource": "cache"
+    },
+    {
+      "backend": "mlx",
+      "category": "enhancement",
+      "cpu": {
+        "systemSeconds": 0.656699,
+        "userSeconds": 1.5780180000000001,
+        "utilization": 0.31973964888856016,
+        "wallSeconds": 6.989177
+      },
+      "effectiveGpuCacheLimitBytes": 536870912,
+      "effectiveGpuMemoryLimitBytes": 10307921508,
+      "environment": {
+        "lowPowerModeEnabled": false,
+        "powerSource": "ac",
+        "thermalStateAtEnd": "nominal",
+        "thermalStateAtStart": "nominal"
+      },
+      "gpuCacheLimitBytes": 536870912,
+      "gpuMemoryLimitBytes": 10307921508,
+      "id": "mlx.mossformer2_se_48k.int4",
+      "inputFrames": 1440000,
+      "inputSampleRate": 48000,
+      "label": "MossFormer2 SE 48 kHz (INT4)",
+      "memory": {
+        "afterLoadFootprintBytes": 25805448,
+        "baselineFootprintBytes": 11223640,
+        "loadDeltaBytes": 14581808,
+        "mlxActiveAfterLoadBytes": 2696,
+        "mlxCacheAtEndBytes": 486788848,
+        "mlxPeakDuringLoadBytes": 10928,
+        "mlxPeakDuringRunBytes": 854925520,
+        "peakFootprintBytes": 928826712,
+        "peakResidentBytes": 185024512,
+        "weightsMaterializedAtLoad": false
+      },
+      "outputFrames": 1440000,
+      "outputSampleRate": 48000,
+      "outputStreams": 1,
+      "status": "completed",
+      "timing": {
+        "firstRunSeconds": 1.518598125,
+        "iterationSeconds": [
+          1.340198542,
+          1.35247375,
+          1.350022
+        ],
+        "loadSeconds": 0.088522959,
+        "meanSeconds": 1.3475647640000001,
+        "medianSeconds": 1.350022,
+        "minSeconds": 1.340198542,
+        "realTimeFactor": 22.22186008820597,
+        "realTimeFactorBest": 22.384743051003856,
+        "stdDevSeconds": 0.0064960518340441056
+      },
+      "weightsPreCached": true,
+      "weightsSource": "cache"
+    }
+  ],
+  "runID": "9669E0DF-7065-4961-BA74-FF9C00B60E28",
+  "schemaVersion": 1,
+  "startedAt": "2026-08-13T17:31:10Z",
+  "system": {
+    "architecture": "arm64",
+    "chip": "Apple M1 Pro",
+    "dependencyRevisions": {
+      "fluidaudio": "5390df9752c8",
+      "misakiswift": "1ecaf9a6057e",
+      "mlx-swift": "0.29.1",
+      "mlx-swift-lm": "2.29.3",
+      "swift-transformers": "1.1.9",
+      "swiftaudio": "1.5.0"
+    },
+    "efficiencyCores": 2,
+    "gpuHasUnifiedMemory": true,
+    "gpuName": "Apple M1 Pro",
+    "gpuRecommendedWorkingSetBytes": 12713115648,
+    "hardwareModel": "MacBookPro18,3",
+    "kernelVersion": "25.5.0",
+    "logicalCores": 8,
+    "osVersion": "Version 26.5 (Build 25F71)",
+    "performanceCores": 6,
+    "physicalMemoryBytes": 17179869184,
+    "swiftCompiler": "Swift >= 6.3"
+  },
+  "tag": "SE precision ladder, one clean prefetched session (supersedes 20260811-130916)"
+}

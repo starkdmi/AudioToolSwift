@@ -17,11 +17,11 @@ audible.
 
 | precision | size | speed | memory | quality vs fp32 | |
 | --- | ---: | ---: | ---: | ---: | --- |
-| fp32 | 211 MiB | 15.6x | 1090 MiB | reference | situational - reference quality, but fp16 is faster and smaller at 70 dB |
-| fp16 | 106 MiB | 24.6x | 937 MiB | 70.1 dB | **recommended** - fastest, lowest memory, half the size |
-| int8 | 86 MiB | 21.2x | 968 MiB | 59.2 dB | situational - only if 20 MiB of disk matters more than 11 dB and some speed |
-| int6 | 75 MiB | 21.1x | 941 MiB | 48.1 dB | not recommended - slower than fp16, 22 dB worse, saves 31 MiB |
-| int4 | 64 MiB | 21.3x | 931 MiB | 39.0 dB | not recommended - slower than fp16, 31 dB worse, saves 42 MiB |
+| fp32 | 211 MiB | 21.9x | 885 MiB | reference | situational - reference quality, and only 16% slower than fp16 |
+| fp16 | 106 MiB | 25.5x | 888 MiB | 70.1 dB | **recommended** - fastest, half the size, 70 dB |
+| int8 | 86 MiB | 21.9x | 978 MiB | 59.2 dB | situational - 0.41x the download for 59 dB - no faster than fp32, and more memory |
+| int6 | 75 MiB | 22.2x | 967 MiB | 48.1 dB | not recommended - slower than fp16, 22 dB worse, saves 31 MiB |
+| int4 | 64 MiB | 22.2x | 886 MiB | 39.0 dB | not recommended - slower than fp16, 31 dB worse, saves 42 MiB |
 
 Measured on an Apple M1 Pro (16 GB) over 30 s of audio, three timed
 runs per configuration. Speed is realtime factor - higher is faster.

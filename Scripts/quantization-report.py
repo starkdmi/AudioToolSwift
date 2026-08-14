@@ -160,9 +160,9 @@ UNPUBLISHED: dict[str, dict[str, str]] = {
 #   broken      does not produce usable output
 VERDICTS: dict[str, dict[str, tuple[str, str]]] = {
     "mossformer2_se_48k": {
-        "fp32": ("ok", "reference quality, but fp16 is faster and smaller at 70 dB"),
-        "fp16": ("good", "fastest, lowest memory, half the size"),
-        "int8": ("ok", "only if 20 MiB of disk matters more than 11 dB and some speed"),
+        "fp32": ("ok", "reference quality, and only 16% slower than fp16"),
+        "fp16": ("good", "fastest, half the size, 70 dB"),
+        "int8": ("ok", "0.41x the download for 59 dB - no faster than fp32, and more memory"),
         "int6": ("avoid", "slower than fp16, 22 dB worse, saves 31 MiB"),
         "int4": ("avoid", "slower than fp16, 31 dB worse, saves 42 MiB"),
     },
