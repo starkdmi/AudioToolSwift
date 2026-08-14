@@ -132,8 +132,10 @@ resolves each download against that revision and verifies the bytes it wrote
 before returning a path. A host therefore gets the same weights, under the same
 published terms, as the ones audited here — an upstream change to a default
 branch cannot silently alter either. The exceptions are the ASR, diarization and
-Sortformer models, which FluidAudio downloads itself and which are pinned by its
-package version rather than by this table.
+Sortformer models, which FluidAudio downloads itself and which are **not pinned
+at all**: it resolves them at `resolve/main`, so pinning the FluidAudio package
+freezes its downloader and repository names but not the bytes or the terms they
+arrive under. Re-check those three against their cards at each release.
 
 No configured model carries a non-commercial clause. MIT, Apache-2.0 and CC BY
 4.0 all permit commercial use, and NVIDIA's Open Model License explicitly says
