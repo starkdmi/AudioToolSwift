@@ -132,10 +132,29 @@ public actor AudioEngine {
     public func register(enhancer: any SpeechEnhancer, for model: EnhancementModel) {
         self.enhancerProviders[model] = enhancer
     }
-    
+
+    /// Register a voice-activity provider.
+    ///
+    /// Without this, ``detect(_:model:)`` throws ``AudioToolError/modelNotLoaded(_:)``
+    /// and so do the pipeline's `detect()` and `analyze()` stages - `analyze` runs
+    /// VAD and diarization concurrently and fails on the VAD half. The slot existed
+    /// from the start but was reachable only from the internal testing initializer,
+    /// which made two documented pipeline stages unusable outside this package.
+    public func register(vad: any VADProvider) {
+        self.vadProvider = vad
+    }
+
     /// Register a diarization provider
     public func register(diarization: any DiarizationProvider) {
         self.diarizationProvider = diarization
+    }
+
+    /// Register a sound-classification provider.
+    ///
+    /// Same gap as ``register(vad:)``: ``classify(_:)`` and the pipeline's
+    /// `classify()` stage had no way to be satisfied from outside the package.
+    public func register(classifier: any SoundClassifier) {
+        self.classifierProvider = classifier
     }
     
     /// Register a separator provider
