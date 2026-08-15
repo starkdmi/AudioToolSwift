@@ -13,22 +13,29 @@ concurrency:
 jobs:
   test:
     name: Build and test (macOS)
-    # Needs an image carrying Xcode 26 or newer. MisakiSwift 1.0.5 declares
-    # swift-tools-version 6.2, so a Swift 6.0/6.1 toolchain fails during dependency
-    # resolution with a manifest error, before any of this package is compiled - if
-    # that is what a failure here looks like, the runner image is the reason and the
-    # fix is the image, not the code.
+    # Needs an image carrying Swift 6.2 or newer - Xcode 26.0 at the oldest. That
+    # floor comes from MLXUtilsLibrary, which declares swift-tools-version 6.2 in
+    # every tag, and this package now declares it too. A manifest error during
+    # dependency resolution, before any of this package is compiled, means the
+    # runner image's toolchain is too old - the fix is the image, not the code.
     runs-on: macos-26
     timeout-minutes: 30
 
-    steps:
-      - uses: actions/checkout@v4
+    # -warnings-as-errors, for every step in this job. It cannot be unconditional in
+    # Package.swift: unsafe flags make every product ineligible as a versioned
+    # dependency, so the strictness lives here instead, where a warning still fails
+    # the build for anyone proposing a change. Job-level rather than step-level so
+    # the manifest evaluates identically across build, metallib and test - a step
+    # that saw a different value would rebuild the world.
+    env:
+      AUDIOTOOL_STRICT_WARNINGS: "1"
 
-      # The runner image's default Xcode is not always the newest it has, and this
-      # package needs a Swift 6.2 toolchain: MisakiSwift 1.0.5 declares
-      # swift-tools-version 6.2, so an older toolchain cannot even parse the
-      # dependency graph. Pick the highest installed rather than pinning a version
-      # that will rot when the image is updated.
+    steps:
+      - uses: actions/checkout@v5
+
+      # The runner image's default Xcode is not always the newest it has. Pick the
+      # highest installed rather than pinning a version that will rot when the image
+      # is updated.
       - name: Select the newest installed Xcode
         run: |
           set -euo pipefail
@@ -41,8 +48,24 @@ jobs:
           swift --version
           xcodebuild -version
 
+      # Guards the two manifest properties that would make a tagged release
+      # unusable as a dependency. Neither is visible in a build of this package -
+      # only in someone else's resolution - so nothing else in this job would catch
+      # a regression. See the script header for the exact errors a consumer sees.
+      - name: Manifest is publishable
+        run: ./Scripts/check-publishable.sh
+
+      # The release checker guards a one-way door - a tag cannot be taken back -
+      # and every hole it has had was found by reading it rather than running it,
+      # including one that hand-written controls "verified" while using a
+      # differently named fork. One release-ready tree that must pass, then a
+      # mutation of it per rejection reason, plus the versions it must refuse
+      # outright. Pure Python, seconds.
+      - name: Release checker rejects what it should
+        run: python3 Scripts/test-check-release.py
+
       - name: Cache SwiftPM
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .build/checkouts
@@ -78,13 +101,31 @@ jobs:
           fi
           ./Scripts/build_mlx_metallib.sh debug
 
+      # Compiling shaders is not the same question as running them. The metallib
+      # step only proves the Metal *toolchain* is installed; whether the hosted VM
+      # exposes a usable Metal *device* is separate, and GitHub does not promise
+      # GPU acceleration on standard runners (it advertises it for the larger
+      # ones). So probe by executing: MLXSTFTRoundTripTests is hermetic - a
+      # synthetic signal through a forward and inverse transform, no weights, no
+      # network - and it evaluates MLX arrays, which is exactly the capability in
+      # question. If the device is unusable MLX aborts the process, the step
+      # fails, and the suites skip instead of taking the whole job down.
+      - name: Probe Metal execution
+        id: probe
+        continue-on-error: true
+        if: steps.metallib.outcome == 'success'
+        run: swift test --filter MLXSTFTRoundTripTests
+
       - name: Decide whether MLX tests can run
         id: mlx
         run: |
-          if [ "${{ steps.metallib.outcome }}" = "success" ]; then
+          if [ "${{ steps.probe.outcome }}" = "success" ]; then
             echo "skip=0" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "${{ steps.metallib.outcome }}" != "success" ]; then
             echo "::warning::No MLX metallib - MLX-backed tests will skip"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Metallib built but MLX could not execute on this runner - MLX-backed tests will skip"
             echo "skip=1" >> "$GITHUB_OUTPUT"
           fi
 
@@ -98,14 +139,280 @@ jobs:
           SKIP_MLX_TESTS: ${{ steps.mlx.outputs.skip }}
         run: swift test
 
-      # A test that writes outside its scratch directory is the specific regression
-      # that motivated the gating work: suites used to write their outputs into the
-      # sibling model directories. On a runner there is no sibling checkout, so the
-      # observable version of that bug is a dirty tree.
-      - name: Working tree must be clean
+      # A test that writes its outputs into the source tree instead of its scratch
+      # directory is the regression the gating work was about. This catches that
+      # much and no more: --ignored is included so a stray .wav, .safetensors or
+      # benchmark report counts rather than being waved through by .gitignore, with
+      # .build and .swiftpm excluded: build products and tooling state belong there,
+      # and xcodebuild creates the latter on its own.
+      #
+      # It cannot see writes outside this directory - the sibling research checkout
+      # the suites used to scribble into does not exist on a runner, which is the
+      # only reason that half of the guarantee holds here.
+      - name: Source tree must be clean
         run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::The test run modified tracked or untracked files:"
-            git status --porcelain
+          dirty="$(git status --porcelain --ignored=matching | grep -vE '^!! \.(build|swiftpm)/' || true)"
+          if [ -n "$dirty" ]; then
+            echo "::error::The test run left files behind:"
+            echo "$dirty"
             exit 1
           fi
+
+  # The package declares .iOS(.v18) and the README badge advertises it, but nothing
+  # compiled for iOS until 0.1.0 - and it did not: a macOS-only
+  # `homeDirectoryForCurrentUser` in AudioToolCore is a hard error under the iOS
+  # SDK, so every backend failed. A macOS-only job cannot see that class of break,
+  # which is the whole argument for this one.
+  #
+  # Builds each library scheme rather than AudioToolSwift-Package: the package
+  # scheme pulls in the two executables and the test targets, which are macOS
+  # tools, not part of what an iOS app consumes.
+  ios-build:
+    name: Build for iOS
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    env:
+      AUDIOTOOL_STRICT_WARNINGS: "1"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select the newest installed Xcode
+        run: |
+          set -euo pipefail
+          newest="$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)"
+          echo "Using $newest"
+          sudo xcode-select -s "$newest/Contents/Developer"
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-ios-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-ios-${{ runner.os }}-
+
+      # No simulator destination and no signing: this is a compile check for the
+      # declared deployment target, not a run.
+      - name: Build every library product for iOS
+        run: |
+          set -euo pipefail
+          for scheme in AudioTool AudioToolMLX AudioToolCoreML AudioToolFluidAudio \
+                        AudioToolUSS AudioToolTTS AudioToolSpeech \
+                        AudioToolTranslation AudioToolMLXTranslation; do
+            echo "::group::$scheme"
+            xcodebuild build \
+              -scheme "$scheme" \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath .build/DerivedDataiOS \
+              -quiet
+            echo "::endgroup::"
+          done
+
+  # Real models, real audio, real inference.
+  #
+  # No other job loads a checkpoint: `test` runs mocks and hermetic MLX
+  # transforms, `ios-build` and `swift-floor` only compile. Everything that
+  # exercises a model was
+  # therefore unproven on any machine but the author's - and it showed. Three
+  # SortformerComparisonTests were failing against both the old and new FluidAudio
+  # pins when this job was written; nothing was running them.
+  #
+  # Scope is what a runner can actually do: the FluidAudio suites read tracked
+  # CC0/CC-BY fixtures and download their own models, and the CLI smoke test runs
+  # FRCRN end to end. The MLX suites that load weights all reach for the sibling
+  # research checkout and skip here, which is why they are not the target.
+  integration:
+    name: Model-backed tests
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    env:
+      AUDIOTOOL_STRICT_WARNINGS: "1"
+      # Bump to discard every cached model. See the cache step below.
+      MODEL_CACHE_EPOCH: "1"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select the newest installed Xcode
+        run: |
+          set -euo pipefail
+          newest="$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)"
+          echo "Using $newest"
+          sudo xcode-select -s "$newest/Contents/Developer"
+
+      - name: Week stamp
+        id: week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-
+
+      # ~700 MB cold: Parakeet, Sortformer, the diarization models FluidAudio
+      # fetches itself, and the 56 MB FRCRN checkpoint the smoke test needs. The
+      # key changes when the pinned repositories or revisions do, which is exactly
+      # when the cache should be discarded.
+      - name: Cache model weights
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Library/Application Support/FluidAudio
+            ~/Documents/huggingface
+          # No restore-keys on purpose. A prefix fallback would hand back the
+          # previous model set precisely when the catalog or the resolved
+          # dependencies changed - the moment the old weights stop being the right
+          # ones - and FluidAudio will happily reuse files whose names still match.
+          # A cold download is the correct cost of changing what we download.
+          #
+          # The hashes cannot see everything, though: the FluidAudio-managed models
+          # resolve at `main` upstream, so their bytes can change while both hashed
+          # files stay identical, and an exact-key hit would test last month's
+          # weights forever. MODEL_CACHE_EPOCH is the manual lever for that - bump it
+          # to force a cold download - and the ISO week keeps it from going stale
+          # unattended for longer than seven days.
+          key: models-${{ runner.os }}-${{ env.MODEL_CACHE_EPOCH }}-${{ steps.week.outputs.week }}-${{ hashFiles('Sources/AudioToolCore/Services/ModelCatalog.swift', 'Package.resolved') }}
+
+      - name: Build
+        run: swift build --build-tests
+
+      # Unlike the `test` job, this one cannot degrade gracefully: every suite here
+      # evaluates MLX arrays, if only to load audio, so without a metallib they all
+      # skip and the job proves nothing. Fail loudly instead of passing emptily.
+      - name: Build the MLX metallib
+        run: |
+          set -euo pipefail
+          if ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
+            echo "Metal Toolchain missing - downloading"
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          ./Scripts/build_mlx_metallib.sh debug
+
+      # Same probe as the fast job, but here a failure is the point: every suite
+      # below evaluates MLX arrays, if only to load audio. If this cannot run, the
+      # job has nothing to prove and should say so rather than pass emptily.
+      # GitHub does not guarantee GPU acceleration on standard runners; if this is
+      # where the job dies, move it to macos-26-xlarge or a self-hosted machine -
+      # which is what mlx and mlx-swift-lm upstream do for their Metal suites.
+      - name: Probe Metal execution
+        run: swift test --filter MLXSTFTRoundTripTests
+
+      # 84 tests: VAD, transcription including the chunk-boundary regression,
+      # diarization, Sortformer, streaming and the SE pipelines. Two skip for want
+      # of the sibling checkout.
+      - name: FluidAudio suites against real models
+        env:
+          CI: "1"
+          RUN_INTEGRATION_TESTS: "1"
+        run: swift test --filter AudioToolFluidAudioTests
+
+      # The download coordinator against HuggingFace: a 10 KB fixture fetched,
+      # deleted and cancelled for real, including the assertion that cancel()
+      # terminates a stream with DownloadError.cancelled.
+      #
+      # Unreachable from CI until this step existed. The fast job deliberately
+      # omits RUN_INTEGRATION_TESTS and the step above filters to the FluidAudio
+      # target, so nothing this suite proved could gate anything. The filter stays
+      # narrow: the rest of the AudioToolTests integration suites drive Apple
+      # Speech, TTS, Translation and RUAccent, which take 38-60s each.
+      - name: Download coordinator against HuggingFace
+        env:
+          CI: "1"
+          RUN_INTEGRATION_TESTS: "1"
+        run: swift test --filter ModelDownloadIntegrationTests
+
+      # The one check that a downloaded checkpoint, a Metal device and the chunking
+      # path together produce audio - and that the audio is neither silence nor a
+      # copy of the input.
+      - name: CLI end to end
+        run: |
+          set -euo pipefail
+          swift build --product audio-tool
+          ./Scripts/smoke-cli.sh .build/debug/audio-tool
+
+      # See the note on the same step in the `test` job.
+      - name: Source tree must be clean
+        run: |
+          dirty="$(git status --porcelain --ignored=matching | grep -vE '^!! \.(build|swiftpm)/' || true)"
+          if [ -n "$dirty" ]; then
+            echo "::error::The run left files behind:"
+            echo "$dirty"
+            exit 1
+          fi
+
+  # The floor the manifest advertises, actually exercised.
+  #
+  # Every other job selects the newest Xcode on the image, which is Swift 6.3 or
+  # later. That proves the package builds on tomorrow's compiler, not on the 6.2
+  # it claims as a minimum - a 6.3-only construct would sail through while
+  # breaking anyone on Sequoia, who cannot install anything newer than Xcode 26.3.
+  #
+  # Selects an Xcode whose Swift is 6.2.x specifically - not "at least 6.2", which
+  # would go on passing on an image that had dropped every 6.2 toolchain, and not
+  # a named version, because the image's inventory changes without notice. If no
+  # 6.2 is present the job fails rather than skipping: the advertised minimum has
+  # become untestable here, and that is news.
+  swift-floor:
+    name: Build on the declared Swift floor
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    env:
+      AUDIOTOOL_STRICT_WARNINGS: "1"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Two traps here, both of which this job originally fell into.
+      #
+      # /Applications/Xcode.app is the image's default - the newest - and it sorts
+      # *before* every Xcode_26.x.app under `sort -V`, so including it means the
+      # loop accepts Swift 6.3 on its first iteration and the floor is never
+      # exercised. It is skipped.
+      #
+      # And the predicate is "is 6.2", not "is at least 6.2". The second would keep
+      # passing on an image that had dropped every 6.2 toolchain, quietly retesting
+      # the newest compiler under a job named for the floor. If the image stops
+      # carrying 6.2 this fails, which is the correct signal: the advertised
+      # minimum is no longer testable here, and either the image needs pinning or
+      # the floor needs raising.
+      - name: Select an Xcode carrying Swift 6.2
+        run: |
+          set -euo pipefail
+          floor="6.2"
+          selected=""
+          selected_version=""
+          for app in $(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V); do
+            case "$app" in */Xcode.app) continue ;; esac
+            version="$(DEVELOPER_DIR="$app/Contents/Developer" xcrun swift --version 2>/dev/null \
+              | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -n 1)"
+            [ -n "$version" ] || continue
+            echo "candidate: $app -> Swift $version"
+            case "$version" in
+              "$floor"|"$floor".*) selected="$app"; selected_version="$version"; break ;;
+            esac
+          done
+          if [ -z "$selected" ]; then
+            echo "::error::No installed Xcode provides Swift $floor.x, so the declared floor cannot be tested on this image. Pin an older image, install the toolchain, or raise the floor in Package.swift."
+            exit 1
+          fi
+          echo "Using Swift $selected_version from $selected"
+          sudo xcode-select -s "$selected/Contents/Developer"
+
+      - name: Toolchain
+        run: swift --version
+
+      # Build only. The tests are the other jobs' business; what this job answers
+      # is whether the declared minimum can compile the package at all.
+      - name: Build
+        run: swift build --build-tests
