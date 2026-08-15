@@ -251,10 +251,10 @@ verified from the corresponding resolved checkout:
 | `mlx-swift` | 0.29.1 | MIT |
 | `mlx-swift-lm` | 2.29.3 | MIT |
 | `swift-transformers` | 1.1.9 | Apache-2.0 |
-| `SwiftAudio` | 1.2.2 | Apache-2.0 |
-| `MisakiSwift` fork | `1ecaf9a6057ed8bdd69e5a37cdcc0b5cb30eb901` | Apache-2.0 |
+| `SwiftAudio` | 1.5.0 | Apache-2.0 |
+| `MisakiSwift` fork | 1.0.5-static.1 (`1ecaf9a6057ed8bdd69e5a37cdcc0b5cb30eb901`) | Apache-2.0 |
 | `MLXUtilsLibrary` | 0.0.6 | Apache-2.0 |
-| `FluidAudio` | `5390df9752c8fc583596018360c5fd70d6fa6c75` | Apache-2.0 |
+| `FluidAudio` | 0.15.5 | Apache-2.0 |
 | Apple `swift-asn1`, `swift-collections`, `swift-crypto`, `swift-numerics` | see `Package.resolved` | Apache-2.0 |
 | `swift-jinja` | 2.4.2 | Apache-2.0 |
 | `ZIPFoundation` | 0.9.20 | MIT |

@@ -73,9 +73,6 @@ fastlane/test_output
 # forever, so these patterns must stay ahead of any model source landing here.
 # ---------------------------------------------------------------------------
 *.safetensors
-# ...except the USS conditioning vectors: 7 x 2 KB AudioSet class vectors that
-# select what to separate. Source, not weights - the model itself lives on HF.
-!Sources/Models/USS/Embeddings/*.safetensors
 *.mlpackage/
 *.mlmodel
 *.mlmodelc/

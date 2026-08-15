@@ -9,6 +9,50 @@ super-resolution, TTS, transcription, and diarization. Uses MLX for GPU accelera
 
 ## Build Commands
 
+### Warnings are errors, on request
+
+`-warnings-as-errors` is opt-in through an environment variable and CI sets it:
+
+```bash
+AUDIOTOOL_STRICT_WARNINGS=1 swift build --build-tests
+```
+
+It cannot be unconditional. The flag reaches the compiler through
+`.unsafeFlags`, and SwiftPM refuses to let a product whose targets carry unsafe
+flags be used as a versioned dependency - a consumer writing `from: "0.1.0"`
+fails resolution with "contains unsafe build flags". Same reason no dependency
+here is pinned by branch or revision. `Scripts/check-publishable.sh` fails if
+either creeps back, and CI runs it.
+
+Set it for a whole session rather than one step: the manifest is evaluated per
+invocation, so a `swift build` that sees it and a `swift test` that does not will
+rebuild everything between them.
+
+### Tagging a release
+
+```bash
+python3 Scripts/check-release.py 0.1.0
+```
+
+Three things in the tree describe the *current* release and are wrong the moment
+a tag exists, so they belong in the release commit itself rather than after it,
+and that script is what checks them:
+
+1. `README.md` - the install snippet says `branch: "main"` and states that no
+   tagged release exists. Change it to `from: "<version>"`.
+2. `CHANGELOG.md` - the top heading says `unreleased`. Give it an ISO date.
+3. `Docs/licenses.md` - the resolved dependency table must match
+   `Package.resolved`.
+
+Then cut the release with the **Release** workflow, giving it the version. It
+re-runs those checks, `Scripts/check-publishable.sh`, and a check that CI is
+green for that exact commit, and creates the tag only if all of them pass.
+
+Order matters and is the whole point. A workflow triggered by a pushed tag runs
+after GitHub has accepted it, and a tag is immutable in every resolver cache that
+has already seen it - so validation that happens afterwards reports the mistake
+instead of preventing it.
+
 ### Metal/MLX: the build paths that work
 
 MLX needs a compiled Metal shader library. Bare command-line SwiftPM cannot build
@@ -97,9 +141,14 @@ xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' \
 `swift test` is meant to be the fast signal - mocks, no models, no network:
 
 ```bash
-swift test                          # ~16s, 160 tests, no downloads
+SKIP_MLX_TESTS=1 swift test         # ~10s, no GPU and no metallib needed
+swift test                          # same plus the hermetic MLX suites (needs a metallib)
 RUN_INTEGRATION_TESTS=1 swift test  # adds Apple Speech/TTS/Translation, RUAccent
 ```
+
+The first line is the one that works on a fresh clone. Bare `swift test` also
+runs suites that evaluate MLX arrays, and without a staged metallib MLX aborts
+the process rather than failing a test.
 
 Integration suites in the AudioToolTests target are opt-in. They drive Apple
 SpeechAnalyzer, Apple TTS, Apple Translation and RUAccent, take 38-60s each and
@@ -188,8 +237,14 @@ USSProviders.separation(weightsPath: "...resunet30_fp16.safetensors")
 USS model tests read that path from the environment and skip without it:
 
 ```bash
-AUDIOTOOL_USS_WEIGHTS=/path/to/resunet30_fp16.safetensors swift test
+./Scripts/build_mlx_metallib.sh debug     # once, or MLX aborts under SwiftPM
+AUDIOTOOL_USS_WEIGHTS=/path/to/resunet30_fp32.safetensors \
+  RUN_INTEGRATION_TESTS=1 swift test --filter AudioToolUSSTests
 ```
+
+All three parts matter: the suite is gated on `RUN_INTEGRATION_TESTS` before it
+looks at the weights path, so passing only the path gives a green run in which
+every test skipped.
 
 ### Test Suites
 

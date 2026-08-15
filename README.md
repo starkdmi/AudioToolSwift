@@ -4,7 +4,7 @@ On-device speech and audio ML for Apple platforms: speech enhancement, speaker
 separation, super-resolution, source separation, text-to-speech, transcription
 and diarization — one Swift API over MLX and Core ML.
 
-[![Swift 6.0](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
+[![Swift 6.2](https://img.shields.io/badge/Swift-6.2-orange.svg)](https://swift.org)
 [![Platforms](https://img.shields.io/badge/platforms-iOS%2018%20%7C%20macOS%2015-blue.svg)](#requirements)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 
@@ -159,7 +159,11 @@ projects rather than this one. See [Docs/running-benchmarks.md](Docs/running-ben
 
 ## Requirements
 
-- iOS 18+ / macOS 15+, Apple silicon, Swift 6.0
+- iOS 18+ / macOS 15+, Apple silicon, Swift 6.2 (Xcode 26.0 or newer)
+- Swift 6.2 is a hard floor, not a preference: MLXUtilsLibrary, which Kokoro's
+  G2P pulls in, declares `swift-tools-version: 6.2` in every published tag, so an
+  older toolchain cannot load the dependency graph. Xcode 26.0 through 26.3 run on
+  macOS Sequoia 15.6, so this does not require Tahoe.
 - MLX models need a compiled Metal library, which Xcode and `xcodebuild` produce
   automatically. Plain `swift build` does not: run
   `./Scripts/build_mlx_metallib.sh` once if you work through SwiftPM directly.

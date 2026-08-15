@@ -4,11 +4,19 @@
 
 ### Unit Tests (SPM)
 
-Basic unit tests that don't require Metal/GPU:
-
 ```bash
-swift test
+SKIP_MLX_TESTS=1 swift test    # no GPU, no metallib, no weights, no network
 ```
+
+`swift test` on its own is *not* the no-Metal command. Several suites are
+hermetic in every other sense - synthetic input, no weights, no network - but
+still evaluate MLX arrays, and under plain SwiftPM that needs the prebuilt
+metallib described below. Without one they do not fail politely; MLX aborts the
+process. `SKIP_MLX_TESTS=1` is what skips them, and it is what CI sets when its
+Metal probe comes back negative.
+
+With a metallib staged once (`./Scripts/build_mlx_metallib.sh debug`), bare
+`swift test` runs those suites too and is the fuller local signal.
 
 ### MLX Integration Tests
 
@@ -22,8 +30,8 @@ xcodebuild test \
   -destination 'platform=macOS' \
   -derivedDataPath .build/DerivedData
 
-# MLX tests only
-TEST_RUNNER_RUN_MLX_TESTS=1 xcodebuild test \
+# MLX tests only, including the ones that load real weights
+TEST_RUNNER_RUN_INTEGRATION_TESTS=1 xcodebuild test \
   -scheme AudioToolSwift-Package \
   -destination 'platform=macOS' \
   -only-testing:AudioToolMLXIntegrationTests
@@ -31,19 +39,42 @@ TEST_RUNNER_RUN_MLX_TESTS=1 xcodebuild test \
 
 > **The `TEST_RUNNER_` prefix is required under `xcodebuild`.** `xcodebuild`
 > consumes bare environment variables itself and does not forward them to the
-> test process, so `RUN_MLX_TESTS=1 xcodebuild test` runs, skips every gated
-> test, and still reports success. Prefix each variable below with
+> test process, so `RUN_INTEGRATION_TESTS=1 xcodebuild test` runs, skips every
+> gated test, and still reports success. Prefix each variable below with
 > `TEST_RUNNER_` when using `xcodebuild`; use the bare names under `swift test`.
 
 ### Environment Variables
 
+The gates live in `TestGate` (`Tests/TestSupport/TestGate.swift`):
+
 | Variable | Description |
 |----------|-------------|
-| `RUN_MLX_TESTS=1` | Enable MLX integration tests |
-| `SKIP_MLX_TESTS=1` | Skip MLX tests in command-line builds |
-| `FRCRN_WEIGHTS=/path/to/model.safetensors` | FRCRN weights path |
-| `MOSSFORMER_GAN_WEIGHTS=/path/to/weights.npz` | MossFormer GAN weights path |
-| `TEST_AUDIO=/path/to/noisy.wav` | Test audio file |
+| `RUN_INTEGRATION_TESTS=1` | Opt in to tests that need model weights, network, or the sibling research checkout. Off by default, so bare `swift test` stays fast and offline. |
+| `SKIP_INTEGRATION_TESTS=1` | Wins over the above. For a CI job that must stay hermetic. |
+| `SKIP_MLX_TESTS=1` | Skip the MLX-backed suites. Needed without a Metal device, and under plain SwiftPM without a staged metallib. CI sets it when either its metallib build or its Metal execution probe fails. |
+| `RUN_BENCHMARKS=1` | Run the two gated timing suites. They report rather than assert. |
+| `CI=1` | Loosen timing assertions. |
+| `AUDIOTOOL_TEST_OUTPUT_DIR=/path` | Where test artifacts go. Default is a per-run temporary directory the OS reaps. |
+
+Two suites additionally want weights you already have on disk, and **skip
+silently without them** - a green run is not evidence they executed:
+
+| Variable | Description |
+|----------|-------------|
+| `AUDIOTOOL_USS_WEIGHTS=/path/resunet30_fp32.safetensors` | A resunet30 checkpoint. Without it the USS model tests skip (`Tests/AudioToolUSSTests/USSTestWeights.swift`). |
+| `AUDIOTOOL_DEMUCS_WEIGHTS=/path/to/dir` | Directory holding `<stem>.safetensors`. Without it `DemucsShapeTests` skips. |
+
+```bash
+AUDIOTOOL_USS_WEIGHTS=~/weights/resunet30_fp32.safetensors \
+  RUN_INTEGRATION_TESTS=1 swift test --filter AudioToolUSSTests
+```
+
+Under `xcodebuild` these take the `TEST_RUNNER_` prefix like everything else:
+`TEST_RUNNER_AUDIOTOOL_USS_WEIGHTS=...`.
+
+Nothing else is configurable by path: every other provider fetches its own
+weights from HuggingFace, and non-redistributable reference media is found
+through `TestGate.reference(...)` in the sibling checkout or skipped.
 
 ### Specific Test Suites
 
@@ -61,6 +92,42 @@ xcodebuild test \
   -destination 'platform=macOS' \
   -only-testing:AudioToolMLXIntegrationTests/MLXEnhancerIntegrationTests
 ```
+
+## What CI runs
+
+Four jobs, in `.github/workflows/ci.yml`:
+
+- **Build and test (macOS)** - `swift test` with no opt-ins: mocks, hermetic MLX
+  transforms, no network. Also runs `Scripts/check-publishable.sh`, which reads
+  `swift package dump-package` to reject unsafe flags and unstable dependency
+  pins, and `Scripts/test-check-release.py`, which is pure Python and checks that
+  the release checker still rejects what it is supposed to. The fast gate.
+- **Build for iOS** - every library product for `generic/platform=iOS`. Catches
+  the macOS-only API that kept this package from compiling for its declared
+  deployment target.
+- **Model-backed tests** - `RUN_INTEGRATION_TESTS=1` over the FluidAudio suites
+  and `ModelDownloadIntegrationTests` (real HuggingFace fetches of a 10 KB
+  fixture, including the download-cancellation contract) with a cached weights
+  directory, then `Scripts/smoke-cli.sh`, which runs FRCRN end to end and checks
+  the output is the right length, audible, and different from its input. This job
+  needs a Metal toolchain and fails rather than skipping if it has none, because
+  a silent skip here proves nothing.
+- **Build on the declared Swift floor** - compiles with an Xcode carrying Swift
+  6.2 exactly, since every other job takes the newest toolchain on the image and
+  would not notice a 6.3-only construct.
+
+Run the model-backed job locally with:
+
+```bash
+./Scripts/build_mlx_metallib.sh debug          # once; MLX aborts without it
+RUN_INTEGRATION_TESTS=1 swift test --filter AudioToolFluidAudioTests
+RUN_INTEGRATION_TESTS=1 swift test --filter ModelDownloadIntegrationTests
+./Scripts/smoke-cli.sh
+```
+
+Releases are cut by `.github/workflows/release.yml`, which validates and only
+then creates the tag; `python3 Scripts/check-release.py <version>` runs the same
+metadata checks locally.
 
 ## Why xcodebuild?
 
