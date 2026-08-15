@@ -176,7 +176,10 @@ final class FluidAudioSortformerTests: IntegrationTestCase {
         print("Completed in \(String(format: "%.2f", diarizeTime))s")
         print("Detected \(result.speakerCount) speakers, \(result.segments.count) segments")
         
-        XCTAssertGreaterThanOrEqual(result.segments.count, 0, "Should complete without error")
+        // A count is never negative; `>= 0` asserted that the call returned, which
+        // the `try` above already established. The fixture is speech.
+        XCTAssertGreaterThan(result.segments.count, 0, "Sortformer found no speech in a speech fixture")
+        XCTAssertGreaterThanOrEqual(result.speakerCount, 1, "Sortformer found no speakers")
         
         print("✓ Sortformer URL-based test passed")
     }

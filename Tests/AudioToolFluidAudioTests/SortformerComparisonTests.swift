@@ -182,12 +182,28 @@ final class SortformerComparisonTests: IntegrationTestCase {
             throw XCTSkip("mix_8k.wav not found")
         }
         
+        // skipPyannote: Pyannote's offline diarizer throws `noSpeechDetected` on
+        // the `mix*` fixtures. Measured, not guessed - and the obvious explanation
+        // is wrong. It is not the 8 kHz bandwidth: band-limiting speech_dialogue
+        // to 4 kHz and re-running still diarizes (2 speakers becomes 1, no throw),
+        // and mix_16k throws as well despite being 16 kHz. What the three have in
+        // common is being synthetic, continuously overlapped speech mixtures; why
+        // that defeats the segmentation model is not established here. It predates
+        // the FluidAudio 0.15.5 bump - verified against the previously pinned
+        // revision - so it is a standing upstream behaviour, not a regression.
+        //
+        // These tests never used the Pyannote result; they destructure it away.
+        // Running it only converted that behaviour into a red suite.
         let (_, sortformer) = try await runComparison(
             testName: "Mix 8kHz (Speech Mixture)",
-            audioURL: testURL
+            audioURL: testURL,
+            skipPyannote: true
         )
         
-        XCTAssertGreaterThanOrEqual(sortformer.segmentCount, 0)
+        // `>= 0` was the assertion here, which a count satisfies by construction.
+        // Sortformer finds 2 speakers across 6 segments in this mixture.
+        XCTAssertGreaterThan(sortformer.segmentCount, 0, "Sortformer found no speech in a speech mixture")
+        XCTAssertGreaterThanOrEqual(sortformer.speakerCount, 1)
         print("✓ Mix 8k comparison test passed")
     }
     
@@ -197,12 +213,26 @@ final class SortformerComparisonTests: IntegrationTestCase {
             throw XCTSkip("mix3_8k.wav not found")
         }
         
+        // skipPyannote: Pyannote's offline diarizer throws `noSpeechDetected` on
+        // the `mix*` fixtures. Measured, not guessed - and the obvious explanation
+        // is wrong. It is not the 8 kHz bandwidth: band-limiting speech_dialogue
+        // to 4 kHz and re-running still diarizes (2 speakers becomes 1, no throw),
+        // and mix_16k throws as well despite being 16 kHz. What the three have in
+        // common is being synthetic, continuously overlapped speech mixtures; why
+        // that defeats the segmentation model is not established here. It predates
+        // the FluidAudio 0.15.5 bump - verified against the previously pinned
+        // revision - so it is a standing upstream behaviour, not a regression.
+        //
+        // These tests never used the Pyannote result; they destructure it away.
+        // Running it only converted that behaviour into a red suite.
         let (_, sortformer) = try await runComparison(
             testName: "Mix3 8kHz (Speech Mixture)",
-            audioURL: testURL
+            audioURL: testURL,
+            skipPyannote: true
         )
         
-        XCTAssertGreaterThanOrEqual(sortformer.segmentCount, 0)
+        XCTAssertGreaterThan(sortformer.segmentCount, 0, "Sortformer found no speech in a speech mixture")
+        XCTAssertGreaterThanOrEqual(sortformer.speakerCount, 1)
         print("✓ Mix3 8k comparison test passed")
     }
     
@@ -217,7 +247,8 @@ final class SortformerComparisonTests: IntegrationTestCase {
             audioURL: testURL
         )
         
-        XCTAssertGreaterThanOrEqual(sortformer.segmentCount, 0)
+        XCTAssertGreaterThan(sortformer.segmentCount, 0, "Sortformer found no speech in a speech fixture")
+        XCTAssertGreaterThanOrEqual(sortformer.speakerCount, 1)
         print("✓ Test comparison passed")
     }
     
@@ -232,7 +263,8 @@ final class SortformerComparisonTests: IntegrationTestCase {
             audioURL: testURL
         )
         
-        XCTAssertGreaterThanOrEqual(sortformer.segmentCount, 0)
+        XCTAssertGreaterThan(sortformer.segmentCount, 0, "Sortformer found no speech in a three-speaker fixture")
+        XCTAssertGreaterThanOrEqual(sortformer.speakerCount, 1)
         
         // Sortformer supports up to four speakers; this fixture contains three.
         if let p = pyannote {
@@ -254,7 +286,7 @@ final class SortformerComparisonTests: IntegrationTestCase {
             skipPyannote: true
         )
         
-        XCTAssertGreaterThanOrEqual(sortformer.segmentCount, 0)
+        XCTAssertGreaterThan(sortformer.segmentCount, 0, "Sortformer found no speech in a three-speaker fixture")
         XCTAssertGreaterThan(sortformer.rtf, 1.0)
         
         print("✓ Sortformer-only long-speech test passed")
@@ -282,9 +314,9 @@ final class SortformerComparisonTests: IntegrationTestCase {
             results.append(("Test Short", result.pyannote, result.sortformer))
         }
         
-        // Mix 8k
+        // Mix 8k - Sortformer only; see testCompare_Mix8k for why Pyannote is off.
         if let url = Bundle.module.url(forResource: "mix_8k", withExtension: "wav", subdirectory: "Fixtures") {
-            let result = try await runComparison(testName: "Mix 8k", audioURL: url)
+            let result = try await runComparison(testName: "Mix 8k", audioURL: url, skipPyannote: true)
             results.append(("Mix 8k", result.pyannote, result.sortformer))
         }
         

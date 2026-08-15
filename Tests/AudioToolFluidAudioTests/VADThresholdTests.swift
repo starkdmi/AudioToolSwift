@@ -50,12 +50,17 @@ final class VADThresholdTests: IntegrationTestCase {
         let defaultResult = results.first { $0.description == "Default" }
         XCTAssertNotNil(defaultResult, "Should have results for default threshold")
         
-        // All configs should produce valid (possibly empty) segment lists
+        // The default configuration must find the speech that is there. A stricter
+        // threshold may legitimately find none, so only the percentage bound is
+        // asserted for the rest - what was asserted before, that a count is not
+        // negative, holds for every array ever returned.
+        XCTAssertGreaterThan(defaultResult?.segments.count ?? 0, 0,
+            "Default VAD settings found no speech in a two-speaker fixture")
         for result in results {
-            XCTAssertGreaterThanOrEqual(result.segments.count, 0, 
-                "Config '\(result.description)' should produce valid segment count")
             XCTAssertLessThanOrEqual(result.speechPercent, 100.0,
                 "Speech percentage should not exceed 100%")
+            XCTAssertGreaterThanOrEqual(result.speechPercent, 0.0,
+                "Speech percentage should not be negative")
         }
     }
     

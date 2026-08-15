@@ -18,8 +18,14 @@ import USSMLXSwift
 /// Set `AUDIOTOOL_USS_WEIGHTS` to a `resunet30_*.safetensors` file:
 ///
 /// ```bash
-/// AUDIOTOOL_USS_WEIGHTS=/path/to/resunet30_fp16.safetensors swift test
+/// ./Scripts/build_mlx_metallib.sh debug     # once, or MLX aborts under SwiftPM
+/// AUDIOTOOL_USS_WEIGHTS=/path/to/resunet30_fp32.safetensors \\
+///   RUN_INTEGRATION_TESTS=1 swift test --filter AudioToolUSSTests
 /// ```
+///
+/// All three parts are needed. The suites here inherit `IntegrationTestCase`, so
+/// `RUN_INTEGRATION_TESTS=1` gates them before the weights path is even consulted;
+/// supplying only the path reports a green run in which nothing executed.
 ///
 /// Tests that need weights skip themselves when it is unset, so the suite stays green
 /// on a machine that has none.

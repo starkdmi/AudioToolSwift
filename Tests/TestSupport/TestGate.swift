@@ -24,7 +24,8 @@ import Foundation
 /// 2. The specific fixture the test needs is actually on disk.
 ///
 /// ```bash
-/// swift test                          # unit tests only, no models, no network
+/// SKIP_MLX_TESTS=1 swift test         # no models, no network, no GPU
+/// swift test                          # adds the hermetic MLX suites (needs a metallib)
 /// RUN_INTEGRATION_TESTS=1 swift test  # everything the machine has fixtures for
 /// ```
 ///

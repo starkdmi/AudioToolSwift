@@ -3,7 +3,8 @@
 //  AudioTool
 //
 //  Integration tests for model download system with real HuggingFace models
-//  Uses small models (GAN SE CoreML ~2MB, Silero VAD ~2MB) for fast testing
+//  Uses one small fixture for both variants: two ~10 KB text files from
+//  FluidInference/silero-vad-coreml, which download fast and change rarely
 //
 
 import Testing
@@ -145,46 +146,69 @@ struct ModelDownloadIntegrationTests {
     @Test("Cancel download")
     func testCancelDownload() async throws {
         let variant = Self.testVariantGAN
-        
-        // First ensure it's not cached (delete if exists)
-        try? await ModelDownloader.shared.delete(repo: variant.repo)
-        
-        print("Starting download (will cancel)...")
-        
-        // Try to download and cancel - the download stream handles cancellation
+
+        // Not `try?`: if the cache cannot be cleared, the download below may not
+        // happen at all and the test would be measuring nothing.
+        try await ModelDownloader.shared.delete(repo: variant.repo)
+
+        // Cancel to completion *before* consuming a single element. That ordering
+        // is what makes this deterministic rather than merely likely.
+        //
+        // `download` registers the operation and returns the stream from inside
+        // the actor, so there is always something to cancel by the time it hands
+        // back. `cancel` then cancels the task and awaits it, and it can do that
+        // with nobody consuming: `AsyncThrowingStream.makeStream()` buffers
+        // `.unbounded` by default, so the producer never suspends on a yield
+        // waiting for a reader. When this returns, the download is over one way or
+        // the other and the loop below only drains what it left.
+        //
+        // Both earlier versions were races. One cancelled after progress passed
+        // 10%, which on a 10 KB fixture may never happen. The other spawned
+        // `Task { cancel() }`, which merely schedules cancellation - the download
+        // could still win on a fast response and fail the test although the code
+        // was behaving correctly.
+        let stream = await DownloadCoordinator.shared.download(variant: variant)
+        await DownloadCoordinator.shared.cancel(variantId: variant.id)
+
         var progressCount = 0
-        var didFinish = false
-        
+        var terminatingError: Error?
         do {
-            for try await progress in await DownloadCoordinator.shared.download(variant: variant) {
-                progressCount += 1
-                print("  Progress: \(progress.percentComplete)%")
-                
-                // Cancel after some progress
-                if progress.fractionCompleted > 0.1 {
-                    await DownloadCoordinator.shared.cancel(variantId: variant.id)
-                    break
-                }
-            }
-            didFinish = true
-        } catch let error as DownloadError {
-            if case .cancelled = error {
-                print("✓ Download was cancelled")
-            } else {
-                throw error
-            }
+            for try await _ in stream { progressCount += 1 }
+        } catch {
+            terminatingError = error
         }
-        
-        print("✓ Download handled (finished=\(didFinish), progressUpdates=\(progressCount))")
+
+        guard let terminatingError else {
+            Issue.record(
+                Comment(rawValue: """
+                    the stream completed after \(progressCount) progress events \
+                    although cancel() returned before it was consumed - cancel() \
+                    awaits the operation, so nothing can have been in flight after it
+                    """)
+            )
+            return
+        }
+        guard let downloadError = terminatingError as? DownloadError,
+              case .cancelled = downloadError else {
+            throw terminatingError
+        }
+
+        // The documented contract: cancel() cancels the operation, waits for it,
+        // and removes it. Not that the partial download is rolled back - nothing
+        // promises that, and asserting it would fail whenever Hub happened to
+        // finish writing before the cancellation was observed.
+        let active = await DownloadCoordinator.shared.activeDownloadIds
+        #expect(active.contains(variant.id) == false, "still active after cancellation: \(active)")
+        #expect(await DownloadCoordinator.shared.isDownloading(variantId: variant.id) == false)
     }
-    
+
     // MARK: - Storage Check Tests
     
     @Test("Storage check passes for small model")
     func testStorageCheckPasses() async throws {
         let variant = Self.testVariantGAN
         
-        // Should not throw - we have enough space for a 2MB model
+        // Should not throw - the fixture is ~10 KB
         try await DownloadCoordinator.shared.checkStorageAvailable(for: variant)
         print("✓ Storage check passed")
     }
@@ -234,10 +258,12 @@ struct ModelDownloadIntegrationTests {
     @Test("Active downloads tracking")
     func testActiveDownloadsTracking() async throws {
         let ids = await DownloadCoordinator.shared.activeDownloadIds
-        
-        // Verify we can access the array
-        #expect(ids.count >= 0)
-        print("Active downloads: \(ids.count)")
+
+        // `ids.count >= 0` was the assertion here, which every array satisfies.
+        // The suite is `.serialized` and does contain download tests, so the
+        // invariant worth stating is that they clean up after themselves: by the
+        // time this runs, nothing is still in flight.
+        #expect(ids.isEmpty, "a previous test left a download in flight: \(ids)")
     }
     
     @Test("Check is downloading status")

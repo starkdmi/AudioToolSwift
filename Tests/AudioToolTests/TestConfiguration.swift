@@ -15,8 +15,11 @@ import AudioToolTestSupport
 /// Centralized test configuration for AudioTool tests.
 ///
 /// Environment variables for controlling test execution:
-/// - `SKIP_INTEGRATION_TESTS=1`: Skip all integration tests (default: run them)
-/// - `SKIP_MLX_TESTS=1`: Skip MLX-specific tests (default: run them)
+/// - `RUN_INTEGRATION_TESTS=1`: Run the integration suites. They are **off** by
+///   default - this used to say the opposite - so a bare run skips them.
+/// - `SKIP_INTEGRATION_TESTS=1`: Force them off even when the above is set.
+/// - `SKIP_MLX_TESTS=1`: Skip the MLX-backed suites. Needed on any machine
+///   without a Metal device or, under plain SwiftPM, without a staged metallib.
 /// - `CI=1`: Indicates running in CI environment (adjusts performance thresholds)
 public enum TestConfiguration {
     
@@ -26,7 +29,11 @@ public enum TestConfiguration {
     // shares. Duplicating the env checks per target is how the integration suites
     // ended up ungated in the first place.
 
-    /// Whether to skip integration tests (set SKIP_INTEGRATION_TESTS=1)
+    /// Whether integration tests are explicitly suppressed (SKIP_INTEGRATION_TESTS=1).
+    ///
+    /// Rarely what a test wants: it is false in a default environment, where
+    /// integration tests are off anyway for want of the opt-in. Gate on
+    /// ``runIntegrationTests`` instead.
     public static var skipIntegrationTests: Bool {
         ProcessInfo.processInfo.environment["SKIP_INTEGRATION_TESTS"] == "1"
     }
@@ -40,7 +47,8 @@ public enum TestConfiguration {
     /// run. Opting in keeps `swift test` usable while leaving them one variable away.
     ///
     /// ```bash
-    /// swift test                          # fast: mocks only
+    /// SKIP_MLX_TESTS=1 swift test         # fast: mocks, no GPU
+    /// swift test                          # same plus hermetic MLX (needs a metallib)
     /// RUN_INTEGRATION_TESTS=1 swift test  # everything
     /// ```
     public static var runIntegrationTests: Bool { TestGate.runIntegrationTests }
@@ -76,8 +84,17 @@ public enum TestConfiguration {
 
 // MARK: - Skip Helpers for Swift Testing
 
-/// Checks if integration tests should run, throws Issue.record if skipped.
-/// Use in Swift Testing (@Test) functions.
+/// Cancels a `@Test` unless integration tests were opted into.
+///
+/// Swift Testing has no `XCTSkip`; `Test.cancel` is the runtime equivalent, and
+/// a cancelled test is reported as cancelled while the run still passes. What
+/// this did before was record an `Issue` and throw - both of which are ordinary
+/// failures - so a test following the example below failed rather than skipped,
+/// and it consulted `SKIP_INTEGRATION_TESTS` rather than the opt-in every
+/// `@Suite` here gates on, meaning it also ran by default.
+///
+/// Prefer the suite-level trait where you can; this is for a single test inside a
+/// suite that is otherwise hermetic.
 ///
 /// Example:
 /// ```swift
@@ -86,47 +103,34 @@ public enum TestConfiguration {
 ///     // ... test code
 /// }
 /// ```
-public func requireIntegrationTests(file: StaticString = #filePath, line: Int = #line) throws {
-    if TestConfiguration.skipIntegrationTests {
-        Issue.record("Integration tests skipped (SKIP_INTEGRATION_TESTS=1)", sourceLocation: SourceLocation(fileID: "\(file)", filePath: "\(file)", line: line, column: 0))
-        throw TestSkipped(reason: "Integration tests disabled via SKIP_INTEGRATION_TESTS=1")
+public func requireIntegrationTests() throws {
+    if !TestConfiguration.runIntegrationTests {
+        try Test.cancel(Comment(rawValue: TestGate.integrationDisabled))
     }
 }
 
-/// Checks if MLX tests should run, throws Issue.record if skipped.
-/// Use in Swift Testing (@Test) functions.
-public func requireMLXTests(file: StaticString = #filePath, line: Int = #line) throws {
+/// Cancels a `@Test` when MLX is unavailable. See ``requireIntegrationTests()``.
+public func requireMLXTests() throws {
     if TestConfiguration.skipMLXTests {
-        Issue.record("MLX tests skipped (SKIP_MLX_TESTS=1)", sourceLocation: SourceLocation(fileID: "\(file)", filePath: "\(file)", line: line, column: 0))
-        throw TestSkipped(reason: "MLX tests disabled via SKIP_MLX_TESTS=1")
+        try Test.cancel(Comment(rawValue: TestGate.mlxDisabled))
     }
 }
 
-/// Checks if a required file exists, throws with proper skip message if not.
-public func requireFile(at path: String, description: String = "Required file", file: StaticString = #filePath, line: Int = #line) throws {
+/// Cancels a `@Test` when a file it needs is absent.
+public func requireFile(at path: String, description: String = "Required file") throws {
     guard FileManager.default.fileExists(atPath: path) else {
-        Issue.record("\(description) not found at: \(path)", sourceLocation: SourceLocation(fileID: "\(file)", filePath: "\(file)", line: line, column: 0))
-        throw TestSkipped(reason: "\(description) not found at: \(path)")
+        try Test.cancel(Comment(rawValue: "\(description) not found at: \(path)"))
     }
 }
 
-/// Checks if a required directory exists.
-public func requireDirectory(at path: String, description: String = "Required directory", file: StaticString = #filePath, line: Int = #line) throws {
-    var isDir: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
-        Issue.record("\(description) not found at: \(path)", sourceLocation: SourceLocation(fileID: "\(file)", filePath: "\(file)", line: line, column: 0))
-        throw TestSkipped(reason: "\(description) not found at: \(path)")
+/// Cancels a `@Test` when a directory it needs is absent.
+public func requireDirectory(at path: String, description: String = "Required directory") throws {
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
+        try Test.cancel(Comment(rawValue: "\(description) not found at: \(path)"))
     }
 }
 
-/// Error thrown when a test should be skipped.
-public struct TestSkipped: Error {
-    public let reason: String
-    
-    public init(reason: String) {
-        self.reason = reason
-    }
-}
 
 // MARK: - Deterministic Test Data
 

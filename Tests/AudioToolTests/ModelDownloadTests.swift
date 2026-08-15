@@ -914,29 +914,73 @@ struct ModelDownloaderCacheTests {
     
     @Test("Check cache path format")
     func testCachePathFormat() {
-        let path = ModelDownloader.shared.localPath(for: "testuser/test-model")
-        
-        // Path should be nil if not downloaded (unless this was previously cached)
-        // If it exists, it should be in the HF cache structure
-        if let path {
-            #expect(path.path.contains(".cache/huggingface/hub"))
-        }
+        // A repository nobody has downloaded has no local path. The previous
+        // version asserted the shape of the path *if* one came back, which on the
+        // expected answer - nil - asserted nothing at all.
+        let path = ModelDownloader.shared.localPath(for: "testuser/test-model-\(UUID().uuidString)")
+        #expect(path == nil)
     }
     
     @Test("List cached repositories")
-    func testListCachedRepos() {
-        let repos = ModelDownloader.shared.cachedRepositories()
-        
-        // Verify we can access the array
-        #expect(repos.count >= 0)
+    func testListCachedRepos() throws {
+        // Against a seeded home rather than the machine's. The version of this test
+        // that asked the real cache asserted `repos.count >= 0`, then - after that
+        // was noticed - uniqueness and an owner/name shape; on a clean runner the
+        // list is empty, so all three passed without executing anything. The
+        // injectable overload is right there.
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cached-repos-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        // Both layouts at once: the Swift Hub's owner/name directories and the
+        // Python CLI's models--owner--name, including one repository present in
+        // both, which must be reported once.
+        let swiftModels = home.appendingPathComponent("Documents/huggingface/models", isDirectory: true)
+        for path in ["starkdmi/FRCRN_SE_16K_MLX", "starkdmi/Kokoro-82M"] {
+            try FileManager.default.createDirectory(
+                at: swiftModels.appendingPathComponent(path, isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        }
+        let pythonHub = home.appendingPathComponent(".cache/huggingface/hub", isDirectory: true)
+        for entry in ["models--starkdmi--FRCRN_SE_16K_MLX", "models--mlx-community--Kokoro-82M-bf16", "not-a-model"] {
+            try FileManager.default.createDirectory(
+                at: pythonHub.appendingPathComponent(entry, isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        }
+
+        let repos = ModelDownloader.cachedRepositories(homeDirectory: home)
+
+        #expect(repos == [
+            "mlx-community/Kokoro-82M-bf16",
+            "starkdmi/FRCRN_SE_16K_MLX",
+            "starkdmi/Kokoro-82M",
+        ])
     }
     
     @Test("Total cache size")
-    func testTotalCacheSize() {
-        let size = ModelDownloader.shared.totalCacheSize()
-        
-        // Size should be non-negative
-        #expect(size >= 0)
+    func testTotalCacheSize() throws {
+        // `size >= 0` was the assertion, which an Int64 sum of file sizes cannot
+        // fail. Against a seeded home the answer is knowable: the bytes written.
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cache-size-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        #expect(ModelDownloader.totalCacheSize(homeDirectory: home) == 0)
+
+        let swiftModels = home
+            .appendingPathComponent("Documents/huggingface/models/owner/model", isDirectory: true)
+        let pythonHub = home
+            .appendingPathComponent(".cache/huggingface/hub/models--owner--model", isDirectory: true)
+        for directory in [swiftModels, pythonHub] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try Data(count: 1024).write(to: swiftModels.appendingPathComponent("weights.bin"))
+        try Data(count: 512).write(to: pythonHub.appendingPathComponent("weights.bin"))
+
+        // Both cache layouts are counted, and only the bytes actually written.
+        #expect(ModelDownloader.totalCacheSize(homeDirectory: home) == 1536)
     }
     
     @Test("Check downloaded status")
