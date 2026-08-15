@@ -108,7 +108,10 @@ public class MossFormer2Pipeline {
         from weightsPath: String,
         quantization: QuantizationParameters? = nil
     ) throws {
+        // See FRCRN.loadWeights: no absolute paths on stdout from a library.
+        #if DEBUG
         print("Loading weights from \(weightsPath)...")
+        #endif
         let loadStart = Date()
 
         if let quantization = quantization ?? QuantizationParameters.resolve(forWeightsAt: weightsPath) {
@@ -198,7 +201,9 @@ public class MossFormer2Pipeline {
         // Save if output path provided
         if let outputPath = outputPath {
             try audioSaver.save(enhancedAudio, to: outputPath)
+            #if DEBUG
             print("Enhanced audio saved to: \(outputPath)")
+            #endif
         }
         
         let totalEnd = Date()

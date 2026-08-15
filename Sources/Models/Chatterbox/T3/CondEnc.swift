@@ -1,22 +1,29 @@
 import MLX
 import MLXNN
 
+/// Conditioning for T3.
+///
+/// Upstream's struct also carries a `clap_emb`, and its conditioning encoder has
+/// no implementation for one - the Python asserts CLAP is off. This port mirrored
+/// the field and answered a non-nil value with `fatalError("clap_emb not
+/// implemented")`, so the only thing the option could do was crash the host app.
+/// No checkpoint published for this model sets it. It is not modelled here;
+/// passing one is now a compile error rather than a runtime abort, and the
+/// encoder still concatenates the zero-width CLAP slot so the sequence layout is
+/// unchanged.
 public struct T3Cond {
     public var speaker_emb: MLXArray
-    public var clap_emb: MLXArray? = nil
     public var cond_prompt_speech_tokens: MLXArray? = nil
     public var cond_prompt_speech_emb: MLXArray? = nil
     public var emotion_adv: MLXArray? = nil
 
     public init(
         speaker_emb: MLXArray,
-        clap_emb: MLXArray? = nil,
         cond_prompt_speech_tokens: MLXArray? = nil,
         cond_prompt_speech_emb: MLXArray? = nil,
         emotion_adv: MLXArray? = nil
     ) {
         self.speaker_emb = speaker_emb
-        self.clap_emb = clap_emb
         self.cond_prompt_speech_tokens = cond_prompt_speech_tokens
         self.cond_prompt_speech_emb = cond_prompt_speech_emb
         self.emotion_adv = emotion_adv ?? MLXArray(0.5)
@@ -61,9 +68,8 @@ public final class T3CondEnc: Module {
 
         let empty = cond_spkr[0..., 0..<0, 0...]
 
-        if cond.clap_emb != nil {
-            fatalError("clap_emb not implemented")
-        }
+        // Zero-width, always: see T3Cond on why CLAP conditioning is not modelled.
+        // Kept in the concatenation because it is where upstream's layout puts it.
         let cond_clap = empty
 
         var cond_prompt_speech_emb = cond.cond_prompt_speech_emb

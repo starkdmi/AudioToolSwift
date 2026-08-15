@@ -165,7 +165,11 @@ public class FRCRN_SE_16K: Module {
     
     /// Load weights from safetensors file
     public func loadWeights(from weightsPath: String) throws {
+        // A library has no business writing a user's absolute paths to stdout;
+        // the caller already reports what it is loading.
+        #if DEBUG
         print("Loading weights from \(weightsPath)...")
+        #endif
         
         let weights = try MLX.loadArrays(url: URL(fileURLWithPath: weightsPath))
         print("  Found \(weights.count) weights in safetensors")
