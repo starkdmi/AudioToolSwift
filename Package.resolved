@@ -1,12 +1,13 @@
 {
-  "originHash" : "e9a5d05fe4e0e5538e18e4e9f12349a2ea0b12e2d8b72960b7634f2f4f5a5ea0",
+  "originHash" : "b8071eface89592b88611425cbaaebe0873bb051aabc4a42830899b444ce34ad",
   "pins" : [
     {
       "identity" : "fluidaudio",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/FluidInference/FluidAudio",
       "state" : {
-        "revision" : "5390df9752c8fc583596018360c5fd70d6fa6c75"
+        "revision" : "19600a485baa4998812e4654b70d2bab8f2c9949",
+        "version" : "0.15.5"
       }
     },
     {
@@ -14,7 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/starkdmi/MisakiSwift",
       "state" : {
-        "revision" : "1ecaf9a6057ed8bdd69e5a37cdcc0b5cb30eb901"
+        "revision" : "1ecaf9a6057ed8bdd69e5a37cdcc0b5cb30eb901",
+        "version" : "1.0.5-static.1"
       }
     },
     {

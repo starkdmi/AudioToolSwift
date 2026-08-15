@@ -1,12 +1,33 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 // The swift-tools-version declares the minimum version of Swift required to build this package.
+//
+// 6.2, not the 6.0 this said for a long time, because 6.0 was never true. Every
+// published tag of MLXUtilsLibrary - 0.0.1 through 0.0.7 - declares
+// swift-tools-version 6.2, and MisakiSwift depends on it too, so a Swift 6.0 or
+// 6.1 toolchain cannot even load this graph's manifests, let alone compile it.
+// Declaring 6.0 only moved the error onto a transitive dependency.
+//
+// The practical floor is therefore Xcode 26.0, the first release carrying Swift
+// 6.2. That still runs on macOS Sequoia 15.6; Xcode 26.4.1 and later are the ones
+// that require macOS Tahoe.
 
 import PackageDescription
+import Foundation
 
-// Common Swift settings for all targets
-let commonSwiftSettings: [SwiftSetting] = [
-    .unsafeFlags(["-warnings-as-errors"])
-]
+// Common Swift settings for all targets.
+//
+// `-warnings-as-errors` goes through `.unsafeFlags`, and SwiftPM refuses to let a
+// product whose targets carry unsafe flags be used as a *versioned* dependency:
+// a consumer declaring `from: "0.1.0"` fails resolution with "the target 'AudioTool'
+// in product 'AudioTool' contains unsafe build flags". Only the root package may
+// use them. So the flag is opt-in through the environment - CI sets it, developers
+// can, and a package that depends on this one never sees it.
+//
+//   AUDIOTOOL_STRICT_WARNINGS=1 swift build
+let commonSwiftSettings: [SwiftSetting] =
+    ProcessInfo.processInfo.environment["AUDIOTOOL_STRICT_WARNINGS"] == "1"
+    ? [.unsafeFlags(["-warnings-as-errors"])]
+    : []
 
 // FluidAudio wrapper has Sendable issues in upstream dependency - exclude from strict mode
 let fluidAudioSwiftSettings: [SwiftSetting] = []
@@ -113,40 +134,55 @@ let package = Package(
         //   warns that this "may cause spurious casting failures and mysterious
         //   crashes", and here it did: a segfault partway through the XCTest process,
         //   and a CLI that linked but could not launch because MLX.framework was not
-        //   on its rpath. That is why AudioToolCLI still excludes AudioToolTTS below.
-        //   Verified: with the fork, 8+ duplicate-class warnings and the signal 11
-        //   both go to zero and AudioToolMLXIntegrationTests completes.
+        //   on its rpath. Both are fixed on the fork - see the note on AudioToolCLI
+        //   below, which no longer excludes AudioToolTTS for that reason. Verified:
+        //   with the fork, 8+ duplicate-class warnings and the signal 11 both go to
+        //   zero and AudioToolMLXIntegrationTests completes.
         //
-        //   swift-tools-version 6.2, which would raise this package's real minimum
-        //   toolchain to Xcode 26 while the manifest here claims 6.0. Nothing in
-        //   MisakiSwift needs 6.2; the fork declares 6.0 and compiles unchanged.
+        //   swift-tools-version 6.2. This was the second reason for the fork, back
+        //   when the floor here was thought to be 6.0. It is no longer a reason for
+        //   anything: MLXUtilsLibrary declares 6.2 in every tag and MisakiSwift
+        //   depends on it, so the graph requires 6.2 whichever manifest is used,
+        //   and this package now says so at the top. The dylib problem above is
+        //   what keeps the fork alive.
         //
-        // Pinned by revision rather than version because the fork carries no tag of
-        // its own, and pinned off 1.0.5 rather than 1.0.6 because 1.0.6 requires
-        // mlx-swift exactly 0.30.2, which conflicts with the 0.29.x every model
-        // target here was built against.
+        // Pinned off 1.0.5 rather than 1.0.6 because 1.0.6 requires mlx-swift exactly
+        // 0.30.2, which conflicts with the 0.29.x every model target here was built
+        // against.
+        //
+        // `exact:` on a tag rather than `revision:` because a package that carries a
+        // revision requirement cannot be depended on by version at all - SwiftPM
+        // rejects the graph with "required using a stable-version but depends on an
+        // unstable-version package". The tag names the same commit the revision pin
+        // used, 1ecaf9a6057ed8bdd69e5a37cdcc0b5cb30eb901; the prerelease suffix keeps
+        // it distinct from upstream's own 1.0.5.
         //
         // Send the same one-line change upstream and this becomes a version range
         // again: github.com/mlalma/MisakiSwift, remove `type: .dynamic`.
         .package(
             url: "https://github.com/starkdmi/MisakiSwift",
-            revision: "1ecaf9a6057ed8bdd69e5a37cdcc0b5cb30eb901"
+            exact: "1.0.5-static.1"
         ),
         .package(url: "https://github.com/mlalma/MLXUtilsLibrary.git", from: "0.0.6"),
 
         // VAD, transcription, diarization. Upstream, not a fork.
         //
-        // Pinned to a revision rather than a version range because the newest tag,
-        // v0.9.1, predates FluidInference/FluidAudio#264 - the mel-context fix for
+        // This was pinned to a revision because the newest tag at the time, v0.9.1,
+        // predated FluidInference/FluidAudio#264 - the mel-context fix for
         // chunk-boundary transcription loss, authored here and merged upstream on
-        // 2026-01-23. Without it, audio landing on a chunk boundary produces
-        // all-blank predictions. No tagged release contains that commit yet, so a
-        // revision pin is the only way to depend on correct behaviour. Switch to a
-        // version range once upstream cuts a release past it.
-        .package(
-            url: "https://github.com/FluidInference/FluidAudio",
-            revision: "5390df9752c8fc583596018360c5fd70d6fa6c75"
-        ),
+        // 2026-01-23, without which audio landing on a chunk boundary produces
+        // all-blank predictions. That reason expired: every release from v0.10 on
+        // carries the fix, and `ChunkProcessor.melContextSamples` is present in
+        // v0.15.5.
+        //
+        // The pin had to go regardless of the fix. A package holding a revision
+        // requirement cannot itself be depended on by version - SwiftPM rejects the
+        // graph with "required using a stable-version but depends on an
+        // unstable-version package" - so a SHA here made this package unpublishable.
+        // The revision it named was 32 commits past v0.15.5 on main; those commits
+        // are upstream's own download and Kokoro-ANE work, none of which this package
+        // calls into.
+        .package(url: "https://github.com/FluidInference/FluidAudio", .upToNextMinor(from: "0.15.5")),
     ],
     targets: [
         // MARK: - Vendored model implementations
@@ -277,6 +313,13 @@ let package = Package(
                 .product(name: "Hub", package: "swift-transformers"),
             ],
             path: "Sources/AudioToolCore",
+            // Apple requires an SDK to declare its own required-reason API use
+            // rather than lean on the consuming app's manifest. This target reads
+            // volume capacity before a download and file modification dates on the
+            // cache; both are declared there.
+            resources: [
+                .copy("PrivacyInfo.xcprivacy")
+            ],
             swiftSettings: commonSwiftSettings
         ),
 
@@ -318,6 +361,10 @@ let package = Package(
                 .product(name: "MLXNN", package: "mlx-swift"),
             ],
             path: "Sources/AudioToolCoreML",
+            // Reads a compiled model's modification date; see AudioToolCore above.
+            resources: [
+                .copy("PrivacyInfo.xcprivacy")
+            ],
             swiftSettings: commonSwiftSettings
         ),
         // Note: FluidAudio has Sendable issues upstream - excluded from strict warnings
