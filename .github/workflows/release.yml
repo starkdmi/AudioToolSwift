@@ -1,0 +1,140 @@
+# Validate, then tag. In that order, because the other order does not work.
+#
+# A workflow triggered by `push: tags:` starts only after GitHub has accepted the
+# tag. By then SwiftPM consumers can resolve it, and a red run reports the mistake
+# rather than preventing it - a tag is immutable in every resolver cache that has
+# seen it. So the tag is created *here*, only after the checks pass, and this
+# workflow is the supported way to cut a release.
+#
+# Locally, the same metadata checks are one command:
+#
+#   python3 Scripts/check-release.py 0.1.0
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to tag, e.g. 0.1.0'
+        required: true
+        type: string
+      dry_run:
+        description: 'Run the checks without creating the tag'
+        required: false
+        default: false
+        type: boolean
+
+# contents: write to push the tag, actions: read to ask whether CI passed.
+# Everything unlisted is `none`, which is the point - but it also means an
+# omission is a runtime failure rather than a warning: without actions: read the
+# `gh run list` below fails on a private repository.
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    name: Validate and tag
+    # workflow_dispatch offers a branch picker, and GITHUB_SHA follows it. Without
+    # this, a green feature branch could be handed a release tag by a slip of the
+    # dropdown.
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    # The version reaches the shell as an environment variable, never as `${{ }}`
+    # inside a `run:` block. Expressions are substituted into the script *source*
+    # before it executes, so a value containing a quote would run as code - in a
+    # job holding contents: write, and before any validation could reject it.
+    env:
+      VERSION: ${{ inputs.version }}
+
+    steps:
+      # First, before the input is used for anything else.
+      - name: Version must be a semantic version
+        run: |
+          set -euo pipefail
+          case "$VERSION" in
+            *[!0-9.]*|.*|*.|*..*)
+              echo "::error::'$VERSION' is not a semantic version like 0.1.0"
+              exit 1
+              ;;
+          esac
+          printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+            echo "::error::'$VERSION' is not a semantic version like 0.1.0 (no leading zeros)"
+            exit 1
+          }
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # The branch filter above proves the *ref* was main; this proves the commit
+      # is the one main points at, so a race between dispatch and a push cannot
+      # tag something that was never on main.
+      - name: Commit must be the tip of main
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::HEAD is $(git rev-parse HEAD) but origin/main is $(git rev-parse origin/main)"
+            exit 1
+          fi
+
+      - name: Refuse a version that is already tagged
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "::error::$VERSION is already tagged; a tag cannot be moved once anyone has resolved it"
+            exit 1
+          fi
+
+      # README install snippet, changelog heading and date, and the resolved
+      # dependency table against Package.resolved.
+      - name: Tree must describe this release
+        run: python3 Scripts/check-release.py "$VERSION"
+
+      # The two properties that decide whether the tag is usable at all: no unsafe
+      # flags, no branch or revision dependencies.
+      - name: Manifest must be publishable
+        run: ./Scripts/check-publishable.sh
+
+      # A tag whose CI never passed is worth no more than an untested commit, so
+      # require the run for this exact SHA to be green.
+      - name: CI must be green for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          conclusion="$(gh run list --commit "$GITHUB_SHA" --workflow CI \
+            --json conclusion --jq '.[0].conclusion // "missing"')"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::The CI run for $GITHUB_SHA is '$conclusion', not success"
+            exit 1
+          fi
+
+      # The tip check above ran before several minutes of validation, and main can
+      # move in that window, so it is repeated here, immediately before the only
+      # step that cannot be undone.
+      #
+      # This narrows the window - what remains spans two git config calls, the
+      # local tag creation and a push round trip, so tens or hundreds of
+      # milliseconds, not microseconds - but it does not close it, and git offers
+      # no create-tag-if-branch-still-points-here primitive to close it with. What is guaranteed either way is the part that
+      # matters: the tag names the commit that was checked out and validated, so it
+      # can never point at something unvalidated. The residual risk is only that
+      # main has moved past it, which the next release supersedes anyway.
+      - name: Create the tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::main advanced to $(git rev-parse origin/main) while the checks ran; nothing tagged"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "refs/tags/$VERSION"
+          echo "Tagged $VERSION at $GITHUB_SHA"
