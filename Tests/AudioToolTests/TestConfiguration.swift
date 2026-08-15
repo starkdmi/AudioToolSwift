@@ -2,8 +2,9 @@
 //  TestConfiguration.swift
 //  AudioToolTests
 //
-//  Shared test configuration and skip utilities for consistent test behavior.
-//  Use these helpers to properly skip integration tests instead of silent returns.
+//  Shared test configuration: the environment gates every suite here reads, and
+//  the CI-adjusted thresholds. Runtime skip helpers used to live here too - see
+//  the note below the thresholds for why they do not.
 //
 
 import Foundation
@@ -82,55 +83,26 @@ public enum TestConfiguration {
     }
 }
 
-// MARK: - Skip Helpers for Swift Testing
-
-/// Cancels a `@Test` unless integration tests were opted into.
-///
-/// Swift Testing has no `XCTSkip`; `Test.cancel` is the runtime equivalent, and
-/// a cancelled test is reported as cancelled while the run still passes. What
-/// this did before was record an `Issue` and throw - both of which are ordinary
-/// failures - so a test following the example below failed rather than skipped,
-/// and it consulted `SKIP_INTEGRATION_TESTS` rather than the opt-in every
-/// `@Suite` here gates on, meaning it also ran by default.
-///
-/// Prefer the suite-level trait where you can; this is for a single test inside a
-/// suite that is otherwise hermetic.
-///
-/// Example:
-/// ```swift
-/// @Test func testIntegration() async throws {
-///     try requireIntegrationTests()
-///     // ... test code
-/// }
-/// ```
-public func requireIntegrationTests() throws {
-    if !TestConfiguration.runIntegrationTests {
-        try Test.cancel(Comment(rawValue: TestGate.integrationDisabled))
-    }
-}
-
-/// Cancels a `@Test` when MLX is unavailable. See ``requireIntegrationTests()``.
-public func requireMLXTests() throws {
-    if TestConfiguration.skipMLXTests {
-        try Test.cancel(Comment(rawValue: TestGate.mlxDisabled))
-    }
-}
-
-/// Cancels a `@Test` when a file it needs is absent.
-public func requireFile(at path: String, description: String = "Required file") throws {
-    guard FileManager.default.fileExists(atPath: path) else {
-        try Test.cancel(Comment(rawValue: "\(description) not found at: \(path)"))
-    }
-}
-
-/// Cancels a `@Test` when a directory it needs is absent.
-public func requireDirectory(at path: String, description: String = "Required directory") throws {
-    var isDirectory: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
-        try Test.cancel(Comment(rawValue: "\(description) not found at: \(path)"))
-    }
-}
-
+// MARK: - Gating a test at runtime
+//
+// There are no helpers here, because Swift Testing offers no runtime skip on the
+// version this package declares. Four of them lived here and none was ever
+// called: they recorded an `Issue` and threw, which are both ordinary failures,
+// so a test following their example failed rather than skipped. Rewriting them
+// around `Test.cancel` fixed that on the local toolchain and broke the build on
+// the declared floor - `Test.cancel` does not exist in the Swift Testing that
+// ships with Swift 6.2, which the swift-floor CI job reported and no other job
+// could see.
+//
+// Gate with the suite-level trait instead, which is what every `@Suite` in this
+// target already does and what works on 6.2:
+//
+//     @Suite("...", .enabled(if: TestConfiguration.runIntegrationTests,
+//                            "integration test - set RUN_INTEGRATION_TESTS=1"))
+//
+// For one test inside an otherwise hermetic suite, put the condition in the
+// `@Test` trait the same way. If a genuine runtime skip is ever needed, it
+// arrives with the floor moving to a Swift Testing that has one.
 
 // MARK: - Deterministic Test Data
 
