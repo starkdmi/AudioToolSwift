@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  AudioToolCore's privacy manifest.
+
+	  Apple requires a third-party SDK to declare its own required-reason API use;
+	  it may not rely on the consuming app's manifest, and a missing declaration
+	  can block App Store acceptance. Two categories apply here, both from the
+	  model download and cache path, and neither involves anything leaving the
+	  device: this package collects nothing and tracks nobody.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<!--
+			  FileManager.availableStorageSpace reads
+			  volumeAvailableCapacityForImportantUsageKey before a model download,
+			  and the download refuses to start when the answer is too small - the
+			  observable behaviour change E174.1 is written for. The number is used
+			  on-device and only for that decision.
+			-->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
+			</array>
+		</dict>
+		<dict>
+			<!--
+			  ModelDownloader reads contentModificationDateKey on cached weights to
+			  pick the newest snapshot and to age out stale ones. These are files in
+			  the app's own container, which is C617.1 rather than the 0A2A.1 an SDK
+			  wrapping the API on the app's behalf would use - and nothing here is
+			  such a wrapper: the one public method that took an arbitrary URL was
+			  deleted rather than declared.
+			-->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

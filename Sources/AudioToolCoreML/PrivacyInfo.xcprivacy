@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  AudioToolCoreML's privacy manifest. Each shipped target carries its own,
+	  because each produces its own resource bundle and Apple's requirement is per
+	  SDK rather than per app.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<!--
+			  The Core ML enhancer reads attributesOfItem[.modificationDate] on the
+			  .mlpackage it is about to compile, so a re-pinned model recompiles
+			  rather than serving a stale .mlmodelc.
+
+			  Two reasons because there are two ways in. The downloaded model lives
+			  in the app container: C617.1. But the provider also has a public
+			  initialiser taking a model path, and a host app may point that at a
+			  file the person using the device chose: 3B52.1. Declaring only the
+			  first would describe half of the supported call sites.
+			-->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+				<string>3B52.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -494,11 +494,11 @@ public actor ModelDownloader {
     private nonisolated func candidatePaths(for repo: String) -> [URL] {
         guard let roots = Self.repositoryCacheRoots(
             for: repo,
-            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+            homeDirectory: FileManager.default.userHomeDirectory
         ) else { return [] }
 
         var candidates: [URL] = []
-        let containers = Self.cacheContainerRoots(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+        let containers = Self.cacheContainerRoots(homeDirectory: FileManager.default.userHomeDirectory)
         // Swift Hub library uses ~/Documents/huggingface/models/{owner}/{repo}
         if FileManager.default.fileExists(atPath: roots.swiftHub.path),
            Self.isStrictDescendant(roots.swiftHub, of: containers[0]) {
@@ -698,7 +698,7 @@ public actor ModelDownloader {
         }
         try await RepositoryCacheAccess.shared.withExclusiveAccess(to: repo) {
             PinnedContentCache.shared.invalidate()
-            let home = FileManager.default.homeDirectoryForCurrentUser
+            let home = FileManager.default.userHomeDirectory
             try Self.removeRepositoryCacheEntries(for: repo, homeDirectory: home)
             guard let roots = Self.repositoryCacheRoots(for: repo, homeDirectory: home)
             else { return }
@@ -746,7 +746,7 @@ public actor ModelDownloader {
     private nonisolated static func cleanupEmptyHuggingFaceCache(for repo: String) {
         guard let cache = repositoryCacheRoots(
             for: repo,
-            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+            homeDirectory: FileManager.default.userHomeDirectory
         )?.pythonHub else { return }
         let snapshots = cache.appendingPathComponent("snapshots")
         guard let contents = try? FileManager.default.contentsOfDirectory(
@@ -908,7 +908,7 @@ public actor ModelDownloader {
     public nonisolated func cacheSize(for repo: String) -> Int64 {
         guard let roots = Self.repositoryCacheRoots(
             for: repo,
-            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+            homeDirectory: FileManager.default.userHomeDirectory
         ) else { return 0 }
         return [roots.swiftHub, roots.pythonHub].reduce(0) {
             $0 + FileManager.default.directorySize(at: $1)
@@ -919,7 +919,7 @@ public actor ModelDownloader {
     /// - Returns: Total size in bytes
     public nonisolated func totalCacheSize() -> Int64 {
         Self.totalCacheSize(
-            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+            homeDirectory: FileManager.default.userHomeDirectory
         )
     }
     
@@ -936,7 +936,7 @@ public actor ModelDownloader {
     public func clearCache() async throws {
         try await RepositoryCacheAccess.shared.withGlobalExclusiveAccess {
             try Self.clearCache(
-                homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+                homeDirectory: FileManager.default.userHomeDirectory
             )
             // Nothing on disk is what it was; discard what we concluded about it.
             PinnedContentCache.shared.invalidate()
@@ -947,7 +947,7 @@ public actor ModelDownloader {
     /// - Returns: Array of repository IDs
     public nonisolated func cachedRepositories() -> [String] {
         Self.cachedRepositories(
-            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+            homeDirectory: FileManager.default.userHomeDirectory
         )
     }
 
