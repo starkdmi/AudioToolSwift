@@ -432,7 +432,18 @@ struct ConcurrencyTests {
             }
         }
 
-        #expect(ContinuousClock.now - started < .seconds(1),
+        // The failure this guards is a send that never comes back: `send(_:timeout:)`
+        // races the send against a sleep in a task group, and the group waits for
+        // the cancelled child before it can throw, so a blocked sender that ignores
+        // cancellation hangs here until something receives. Any bound well under
+        // that catches it; the exact number is not the point.
+        //
+        // It is loosened on CI because 1 s was not enough there: a hosted runner
+        // measured 1.2 s while executing 311 tests in 5.8 s of wall time on three
+        // cores. That is scheduling latency in the unwind, not a sender stuck
+        // behind anything.
+        let bound: Duration = TestConfiguration.isCI ? .seconds(5) : .seconds(1)
+        #expect(ContinuousClock.now - started < bound,
                 "timeout remained suspended behind the cancelled sender")
         #expect(await channel.receive() == 1)
         try await Task.sleep(for: .milliseconds(25))

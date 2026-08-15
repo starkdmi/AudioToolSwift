@@ -24,11 +24,20 @@ final class DemucsShapeTests: IntegrationTestCase {
         return v
     }
 
+    /// Every term is explicitly typed, and the two sines are separate statements.
+    ///
+    /// Written as one expression mixing integer literals with `Float(i)` and
+    /// `Float.pi`, Swift 6.2's type checker gives up on it - "unable to type-check
+    /// this expression in reasonable time" - while 6.3 handles it in under 100ms.
+    /// The package declares 6.2, so 6.3 being fine with it is not the question.
     private func tone(seconds: Double, rate: Int = 44100) -> AudioBuffer {
         let n = Int(Double(rate) * seconds)
-        let s = (0..<n).map { i in
-            sin(2 * Float.pi * 220 * Float(i) / Float(rate)) * 0.3
-                + sin(2 * Float.pi * 3000 * Float(i) / Float(rate)) * 0.15
+        let sampleRate = Float(rate)
+        let s: [Float] = (0..<n).map { i in
+            let t: Float = Float(i) / sampleRate
+            let low: Float = sin(2 * .pi * 220 * t) * 0.3
+            let high: Float = sin(2 * .pi * 3000 * t) * 0.15
+            return low + high
         }
         return AudioBuffer(samples: s, sampleRate: rate, channels: 1)
     }
