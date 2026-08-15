@@ -114,7 +114,8 @@ Four jobs, in `.github/workflows/ci.yml`:
   a silent skip here proves nothing.
 - **Build on the declared Swift floor** - compiles with an Xcode carrying Swift
   6.2 exactly, since every other job takes the newest toolchain on the image and
-  would not notice a 6.3-only construct.
+  would not notice a 6.3-only construct. `Scripts/check-swift-floor.sh` runs the
+  same check locally against a swift.org toolchain; see AGENTS.md.
 
 Run the model-backed job locally with:
 

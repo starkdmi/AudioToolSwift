@@ -28,6 +28,25 @@ Set it for a whole session rather than one step: the manifest is evaluated per
 invocation, so a `swift build` that sees it and a `swift test` that does not will
 rebuild everything between them.
 
+### Checking the declared Swift floor
+
+```bash
+./Scripts/check-swift-floor.sh
+```
+
+The manifest declares Swift 6.2 and every local build uses whatever Xcode is
+installed, which on macOS Tahoe is 6.3 or newer - Xcode 26.4.1 dropped Sequoia
+and took the 6.2 toolchains with it. So code that only compiles on 6.3 looks
+fine here and fails for everyone on the floor.
+
+That is not hypothetical. It has happened twice, both times in code that had just
+been written: an expression 6.2's type checker refuses ("unable to type-check
+this expression in reasonable time") where 6.3 handles it in under 100ms, and
+`Test.cancel`, which does not exist in the Swift Testing 6.2 ships. Each cost a
+CI round trip. The script needs a swift.org 6.2 toolchain installed alongside
+Xcode - one `installer` command, no sudo, path in the script header - and then
+reproduces the CI job locally in about two minutes.
+
 ### Tagging a release
 
 ```bash
