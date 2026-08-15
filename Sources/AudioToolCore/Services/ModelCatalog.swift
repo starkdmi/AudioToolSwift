@@ -346,7 +346,7 @@ public final class ModelCatalog: @unchecked Sendable {
                 id: "chatterbox_tts",
                 name: "ChatterBox TTS",
                 category: .textToSpeech,
-                description: "Multilingual TTS supporting 25+ languages with voice cloning",
+                description: "Multilingual TTS supporting 23 languages with voice cloning",
                 variants: [
                     ModelVariant(
                         id: "chatterbox_tts_fp32",

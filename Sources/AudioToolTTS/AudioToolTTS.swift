@@ -106,7 +106,9 @@ public struct TTSProviders {
     
     /// Create ChatterBox TTS provider with precision-based repo selection
     ///
-    /// ChatterBox is a multilingual TTS model supporting 25 languages with voice cloning.
+    /// ChatterBox is a multilingual TTS model supporting 23 languages with voice cloning.
+    /// The set is `ChatterboxLanguage`; four of them are experimental for want of text
+    /// preprocessing, and Russian needs RUAccent.
     /// Reference audio is required for synthesis.
     ///
     /// - Parameters:

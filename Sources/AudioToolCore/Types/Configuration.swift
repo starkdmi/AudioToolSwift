@@ -10,48 +10,32 @@ import Foundation
 // MARK: - Configuration
 
 /// Global framework configuration
+///
+/// One knob, because one knob is what the engine reads. Earlier revisions also
+/// advertised `precision`, `enableSTFTCache`, `modelRepository`, `segmentPoolSize`
+/// and `channelCapacity`; nothing consumed any of them, so setting one changed
+/// nothing and the type promised control it did not have. They are gone rather
+/// than deprecated - this is pre-1.0 and the fields never did anything to preserve.
+///
+/// Their subjects are configured where they actually take effect: precision is a
+/// per-provider argument (``ModelPrecision``, chosen when you construct a provider,
+/// since the right width differs per model), repositories are per-model in the
+/// download catalog, and chunking is a per-call parameter.
 public struct AudioToolConfiguration: Sendable {
-    
-    /// Compute precision
-    public var precision: Precision
-    
-    /// Maximum memory for loaded models (bytes)
+
+    /// Maximum resident memory for loaded models, in bytes.
+    ///
+    /// A soft budget: crossing it evicts least-recently-used models rather than
+    /// failing a load. See ``AudioEngine``'s residency notes.
     public var modelMemoryLimit: Int
-    
-    /// Enable STFT result caching
-    public var enableSTFTCache: Bool
-    
-    /// Custom model repository base URL
-    public var modelRepository: URL?
-    
-    /// Segment pool size for streaming
-    public var segmentPoolSize: Int
-    
-    /// Backpressure channel capacity
-    public var channelCapacity: Int
-    
+
     public init(
-        precision: Precision = .float16,
-        modelMemoryLimit: Int = 2_000_000_000,
-        enableSTFTCache: Bool = true,
-        modelRepository: URL? = nil,
-        segmentPoolSize: Int = 32,
-        channelCapacity: Int = 16
+        modelMemoryLimit: Int = 2_000_000_000
     ) {
-        self.precision = precision
         self.modelMemoryLimit = modelMemoryLimit
-        self.enableSTFTCache = enableSTFTCache
-        self.modelRepository = modelRepository
-        self.segmentPoolSize = segmentPoolSize
-        self.channelCapacity = channelCapacity
     }
-    
+
     public static let `default` = AudioToolConfiguration()
-    
-    public enum Precision: Sendable {
-        case float16
-        case float32
-    }
 }
 
 // MARK: - Model Precision
@@ -65,7 +49,7 @@ public struct AudioToolConfiguration: Sendable {
 /// Usage:
 /// ```swift
 /// // Single-repo pattern (starkdmi models)
-/// let provider = MLXProviders.mossformerGANSE16K(precision: .fp16)
+/// let provider = CoreMLProviders.mossformerGANSE16K(precision: .fp16)
 ///
 /// // Multi-repo pattern (Kokoro)
 /// let tts = TTSProviders.kokoro(precision: .int4)
@@ -201,7 +185,9 @@ public enum TranscriptionModel: Sendable, Hashable {
 
 /// Available translation models
 public enum TranslationModel: Sendable, Hashable {
-    case appleTranslation  // Apple Translation framework (iOS 18+, macOS 15+)
+    // Programmatic (non-SwiftUI) TranslationSession is iOS 26+/macOS 26+, not the
+    // iOS 18/macOS 15 the framework itself has been available since.
+    case appleTranslation  // Apple Translation framework (iOS 26+, macOS 26+)
     case translateGemma    // TranslateGemma via MLX (55+ languages)
     // Future: .marian, .nllb, .seamless
 }

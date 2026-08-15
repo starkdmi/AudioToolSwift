@@ -496,11 +496,23 @@ public actor KokoroTTSProvider: SpeechSynthesizer {
         return AudioToolCore.AudioBuffer(samples: samples, sampleRate: sampleRate, channels: 1)
     }
     
-    /// Stream synthesized audio chunks
+    /// Synthesized audio, delivered as a stream.
+    ///
+    /// > Important: This yields **one** buffer - the whole utterance - and finishes.
+    /// > It is the `AsyncThrowingStream` shape without the latency benefit: nothing
+    /// > arrives sooner than `synthesize(_:voice:)` would return it. Sentence-level
+    /// > chunking is the open work; until it lands, prefer `synthesize(_:voice:)`
+    /// > unless you want the stream type for uniformity.
+    /// >
+    /// > Cancelling the stream suppresses delivery but does not stop generation
+    /// > already under way: the synthesis call is synchronous inside the producer
+    /// > task and offers no cancellation point, so the work finishes and its result
+    /// > is discarded. Both facts follow from the same missing chunking.
+    ///
     /// - Parameters:
     ///   - text: Text to synthesize
     ///   - voice: Voice name
-    /// - Returns: Async stream of audio chunks
+    /// - Returns: Async stream carrying a single buffer
     public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             let producer = Task {

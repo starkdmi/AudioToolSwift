@@ -13,8 +13,13 @@ import AudioToolCore
 
 /// Factory for creating USS-based providers
 ///
-/// All providers share the same underlying ResUNet30 model (~53MB FP16).
-/// The only difference is the initial embedding type loaded.
+/// All providers share the same underlying ResUNet30 model (~106 MB FP32, ~53 MB
+/// FP16). The only difference is the initial embedding type loaded.
+///
+/// FP32 is the default here because it is the default on ``USSMLXProvider`` and
+/// because fp16 loses on everything but download size: measured, it is 5% slower,
+/// peaks *higher*, and costs 68 dB SI-SDR against the fp32 output. These factories
+/// used to default to fp16 and quietly disagree with the provider they construct.
 /// Use `processMultiple()` or `setConditioning()` to separate multiple sound types
 /// without reloading the model.
 public struct USSProviders {
@@ -25,12 +30,12 @@ public struct USSProviders {
     /// - Parameters:
     ///   - embeddingType: Initial sound type to separate
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0, no overlap)
-    ///   - useFp16: Use FP16 weights for smaller memory (default: true)
+    ///   - useFp16: Load the FP16 weights file (default: false - see ``USSMLXProvider/init(embeddingType:segmentDuration:useFp16:compile:)``)
     /// - Returns: USS provider ready for loading
     public static func separation(
         type embeddingType: EmbeddingLoader.EmbeddingType,
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true
+        useFp16: Bool = false
     ) -> USSMLXProvider {
         USSMLXProvider(
             embeddingType: embeddingType,
@@ -49,13 +54,13 @@ public struct USSProviders {
     ///   - weightsPath: Path to a resunet30 .safetensors file
     ///   - embeddingType: Initial sound type to separate
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0, no overlap)
-    ///   - useFp16: Whether `weightsPath` points at FP16 weights (default: true)
+    ///   - useFp16: Whether `weightsPath` points at FP16 weights (default: false)
     /// - Returns: USS provider ready for loading
     public static func separation(
         weightsPath: String,
         type embeddingType: EmbeddingLoader.EmbeddingType = .speech,
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true
+        useFp16: Bool = false
     ) -> USSMLXProvider {
         USSMLXProvider(
             weightsPath: weightsPath,
@@ -71,12 +76,12 @@ public struct USSProviders {
     /// - Parameters:
     ///   - embeddingType: Sound type to separate (default: .speech)
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0, no overlap)
-    ///   - useFp16: Use FP16 weights for smaller memory (default: true)
+    ///   - useFp16: Load the FP16 weights file (default: false - see ``USSMLXProvider/init(embeddingType:segmentDuration:useFp16:compile:)``)
     /// - Returns: Speech separation provider ready for loading
     public static func speechSeparation(
         embeddingType: EmbeddingLoader.EmbeddingType = .speech,
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true
+        useFp16: Bool = false
     ) -> USSMLXProvider {
         USSMLXProvider(
             embeddingType: embeddingType,
@@ -88,11 +93,11 @@ public struct USSProviders {
     /// Create music separation provider
     /// - Parameters:
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0)
-    ///   - useFp16: Use FP16 weights (default: true)
+    ///   - useFp16: Load the FP16 weights file (default: false - half the download, worse on every other axis)
     /// - Returns: Music separation provider
     public static func musicSeparation(
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true
+        useFp16: Bool = false
     ) -> USSMLXProvider {
         USSMLXProvider(
             embeddingType: .music,
@@ -104,11 +109,11 @@ public struct USSProviders {
     /// Create noise separation provider
     /// - Parameters:
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0)
-    ///   - useFp16: Use FP16 weights (default: true)
+    ///   - useFp16: Load the FP16 weights file (default: false - half the download, worse on every other axis)
     /// - Returns: Noise separation provider
     public static func noiseSeparation(
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true
+        useFp16: Bool = false
     ) -> USSMLXProvider {
         USSMLXProvider(
             embeddingType: .noise,
@@ -120,11 +125,11 @@ public struct USSProviders {
     /// Create animal sound separation provider
     /// - Parameters:
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0)
-    ///   - useFp16: Use FP16 weights (default: true)
+    ///   - useFp16: Load the FP16 weights file (default: false - half the download, worse on every other axis)
     /// - Returns: Animal sound separation provider
     public static func animalSeparation(
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true
+        useFp16: Bool = false
     ) -> USSMLXProvider {
         USSMLXProvider(
             embeddingType: .animal,
@@ -136,11 +141,11 @@ public struct USSProviders {
     /// Create nature sound separation provider (wind, rain, water, etc.)
     /// - Parameters:
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0)
-    ///   - useFp16: Use FP16 weights (default: true)
+    ///   - useFp16: Load the FP16 weights file (default: false - half the download, worse on every other axis)
     /// - Returns: Nature sound separation provider
     public static func natureSeparation(
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true
+        useFp16: Bool = false
     ) -> USSMLXProvider {
         USSMLXProvider(
             embeddingType: .nature,
@@ -152,11 +157,11 @@ public struct USSProviders {
     /// Create human sound separation provider (non-speech: coughing, breathing, footsteps, etc.)
     /// - Parameters:
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0)
-    ///   - useFp16: Use FP16 weights (default: true)
+    ///   - useFp16: Load the FP16 weights file (default: false - half the download, worse on every other axis)
     /// - Returns: Human sound separation provider
     public static func humanSeparation(
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true
+        useFp16: Bool = false
     ) -> USSMLXProvider {
         USSMLXProvider(
             embeddingType: .human,
@@ -168,11 +173,11 @@ public struct USSProviders {
     /// Create things/object sound separation provider (machines, doors, vehicles, etc.)
     /// - Parameters:
     ///   - segmentDuration: Chunk duration in seconds (default: 2.0)
-    ///   - useFp16: Use FP16 weights (default: true)
+    ///   - useFp16: Load the FP16 weights file (default: false - half the download, worse on every other axis)
     /// - Returns: Things sound separation provider
     public static func thingsSeparation(
         segmentDuration: Float = 2.0,
-        useFp16: Bool = true
+        useFp16: Bool = false
     ) -> USSMLXProvider {
         USSMLXProvider(
             embeddingType: .things,

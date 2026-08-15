@@ -966,7 +966,13 @@ public actor AudioEngine {
         return try await withResidency(synthesizer) { try await synthesizer.synthesize(text, voice: voice) }
     }
     
-    /// Stream synthesized audio chunks
+    /// Synthesized audio from a registered synthesizer, delivered as a stream.
+    ///
+    /// Passes through whatever the provider yields, holding residency for the
+    /// duration. How much that buys depends on the provider: Apple TTS streams
+    /// incrementally, while Kokoro and Chatterbox currently yield one buffer for the
+    /// whole utterance.
+    ///
     /// - Parameters:
     ///   - text: Text to synthesize
     ///   - voice: Voice identifier

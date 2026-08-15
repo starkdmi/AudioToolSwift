@@ -20,7 +20,9 @@ public struct MLXTranslationProviders {
     
     /// Create TranslateGemma translation provider (55+ languages)
     ///
-    /// > Note: Requires macOS 14+ for MLX Metal support.
+    /// > Note: Needs a Metal device. The package minimum, iOS 18 / macOS 15, already
+/// > covers it - the older "macOS 14+" this said was inherited from mlx-swift and
+/// > is below what this package builds for.
     /// > Model (~4GB) is downloaded automatically on first use from HuggingFace.
     ///
     /// - Parameters:

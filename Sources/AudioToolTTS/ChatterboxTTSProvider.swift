@@ -1126,11 +1126,23 @@ public actor ChatterboxTTSProvider: SpeechSynthesizer {
     }
     
     
-    /// Stream synthesized audio chunks
+    /// Synthesized audio, delivered as a stream.
+    ///
+    /// > Important: This yields **one** buffer - the whole utterance - and finishes.
+    /// > It is the `AsyncThrowingStream` shape without the latency benefit: nothing
+    /// > arrives sooner than `synthesize(_:voice:)` would return it. Sentence-level
+    /// > chunking is the open work; until it lands, prefer `synthesize(_:voice:)`
+    /// > unless you want the stream type for uniformity.
+    /// >
+    /// > Cancellation lands between phases, not inside one. `synthesize` checks
+    /// > before inference, after T3 and after S3 generation, so cancelling during
+    /// > T3 spares the vocoder and cancelling during S3 spares the conversion and
+    /// > VAD trim - but the phase already running is synchronous and finishes.
+    ///
     /// - Parameters:
     ///   - text: Text to synthesize
     ///   - voice: Voice identifier (ignored)
-    /// - Returns: Async stream of audio chunks
+    /// - Returns: Async stream carrying a single buffer
     public nonisolated func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             let producer = Task {

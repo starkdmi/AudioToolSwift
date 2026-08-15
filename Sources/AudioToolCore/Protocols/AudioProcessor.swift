@@ -343,7 +343,12 @@ public protocol SpeechSynthesizer: Sendable {
     /// Synthesize text to speech
     func synthesize(_ text: String, voice: String) async throws -> AudioBuffer
     
-    /// Stream synthesized audio chunks
+    /// Synthesized audio, delivered as a stream.
+    ///
+    /// Chunking is a conformer's choice and differs between them: the Apple provider
+    /// yields real incremental buffers from `AVSpeechSynthesizer.write`, while the
+    /// MLX-backed ones (Kokoro, Chatterbox) currently yield the whole utterance as a
+    /// single buffer. Check the conformer before treating this as a latency win.
     func streamSynthesis(_ text: String, voice: String) -> AsyncThrowingStream<AudioBuffer, Error>
 }
 
