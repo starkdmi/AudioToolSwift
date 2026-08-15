@@ -57,30 +57,48 @@ while i < args.count {
     }
 }
 
+/// The only usage text. It lists every mode `main`'s switch actually accepts -
+/// there used to be a second, longer copy of this further down that nothing
+/// called, and the one that ran named three of the eleven modes.
 func printUsage() {
     print("""
     audio-tool - AudioToolSwift command line interface
-    
+
     Usage: audio-tool --model <model> --input <path> [--output <path>] [--weights <path>]
-    
-    Models:
-      frcrn          FRCRN SE 16K (4s/25%/discard-edges)
-      mossformer2_se MossFormer2 SE 48K (4s/25%/discard-edges)
-      demucs         Demucs vocals separation (7.8s/25%/triangular)
-    
+
+    Models (aliases in parentheses):
+      frcrn                          FRCRN SE 16K (4s/25%/discard-edges)
+      frcrn-bg (frcrnbg, frcrn_bg)   FRCRN SE 16K, also writes the removed background
+      mossformer2_se (mossformer2se, se48k)
+                                     MossFormer2 SE 48K (4s/25%/discard-edges)
+      se48k-bg (se48kbg, mossformer2_se_bg)
+                                     MossFormer2 SE 48K, also writes the background
+      demucs (vocals)                Demucs vocals separation (7.8s/25%/triangular)
+      ss_2spk (ss2spk, 2spk)         MossFormer2 SS 2-speaker (4s/25%/triangular)
+      ss_3spk (ss3spk, 3spk)         MossFormer2 SS 3-speaker (4s/25%/triangular)
+      ss_whamr (sswhamr, whamr)      MossFormer2 SS WHAMR (4s/25%/triangular)
+      sr48k (sr, mossformer2_sr)     MossFormer2 SR, 16kHz -> 48kHz (4s/50%/Hann)
+      transcribe (speech, stt)       Apple SpeechAnalyzer transcription (macOS 26+)
+      streaming_verify (stream_test, verify_stream)
+                                     Diff process() against processStream() on FRCRN
+
     Options:
       -m, --model    Model to use (default: frcrn)
       -i, --input    Input audio path (required)
       -o, --output   Output audio path (default: input_chunked.wav)
-      -w, --weights  Weights path/directory
+      -w, --weights  Local checkpoint to use instead of downloading
       -h, --help     Show this help
-    
+
     Example:
       audio-tool -m frcrn -i test.wav -o enhanced.wav
       audio-tool -m demucs -i song.wav -o vocals.wav
+      audio-tool -m ss_2spk -i mixed.wav -o separated.wav
 
-    Weights download automatically from HuggingFace on first use.
-    --weights is only needed to point at a local override.
+    Weights download automatically from HuggingFace on first use, so --weights is
+    only needed to point at a local override. It applies to every model mode: a
+    .safetensors file, except for demucs, which takes the directory holding the
+    per-stem files. For sr48k the checkpoint's config.json must sit beside it, as
+    it does in a downloaded copy. transcribe uses an OS model and ignores it.
     """)
 }
 
@@ -288,11 +306,12 @@ func runMossFormer2SE(inputPath: String, outputPath: String, weightsPath: String
 
 // MARK: - MossFormer2 SE with Background Extraction
 
-func runMossFormer2SEWithBackground(inputPath: String, outputPath: String) async throws {
+func runMossFormer2SEWithBackground(inputPath: String, outputPath: String, weightsPath: String?) async throws {
     print("\n=== MossFormer2 SE 48K with Background Extraction ===")
     
-    // Create provider (downloads from HuggingFace)
-    let provider = MLXProviders.mossformer2SE48K()
+    // Create provider - downloads from HuggingFace unless --weights points elsewhere
+    let provider = try explicitWeights(weightsPath).map(MLXProviders.mossformer2SE48K(weightsPath:))
+        ?? MLXProviders.mossformer2SE48K()
     
     // Load model
     print("Loading model (may download from HuggingFace)...")
@@ -384,7 +403,7 @@ func runDemucs(inputPath: String, outputPath: String, weightsPath: String?) asyn
 
 // MARK: - MossFormer2 SS (Speaker Separation)
 
-func runMossFormer2SS(inputPath: String, outputPath: String, variant: String) async throws {
+func runMossFormer2SS(inputPath: String, outputPath: String, variant: String, weightsPath: String?) async throws {
     let modelType: MossFormer2SSProvider.Model
     switch variant.lowercased() {
     case "2spk", "2speaker": modelType = .twoSpeaker
@@ -397,10 +416,13 @@ func runMossFormer2SS(inputPath: String, outputPath: String, variant: String) as
     print("\n=== MossFormer2 SS \(modelType.rawValue) with Chunking ===")
     print("Chunking: 4s chunks, 25% overlap, triangular blending")
     
-    // The provider fetches and caches its own weights. This used to reach into
-    // ~/.cache/huggingface, pick whichever snapshot directory sorted first, and tell
-    // the user to run `huggingface-cli` when it found nothing.
-    let provider = MossFormer2SSProvider(model: modelType)
+    // The provider fetches and caches its own weights unless --weights points at a
+    // checkpoint. This used to reach into ~/.cache/huggingface, pick whichever
+    // snapshot directory sorted first, and tell the user to run `huggingface-cli`
+    // when it found nothing.
+    let provider = try explicitWeights(weightsPath).map {
+        MossFormer2SSProvider(model: modelType, weightsPath: $0)
+    } ?? MossFormer2SSProvider(model: modelType)
 
     print("Loading model (downloading if needed)...")
     try await provider.load()
@@ -443,13 +465,27 @@ func runMossFormer2SS(inputPath: String, outputPath: String, variant: String) as
 
 // MARK: - MossFormer2 SR (Super Resolution)
 
-func runMossFormer2SR(inputPath: String, outputPath: String) async throws {
+func runMossFormer2SR(inputPath: String, outputPath: String, weightsPath: String?) async throws {
     print("\n=== MossFormer2 SR 48K with Chunking ===")
     print("Chunking: 4s chunks, 50% overlap, Hann window")
     print("Super-resolution: 16kHz → 48kHz")
     
-    // The provider fetches and caches its own weights and config.
-    let provider = MossFormer2SR48KProvider()
+    // The provider fetches and caches its own weights and config. SR is the one
+    // mode that needs both, and its explicit initialiser takes both, so --weights
+    // means "this checkpoint, with the config.json beside it" - the same layout
+    // the download produces.
+    let provider: MossFormer2SR48KProvider
+    if let weights = try explicitWeights(weightsPath) {
+        let config = URL(fileURLWithPath: weights)
+            .deletingLastPathComponent()
+            .appendingPathComponent("config.json")
+        guard FileManager.default.fileExists(atPath: config.path) else {
+            throw CLIError.weightsNotFound(config.path)
+        }
+        provider = MossFormer2SR48KProvider(weightsPath: weights, configPath: config.path)
+    } else {
+        provider = MossFormer2SR48KProvider()
+    }
 
     print("Loading model (downloading if needed)...")
     try await provider.load()
@@ -677,37 +713,6 @@ func runStreamingVerification(inputPath: String, outputPath: String, weightsPath
 
 // MARK: - Main Execution
 
-func printUsageDetailed() {
-    print("""
-    audio-tool - AudioToolSwift command line interface
-    
-    Usage: audio-tool --model <model> --input <path> [--output <path>] [--weights <path>]
-    
-    Models:
-      frcrn           FRCRN SE 16K (4s/25%/discard-edges)
-      mossformer2_se  MossFormer2 SE 48K (4s/25%/discard-edges)
-      demucs          Demucs vocals separation (7.8s/25%/triangular)
-      ss_2spk         MossFormer2 SS 2-speaker (4s/25%/triangular)
-      ss_3spk         MossFormer2 SS 3-speaker (4s/25%/triangular)
-      ss_whamr        MossFormer2 SS WHAMR (4s/25%/triangular)
-    
-    Options:
-      -m, --model    Model to use (default: frcrn)
-      -i, --input    Input audio path (required)
-      -o, --output   Output audio path (default: input_chunked.wav)
-      -w, --weights  Weights path/directory
-      -h, --help     Show this help
-    
-    Example:
-      audio-tool -m frcrn -i test.wav -o enhanced.wav
-      audio-tool -m demucs -i song.wav -o vocals.wav
-      audio-tool -m ss_2spk -i mixed.wav -o separated.wav
-
-    Weights download automatically from HuggingFace on first use.
-    --weights is only needed to point at a local override.
-    """)
-}
-
 Task {
     do {
         switch model.lowercased() {
@@ -718,17 +723,17 @@ Task {
         case "mossformer2_se", "mossformer2se", "se48k":
             try await runMossFormer2SE(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "se48k-bg", "se48kbg", "mossformer2_se_bg":
-            try await runMossFormer2SEWithBackground(inputPath: inputPath, outputPath: outputPath)
+            try await runMossFormer2SEWithBackground(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "demucs", "vocals":
             try await runDemucs(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "ss_2spk", "ss2spk", "2spk":
-            try await runMossFormer2SS(inputPath: inputPath, outputPath: outputPath, variant: "2spk")
+            try await runMossFormer2SS(inputPath: inputPath, outputPath: outputPath, variant: "2spk", weightsPath: weightsPath)
         case "ss_3spk", "ss3spk", "3spk":
-            try await runMossFormer2SS(inputPath: inputPath, outputPath: outputPath, variant: "3spk")
+            try await runMossFormer2SS(inputPath: inputPath, outputPath: outputPath, variant: "3spk", weightsPath: weightsPath)
         case "ss_whamr", "sswhamr", "whamr":
-            try await runMossFormer2SS(inputPath: inputPath, outputPath: outputPath, variant: "whamr")
+            try await runMossFormer2SS(inputPath: inputPath, outputPath: outputPath, variant: "whamr", weightsPath: weightsPath)
         case "sr48k", "sr", "mossformer2_sr":
-            try await runMossFormer2SR(inputPath: inputPath, outputPath: outputPath)
+            try await runMossFormer2SR(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         #if canImport(AudioToolSpeech)
         case "transcribe", "speech", "stt":
             if #available(macOS 26.0, *) {
@@ -742,12 +747,19 @@ Task {
             try await runStreamingVerification(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         default:
             print("Unknown model: \(model)")
-            print("Available: frcrn, frcrn-bg, se48k, se48k-bg, demucs, ss_2spk, ss_3spk, ss_whamr, sr48k, streaming_verify, transcribe")
+            printUsage()
             exit(1)
         }
         exit(0)
     } catch {
-        print("Error: \(error)")
+        // CLIError spells out what went wrong in `errorDescription`, and
+        // interpolating the value would print the case name and raw payload
+        // instead. But localizedDescription unconditionally is worse for the
+        // errors that do not conform: those bridge to NSError and yield
+        // "The operation couldn't be completed", losing the payload entirely.
+        // Take the description when it exists, the value when it does not.
+        let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        print("Error: \(message)")
         exit(1)
     }
 }
