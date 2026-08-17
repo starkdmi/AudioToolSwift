@@ -47,11 +47,8 @@ pick — the smallest is rarely the right one.
 ## Install
 
 ```swift
-.package(url: "https://github.com/starkdmi/AudioToolSwift.git", branch: "main")
+.package(url: "https://github.com/starkdmi/AudioToolSwift.git", from: "0.1.0")
 ```
-
-There is no tagged release yet; track `main` until `0.1.0` ships, then pin with
-`from: "0.1.0"`.
 
 Then depend on the libraries you need — each backend is its own product, so an
 app that only transcribes never compiles a MossFormer2:

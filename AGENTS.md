@@ -57,9 +57,9 @@ Three things in the tree describe the *current* release and are wrong the moment
 a tag exists, so they belong in the release commit itself rather than after it,
 and that script is what checks them:
 
-1. `README.md` - the install snippet says `branch: "main"` and states that no
-   tagged release exists. Change it to `from: "<version>"`.
-2. `CHANGELOG.md` - the top heading says `unreleased`. Give it an ISO date.
+1. `README.md` - the install snippet in the `## Install` section must read
+   `from: "<version>"`, and nothing may still say a tagged release does not exist.
+2. `CHANGELOG.md` - the top heading needs an ISO date, not `unreleased`.
 3. `Docs/licenses.md` - the resolved dependency table must match
    `Package.resolved`.
 

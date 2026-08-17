@@ -3,7 +3,7 @@
 Notable changes per release. Dates are the tag date; unreleased work sits under
 the top heading until it ships.
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-08-17
 
 First public release. Everything below describes the state at the tag rather
 than a diff against a predecessor, except where it names something that changed
