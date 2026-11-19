@@ -25,6 +25,11 @@ the top heading until it ships.
   library resample in and out with torchaudio's `kaiser_best` filter, which is
   what the port was validated against and what avoids feeding the model the
   spectral images an interpolating upsample leaves behind.
+- `AudioEngine.enhanceStream(_:model:)`, a live stream through a registered
+  enhancer that holds a residency lease for its whole life, so the engine's LRU
+  eviction can no longer unload a model mid-stream. The lease is released on
+  every exit: the input ending, an error, cancellation, or a dropped stream.
+  Buffers must arrive at the enhancer's rate; channels are adapted per buffer.
 - `EnhancementModel.voiceIsolator` and `.voiceIsolatorRealtime`, so both register
   with `AudioEngine`; `MLXProviders` factory methods; `audio-tool` subcommands
   `voiceisolate`, `voiceisolate-bg` and `voiceisolate-rt`; four

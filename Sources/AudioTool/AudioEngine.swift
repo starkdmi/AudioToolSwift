@@ -390,7 +390,169 @@ public actor AudioEngine {
         }
         return try result.resampled(to: audio.sampleRate)
     }
-    
+
+    // MARK: - Live Enhancement
+
+    /// Enhance live audio through a registered enhancer, keeping it resident until
+    /// the stream ends.
+    ///
+    /// Forwards `input` to the enhancer's ``StreamableProcessor/stream(_:)`` and
+    /// passes through whatever it yields. For a model that carries state across
+    /// buffers, such as the causal Voice Isolator, that state lives as long as
+    /// this stream does.
+    ///
+    /// The reason to call this rather than `stream(_:)` on the provider directly is
+    /// residency. The engine evicts its least recently used idle model whenever it
+    /// admits another, and a provider streaming on its own holds no claim against
+    /// that, so an unrelated `enhance` call could unload it mid-stream. This stream
+    /// holds the same claim a batch call does, for the whole of its life: the model
+    /// is made resident when the stream is created (loaded, if it had been
+    /// evicted) and released on every exit - the input ending, an error, the
+    /// consumer cancelling, or the consumer dropping the stream. The release
+    /// happens before the stream finishes, so a consumer that has seen the end
+    /// can rely on the model being evictable again.
+    ///
+    /// Only an explicit ``unloadModel(_:)`` or ``unloadAllModels()`` still ends a
+    /// stream early. That is deliberate, the same as for a batch call in flight.
+    ///
+    /// **Format.** Each buffer must already be at the enhancer's
+    /// ``AudioProcessor/sampleRate``; a buffer at any other rate ends the stream
+    /// with ``AudioToolError/sampleRateMismatch(expected:found:)`` before it
+    /// reaches the model. Channels are adapted per buffer, as the batch API does,
+    /// because a downmix is exact frame by frame. Rate conversion is not: every
+    /// resampler here converts one whole buffer at a time, so resampling a live
+    /// signal piecewise would restart the filter at every buffer edge and round
+    /// each buffer's length separately, putting artefacts at the buffer rate into
+    /// the model's state and drifting the output timeline. Convert at the source -
+    /// an `AVAudioEngine` tap or `AVAudioConverter` keeps its filter state between
+    /// buffers. Output is at the enhancer's rate.
+    ///
+    /// Buffers sent before the model is resident wait in `input`, so preload or
+    /// `configure` the model before opening a stream on a live source.
+    ///
+    /// - Parameters:
+    ///   - input: Live audio at the enhancer's sample rate.
+    ///   - model: The registered enhancer to stream through.
+    /// - Returns: The enhancer's output. Fails with
+    ///   ``AudioToolError/modelNotLoaded(_:)`` at once if nothing is registered
+    ///   for `model`.
+    public func enhanceStream(
+        _ input: AsyncStream<AudioToolCore.AudioBuffer>,
+        model: EnhancementModel
+    ) -> AsyncThrowingStream<AudioToolCore.AudioBuffer, Error> {
+        guard let enhancer = enhancerProviders[model] else {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: AudioToolError.modelNotLoaded(model.modelName))
+            }
+        }
+        let residency = modelManager
+        return AsyncThrowingStream { continuation in
+            // Detached so the stream never runs on this actor. A batch call adapts
+            // its whole input synchronously on the actor, and a live stream hopping
+            // through it once per buffer would stall behind that.
+            let producer = Task.detached {
+                do {
+                    try await Self.runLiveEnhancement(
+                        input,
+                        through: enhancer,
+                        residency: residency,
+                        into: continuation
+                    )
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
+        }
+    }
+
+    /// The stream's residency bracket. ``withResidency(_:_:)`` without the actor.
+    private static func runLiveEnhancement(
+        _ input: AsyncStream<AudioToolCore.AudioBuffer>,
+        through enhancer: any SpeechEnhancer,
+        residency: ModelResidency,
+        into continuation: AsyncThrowingStream<AudioToolCore.AudioBuffer, Error>.Continuation
+    ) async throws {
+        guard let managed = enhancer as? any ManagedModel else {
+            try await forwardLiveEnhancement(input, through: enhancer, into: continuation)
+            return
+        }
+        let lease = try await residency.beginUse(managed)
+        do {
+            try await forwardLiveEnhancement(input, through: enhancer, into: continuation)
+        } catch {
+            await residency.endUse(lease)
+            throw error
+        }
+        await residency.endUse(lease)
+    }
+
+    /// Pump `input` into the enhancer through a format check, and its output into
+    /// `continuation`.
+    ///
+    /// Two child tasks so that either side can end the stream. A rejected buffer
+    /// fails the pump, and the group then cancels the enhancer's stream rather than
+    /// letting it see the input end and flush a tail nobody should hear. The
+    /// enhancer's output ending - normally, after its input ended, or early -
+    /// cancels the pump, which may still be waiting on a live source.
+    private static func forwardLiveEnhancement(
+        _ input: AsyncStream<AudioToolCore.AudioBuffer>,
+        through enhancer: any SpeechEnhancer,
+        into continuation: AsyncThrowingStream<AudioToolCore.AudioBuffer, Error>.Continuation
+    ) async throws {
+        let (adapted, adaptedContinuation) = AsyncStream<AudioToolCore.AudioBuffer>.makeStream()
+        // Also on the error paths, after the enhancer's stream has been cancelled,
+        // so a provider that ignores cancellation still sees its input end.
+        defer { adaptedContinuation.finish() }
+
+        // Each child returns whether it was the enhancer's output that ended.
+        try await withThrowingTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await chunk in input {
+                    if Task.isCancelled { return false }
+                    adaptedContinuation.yield(try adaptedLiveInput(chunk, for: enhancer))
+                }
+                // Cancellation also ends the loop above; only a real end of input
+                // may tell the enhancer to flush. The pump never reports the
+                // cancellation itself: whoever cancelled it has an outcome of its own.
+                if Task.isCancelled { return false }
+                adaptedContinuation.finish()
+                return false
+            }
+            group.addTask {
+                for try await output in enhancer.stream(adapted) {
+                    try Task.checkCancellation()
+                    if case .terminated = continuation.yield(output) {
+                        throw CancellationError()
+                    }
+                }
+                try Task.checkCancellation()
+                return true
+            }
+            // `next()` rethrows the first failure at once, and leaving the group on
+            // an error cancels the other child. `waitForAll()` would wait for both.
+            while let outputEnded = try await group.next() {
+                if outputEnded { group.cancelAll() }
+            }
+        }
+    }
+
+    /// One live buffer in the enhancer's format. See ``enhanceStream(_:model:)``
+    /// for why the rate is checked rather than converted.
+    private static func adaptedLiveInput(
+        _ buffer: AudioToolCore.AudioBuffer,
+        for enhancer: any SpeechEnhancer
+    ) throws -> AudioToolCore.AudioBuffer {
+        guard buffer.sampleRate == enhancer.sampleRate else {
+            throw AudioToolError.sampleRateMismatch(
+                expected: enhancer.sampleRate,
+                found: buffer.sampleRate
+            )
+        }
+        return try buffer.converted(toChannels: enhancer.inputChannels)
+    }
+
     // MARK: - Separation
 
     /// Pick a separation model for a number of overlapping speakers.

@@ -811,7 +811,13 @@ public actor ModelResidency {
     func pendingWaiterCount(for modelId: String) -> Int {
         pendingLoads[modelId]?.waiterCount ?? 0
     }
-    
+
+    /// Number of outstanding leases on a model. Internal, for tests that need to
+    /// see a release happen rather than infer it from a later eviction.
+    func activeUseCount(for modelId: String) -> Int {
+        activeUseCounts[modelId] ?? 0
+    }
+
     /// Total memory used by loaded models in bytes
     public var totalMemoryUsage: Int {
         loadedModels.values.reduce(0) { $0 + $1.memoryBytes }

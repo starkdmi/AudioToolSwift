@@ -780,9 +780,10 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
     /// its input ends, whichever comes first - not before, so a consumer waiting on
     /// a source that has gone quiet keeps waiting. That includes an unload nobody
     /// asked for: an `AudioEngine` this provider is registered with evicts it when
-    /// another model needs the memory, and a live stream holds no claim against
-    /// that. Stream from an instance the engine does not manage, or size
-    /// ``AudioToolConfiguration/modelMemoryLimit`` to keep it resident.
+    /// another model needs the memory, and a stream opened here holds no claim
+    /// against that. For a registered instance, stream through
+    /// ``AudioEngine/enhanceStream(_:model:)`` instead, which keeps the provider
+    /// resident until the stream ends.
     ///
     /// A buffer at another rate, with another channel count, or holding NaN or
     /// infinity ends the stream with an error rather than reaching the session.
