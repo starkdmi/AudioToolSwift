@@ -69,8 +69,9 @@ silently without them** - a green run is not evidence they executed:
 `VoiceIsolatorModelTests` takes one variable per checkpoint because they are two
 separately trained models rather than two precisions of one; setting only one
 runs that half and skips the other. Its first case on a cold machine takes about
-three minutes while VoiceIsolatorMLX's custom Metal kernels compile, after which
-the remaining eight finish in seconds.
+three minutes while VoiceIsolatorMLX's custom Metal kernels compile; the other
+eleven take about a minute together, most of it the three 10-second streaming
+identities.
 
 ```bash
 AUDIOTOOL_USS_WEIGHTS=~/weights/resunet30_fp32.safetensors \

@@ -83,6 +83,22 @@ enum VoiceIsolatorWeights {
         }
         return residual
     }
+
+    /// Reject NaN and infinity before they reach the network.
+    ///
+    /// `isolate` checks this itself, but a live session's `push` does not, and that
+    /// is where it matters most: the session's Mamba scan state is recurrent, so a
+    /// NaN that reaches it stays there and every later output of that stream is
+    /// NaN, not just the buffer that carried it. Checked here for every entry point
+    /// so that all of them report it the same way.
+    static func requireFinite(_ samples: [Float]) throws {
+        guard samples.allSatisfy(\.isFinite) else {
+            throw AudioToolError.invalidAudioFormat(
+                expected: "finite samples",
+                found: "NaN or infinite samples"
+            )
+        }
+    }
 }
 
 // MARK: - Progress
@@ -108,6 +124,14 @@ struct VoiceIsolatorProgressBridge {
     /// Pass to `isolate(progress:)`. `nil` when there is no callback, so the
     /// library skips progress accounting entirely.
     let yield: (@Sendable (Double) -> Void)?
+
+    /// Whether there is a reporter for ``finish()`` to wait for.
+    ///
+    /// Check it before awaiting ``finish()``: that call is `nonisolated`, so
+    /// awaiting it from a provider hops off the actor and has to queue to get back
+    /// on - behind any render another caller has started in the meantime - even
+    /// when there was never a callback to wait for.
+    var isActive: Bool { reporter != nil }
 
     private let continuation: AsyncStream<Double>.Continuation?
     private let reporter: Task<Void, Never>?
@@ -205,6 +229,10 @@ public actor VoiceIsolator48KProvider: SpeechEnhancer {
     }
 
     /// Initialize with explicit weights path (no download)
+    ///
+    /// `precision` should name the checkpoint at `weightsPath`: the model computes
+    /// in whatever the file stores, but ``estimatedMemoryBytes`` is budgeted from
+    /// `precision`.
     public init(weightsPath: String, precision: ModelPrecision = .fp16) {
         self.weightsPath = weightsPath
         self.precision = precision
@@ -293,6 +321,7 @@ public actor VoiceIsolator48KProvider: SpeechEnhancer {
         sampleRate: Int,
         onProgress: ProgressCallback?
     ) async throws -> [Float] {
+        try VoiceIsolatorWeights.requireFinite(samples)
         let bridge = VoiceIsolatorProgressBridge(onProgress)
         do {
             let voice = try isolator.isolate(
@@ -300,11 +329,11 @@ public actor VoiceIsolator48KProvider: SpeechEnhancer {
                 sampleRate: sampleRate,
                 progress: bridge.yield
             )
-            await bridge.finish()
+            if bridge.isActive { await bridge.finish() }
             MLXCachePolicy.trimIfCacheGrew()
             return voice
         } catch {
-            await bridge.finish()
+            if bridge.isActive { await bridge.finish() }
             MLXCachePolicy.trimIfCacheGrew()
             throw error
         }
@@ -430,15 +459,20 @@ extension VoiceIsolator48KProvider: ManagedModel {
 ///
 /// | call | session | use |
 /// | --- | --- | --- |
-/// | ``process(_:)`` | one, internal, flushed | a whole buffer, no streaming |
-/// | ``processStream(_:)`` | one, across the yields | a file, played as it renders |
-/// | ``stream(_:)`` | one, across the inputs | live audio |
+/// | ``process(_:)`` | one per call, flushed | a whole buffer, no streaming |
+/// | ``processStream(_:)`` | one per call, across the yields | a file, played as it renders |
+/// | ``stream(_:)`` | one per call, across its inputs | live audio |
 ///
 /// ``stream(_:)`` is the one that distinguishes this provider from the offline
 /// one. Every other `SpeechEnhancer` here implements it by calling `process` per
 /// chunk, which restarts the model at each buffer; this one pushes into a single
 /// `IsolationStream`, so there is no boundary artifact between buffers and the
 /// cost is one session's worth of state rather than one per chunk.
+///
+/// No session outlives the call that opened it, and no two calls share one, so
+/// concurrent calls on one provider are independent. They are not parallel: every
+/// push runs on this actor, so a long ``process(_:)`` or ``processStream(_:)``
+/// holds up live streams on the same provider for as long as it renders.
 public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
 
     /// HuggingFace repository for model weights
@@ -461,10 +495,12 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
     /// Band-limited, for the reason given on ``VoiceIsolator48KProvider``.
     public nonisolated var preferredResamplingQuality: AudioToolCore.ResamplingQuality { .high }
 
-    /// One block at the configured block size. Pushes may be any size - the
-    /// session buffers what it cannot yet finalize - so this is the smallest push
-    /// that can produce output rather than a hard floor.
-    public nonisolated let minChunkSize: Int = 480 * 4
+    /// One frame, 10 ms. Pushes of any size are accepted - the session buffers
+    /// what it cannot yet finalize - so this is not a floor: it is the smallest
+    /// push that can complete a frame, and in steady state each one does release
+    /// that frame's output. The first output of a session waits for
+    /// ``latencySamples()`` of input whatever the push size.
+    public nonisolated let minChunkSize: Int = 480
 
     /// Half a second at 48 kHz, which is the piece size `VoiceIsolator` itself
     /// uses when it drives a session over a whole clip.
@@ -472,13 +508,25 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
 
     private var isolator: VoiceIsolator?
 
-    /// The live session for ``stream(_:)``, held across input buffers.
+    /// The open sessions of ``stream(_:)``, one per call, keyed by a token only
+    /// that call holds.
     ///
-    /// `IsolationStream` is not reentrant and neither is the `Network` behind it,
-    /// so there is exactly one, and actor isolation is what enforces that. A second
-    /// concurrent `stream(_:)` would otherwise interleave pushes into one session
-    /// and get both callers' audio mixed into both results.
-    private var session: IsolationStream?
+    /// One per call rather than one per provider because a session is the whole of
+    /// a stream's state: `IsolationStream` holds the attention caches, the Mamba
+    /// state and the overlap-add tail, while the `Network` behind it holds weights.
+    /// Any number of sessions can therefore share one network, provided their
+    /// pushes never overlap - neither class is reentrant - and actor isolation is
+    /// what guarantees that.
+    ///
+    /// A single slot shared by every caller cannot be made safe this way. A second
+    /// `stream(_:)` would replace the first's session, the first would go on
+    /// pushing into the second's, and both callers would get both inputs mixed
+    /// into their results until one input ended and flushed the session out from
+    /// under the other.
+    private var sessions: [UInt64: IsolationStream] = [:]
+
+    /// Source of the tokens in ``sessions``. Never reused while a provider lives.
+    private var lastSessionID: UInt64 = 0
 
     private let weightsPath: String?
     private let precision: ModelPrecision
@@ -495,9 +543,12 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
     ///   - lookaheadFrames: One of ``supportedLookaheadFrames``, or `nil` for the
     ///     checkpoint's own default. More look-ahead is more latency and better
     ///     separation; see ``latency``.
-    ///   - blockFrames: Frames per forward pass in a live session. Smaller is
-    ///     lower latency per push and more dispatches per second of audio; the
-    ///     output does not depend on it.
+    ///   - blockFrames: The most frames a live session runs through the network
+    ///     in one forward pass; at least 1, checked at ``load()``. It is a cap,
+    ///     not a batch size the session waits to fill - a push is processed as
+    ///     soon as it completes a frame - so it does not change latency, and the
+    ///     output does not depend on it. It matters when one push brings many
+    ///     frames: smaller means more, smaller dispatches.
     public init(
         precision: ModelPrecision = .fp16,
         lookaheadFrames: Int? = nil,
@@ -510,6 +561,11 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
     }
 
     /// Initialize with explicit weights path (no download)
+    ///
+    /// `precision` should name the checkpoint at `weightsPath`. The model computes
+    /// in whatever the file stores, so a mismatch does not change the output - but
+    /// ``estimatedMemoryBytes`` is budgeted from `precision`, and an fp32 file
+    /// declared as fp16 is under-budgeted by a gigabyte.
     public init(
         weightsPath: String,
         precision: ModelPrecision = .fp16,
@@ -530,6 +586,14 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
     }
 
     private func performLoad() async throws {
+        // Here rather than at the first stream: `process` clamps the block size
+        // up to the library's render size and would never notice, so a bad value
+        // would otherwise surface only when a live session is opened.
+        guard blockFrames >= 1 else {
+            throw AudioToolError.pipelineConfigurationInvalid(
+                "blockFrames must be at least 1, got \(blockFrames)"
+            )
+        }
         MLXCachePolicy.applyProcessLimits()
 
         let url = try await VoiceIsolatorWeights.resolve(
@@ -603,6 +667,7 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
         sampleRate: Int,
         onProgress: ProgressCallback?
     ) async throws -> [Float] {
+        try VoiceIsolatorWeights.requireFinite(samples)
         let bridge = VoiceIsolatorProgressBridge(onProgress)
         do {
             let voice = try isolator.isolate(
@@ -610,11 +675,11 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
                 sampleRate: sampleRate,
                 progress: bridge.yield
             )
-            await bridge.finish()
+            if bridge.isActive { await bridge.finish() }
             MLXCachePolicy.trimIfCacheGrew()
             return voice
         } catch {
-            await bridge.finish()
+            if bridge.isActive { await bridge.finish() }
             MLXCachePolicy.trimIfCacheGrew()
             throw error
         }
@@ -642,33 +707,60 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
 
     // MARK: - Live Session
 
-    /// Start a session, discarding any in progress.
-    private func beginSession() throws {
+    /// Open a session for one ``stream(_:)`` call and return the token for it.
+    private func openSession() throws -> UInt64 {
         guard let isolator else {
             throw AudioToolError.modelNotLoaded("VoiceIsolator_Realtime_48K")
         }
-        session = try isolator.stream()
+        let session = try isolator.stream()
+        lastSessionID &+= 1
+        sessions[lastSessionID] = session
+        return lastSessionID
     }
 
-    /// Push one buffer and return the samples that became final.
+    /// Push one buffer into the caller's session and return the samples that
+    /// became final.
     ///
     /// May be empty: the first pushes of a session fill the analysis window and
     /// the look-ahead before anything can be finalized.
-    private func pushSession(_ input: AudioBuffer) throws -> [Float] {
-        guard let session else {
-            throw AudioToolError.modelNotLoaded("VoiceIsolator_Realtime_48K")
-        }
+    private func pushSession(_ id: UInt64, _ input: AudioBuffer) throws -> [Float] {
         try validateSampleRate(input)
-        return try session.push(input.samples)
+        try VoiceIsolatorWeights.requireFinite(input.samples)
+        return try openedSession(id).push(input.samples)
     }
 
-    /// Drain the session's tail and end it.
-    private func endSession() throws -> [Float] {
-        guard let session else { return [] }
-        self.session = nil
+    /// Drain the caller's session and close it.
+    ///
+    /// Throws rather than returning nothing when the session is gone. Only
+    /// ``unload()`` removes a session its stream did not close, and a stream that
+    /// finished normally after that would hand its caller a truncated signal as
+    /// if it were the whole one.
+    private func closeSession(_ id: UInt64) throws -> [Float] {
+        let session = try openedSession(id)
+        sessions[id] = nil
         defer { MLXCachePolicy.trimIfCacheGrew() }
         return try session.flush()
     }
+
+    /// Close the caller's session without flushing it.
+    ///
+    /// For a stream ending on an error or a cancellation, where nobody will read
+    /// the tail and a flush would be a forward pass over it for nothing. Safe to
+    /// call for a session that is already closed.
+    private func discardSession(_ id: UInt64) {
+        guard sessions.removeValue(forKey: id) != nil else { return }
+        MLXCachePolicy.trimIfCacheGrew()
+    }
+
+    private func openedSession(_ id: UInt64) throws -> IsolationStream {
+        guard let session = sessions[id] else {
+            throw AudioToolError.modelNotLoaded("VoiceIsolator_Realtime_48K")
+        }
+        return session
+    }
+
+    /// Sessions currently open, for tests that check every exit closes its own.
+    var openSessionCount: Int { sessions.count }
 
     /// Enhance live audio, carrying model state across the input buffers.
     ///
@@ -678,17 +770,36 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
     /// buffer when the input stream ends. Concatenated, they are the whole
     /// enhanced signal, ``latency()`` behind the input.
     ///
-    /// One session at a time per provider. A second `stream(_:)` started while one
-    /// is running takes the session over, and the first then finishes early rather
-    /// than interleaving - make a second provider instead.
+    /// Each call opens a session of its own and closes it however the stream ends,
+    /// so concurrent streams on one provider cannot see each other's audio. Each
+    /// costs a session's worth of state on top of the loaded model, and they share
+    /// this actor - see the note on the type.
+    ///
+    /// ``unload()`` frees every open session at once, and each stream then fails
+    /// with ``AudioToolError/modelNotLoaded(_:)`` at its next input buffer or when
+    /// its input ends, whichever comes first - not before, so a consumer waiting on
+    /// a source that has gone quiet keeps waiting. That includes an unload nobody
+    /// asked for: an `AudioEngine` this provider is registered with evicts it when
+    /// another model needs the memory, and a live stream holds no claim against
+    /// that. Stream from an instance the engine does not manage, or size
+    /// ``AudioToolConfiguration/modelMemoryLimit`` to keep it resident.
+    ///
+    /// A buffer at another rate, with another channel count, or holding NaN or
+    /// infinity ends the stream with an error rather than reaching the session.
     public nonisolated func stream(_ input: AsyncStream<AudioBuffer>) -> AsyncThrowingStream<AudioBuffer, Error> {
         AsyncThrowingStream { continuation in
             let producer = Task {
+                let id: UInt64
                 do {
-                    try await beginSession()
+                    id = try await openSession()
+                } catch {
+                    continuation.finish(throwing: error)
+                    return
+                }
+                do {
                     for await chunk in input {
                         try Task.checkCancellation()
-                        let ready = try await pushSession(chunk)
+                        let ready = try await pushSession(id, chunk)
                         guard !ready.isEmpty else { continue }
                         let buffer = AudioBuffer(
                             samples: ready,
@@ -696,11 +807,14 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
                             channels: 1
                         )
                         if case .terminated = continuation.yield(buffer) {
-                            _ = try? await endSession()
+                            await discardSession(id)
                             return
                         }
                     }
-                    let tail = try await endSession()
+                    // Cancellation also ends the input loop, so check before
+                    // flushing a tail no one is waiting for.
+                    try Task.checkCancellation()
+                    let tail = try await closeSession(id)
                     if !tail.isEmpty {
                         continuation.yield(
                             AudioBuffer(samples: tail, sampleRate: sampleRate, channels: 1)
@@ -708,7 +822,7 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
                     }
                     continuation.finish()
                 } catch {
-                    _ = try? await endSession()
+                    await discardSession(id)
                     continuation.finish(throwing: error)
                 }
             }
@@ -716,8 +830,12 @@ public actor VoiceIsolatorRealtime48KProvider: SpeechEnhancer {
         }
     }
 
+    /// Nothing carries over between streams, so there is nothing to reset.
+    ///
+    /// Every session belongs to the call that opened it and is closed when that
+    /// call ends. Streams still running are left alone: ending one is what
+    /// cancelling its output stream is for.
     public func reset() async {
-        session = nil
         MLXCachePolicy.trimIfCacheGrew()
     }
 
@@ -757,7 +875,6 @@ extension VoiceIsolatorRealtime48KProvider: StreamableOutput {
                 do {
                     try await self.processStreamImpl(input, continuation: continuation)
                 } catch {
-                    _ = try? await self.endSession()
                     continuation.finish(throwing: error)
                 }
             }
@@ -765,6 +882,10 @@ extension VoiceIsolatorRealtime48KProvider: StreamableOutput {
         }
     }
 
+    /// The session is a local here rather than an entry in ``sessions``. Nothing
+    /// in this method suspends, so it holds the actor from the first push to the
+    /// flush, nothing else can reach the session in between, and it is released on
+    /// every exit without a cleanup step to forget.
     private func processStreamImpl(
         _ input: AudioBuffer,
         continuation: AsyncThrowingStream<AudioBuffer, Error>.Continuation
@@ -773,32 +894,33 @@ extension VoiceIsolatorRealtime48KProvider: StreamableOutput {
             throw AudioToolError.modelNotLoaded("VoiceIsolator_Realtime_48K")
         }
         try validateSampleRate(input)
+        try VoiceIsolatorWeights.requireFinite(input.samples)
 
         // Larger blocks than a live session uses. The output does not depend on the
         // block size, and nothing here is waiting on a microphone, so the extra
         // frames per dispatch are free throughput.
-        session = try isolator.stream(
+        let session = try isolator.stream(
             blockFrames: max(blockFrames, VoiceIsolator.renderBlockFrames)
         )
+        defer { MLXCachePolicy.trimIfCacheGrew() }
 
         let piece = Int(VoiceIsolator.streamPieceSeconds * Double(sampleRate))
         var index = 0
         while index < input.samples.count {
             try Task.checkCancellation()
             let end = min(input.samples.count, index + piece)
-            let ready = try session?.push(Array(input.samples[index..<end])) ?? []
+            let ready = try session.push(Array(input.samples[index..<end]))
             index = end
 
             if !ready.isEmpty {
                 let buffer = AudioBuffer(samples: ready, sampleRate: sampleRate, channels: 1)
                 if case .terminated = continuation.yield(buffer) {
-                    _ = try? endSession()
                     throw CancellationError()
                 }
             }
         }
 
-        let tail = try endSession()
+        let tail = try session.flush()
         if !tail.isEmpty {
             continuation.yield(AudioBuffer(samples: tail, sampleRate: sampleRate, channels: 1))
         }
@@ -829,7 +951,8 @@ extension VoiceIsolatorRealtime48KProvider: ManagedModel {
     ///
     /// Bounded, which is what matters for a live session: the crossfade is
     /// periodic and the retired lane is released at each boundary, so at 60 s the
-    /// fp16 case peaks at 1721 MiB against 1700 at 30 s.
+    /// fp16 case peaks at 1721 MiB against 1700 at 30 s. That is one session;
+    /// each concurrent ``stream(_:)`` holds a session of its own.
     ///
     /// `IsolationStream` does expose `windowFrames: 0`, which skips the second
     /// lane entirely and would roughly halve this. It is deliberately not
@@ -845,7 +968,9 @@ extension VoiceIsolatorRealtime48KProvider: ManagedModel {
     public func unload() async {
         let teardown = await loadGate.beginTeardown()
         defer { loadGate.endTeardown(teardown) }
-        session = nil
+        // Open streams find their session gone at their next push or at the end of
+        // their input, and finish with `modelNotLoaded`.
+        sessions = [:]
         isolator = nil
         GPU.clearCache()
     }

@@ -18,7 +18,8 @@ the top heading until it ships.
     `stream(_:)` is the first in this package that carries model state across
     input buffers rather than calling `process` once per chunk, and
     `latencySamples()` reports the algorithmic latency a playout buffer has to
-    absorb.
+    absorb. Each call gets a session of its own, so concurrent streams on one
+    provider stay independent.
 - Both providers add `isolate(_:)` beside `process(_:)`. `process` validates its
   48 kHz input as every provider does; `isolate` accepts any rate and lets the
   library resample in and out with torchaudio's `kaiser_best` filter, which is
@@ -31,6 +32,14 @@ the top heading until it ships.
 
 Both default to **fp16**, which no other model here does: it is the precision the
 port computes in and was measured against the PyTorch reference at.
+
+### Changed
+
+- **Source-breaking:** `EnhancementModel` has two new cases. A `switch` over it
+  outside this package that lists every case and has no `default` stops
+  compiling. SwiftPM resolves `from: "0.1.0"` to anything below 1.0.0, so this
+  reaches existing dependents on their next `swift package update` rather than
+  only when they opt in.
 
 ## 0.1.0 — 2026-08-17
 

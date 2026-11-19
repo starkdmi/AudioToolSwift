@@ -66,7 +66,7 @@ measurements and only two of them belong in a comparison.
 
 ## What it runs
 
-Twenty-two cases, MLX and CoreML. Where a model publishes more than one
+Twenty-six cases, MLX and CoreML. Where a model publishes more than one
 precision, each is its own case — that comparison is what `model-precisions.md`
 is built from:
 
@@ -75,6 +75,8 @@ is built from:
 | `mlx.frcrn_se_16k` | FRCRN speech enhancement, 16 kHz |
 | `mlx.mossformer2_se_48k.` `fp32` / `fp16` / `int8` / `int6` / `int4` | MossFormer2 speech enhancement, 48 kHz |
 | `coreml.mossformer_gan_se_16k.fp32` / `.fp16` | MossFormerGAN enhancement, CoreML |
+| `mlx.voice_isolator_48k.` `fp16` / `fp32` | Voice Isolator, offline, 48 kHz |
+| `mlx.voice_isolator_realtime_48k.` `fp16` / `fp32` | Voice Isolator, causal, 48 kHz, through `process` |
 | `mlx.mossformer2_ss.2spk` | Speaker separation, 2 speakers, 16 kHz |
 | `mlx.mossformer2_ss.3spk` | Speaker separation, 3 speakers, 8 kHz |
 | `mlx.mossformer2_ss.2spk_whamr` | Speaker separation, WHAMR, 8 kHz |

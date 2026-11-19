@@ -168,8 +168,14 @@ extension AudioEngine {
     /// runs a whole buffer through one session. The reason to reach for this model
     /// - carrying state across live input buffers - is
     /// ``VoiceIsolatorRealtime48KProvider/stream(_:)``, which the engine's
-    /// enhancement API has no shape for, so hold the provider as well as
-    /// registering it.
+    /// enhancement API has no shape for.
+    ///
+    /// Do not stream live audio from the instance you register here. The engine
+    /// evicts registered models under its memory budget whenever it admits
+    /// another, and a live stream holds no claim against that, so an unrelated
+    /// `enhance` call can unload the provider and end every open stream. At the
+    /// default 2 GB budget and this model's 1.8 GB estimate, almost any second
+    /// model does. Give live audio a provider of its own.
     public func configure(enhancer: VoiceIsolatorRealtime48KProvider, for model: EnhancementModel = .voiceIsolatorRealtime) async throws {
         try await self.preload(enhancer)
         self.register(enhancer: enhancer, for: model)

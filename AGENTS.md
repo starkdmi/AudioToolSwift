@@ -283,7 +283,7 @@ TEST_RUNNER_AUDIOTOOL_VOICE_ISOLATOR_REALTIME_WEIGHTS=/path/VoiceIsolator_v1_Rea
 Budget for the first run on a machine. VoiceIsolatorMLX builds several custom
 Metal kernels from source at first use, and that compilation is a one-off cost
 paid by whichever test happens to run first: measured here at **178 s** for the
-first case against 0.7-6.7 s for the eight after it. It is not a hang, and it is
+first case against 0.02-23 s for the eleven after it. It is not a hang, and it is
 not in the benchmark's RTF - the benchmark loads in a child process per case and
 reports load time separately.
 
