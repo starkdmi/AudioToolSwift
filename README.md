@@ -152,11 +152,13 @@ let speech = try await engine.synthesize("Hello.", voice: "af_heart", model: voi
 swift run audio-tool -m se48k -i noisy.wav -o clean.wav
 ```
 
-Models: `frcrn`, `frcrn-bg`, `se48k`, `se48k-bg`, `demucs`, `ss_2spk`,
-`ss_3spk`, `ss_whamr`, `sr48k`, `transcribe`. The `-bg` variants keep the
-background as a second output instead of discarding it.
+Models: `frcrn`, `se48k`, `voiceisolate`, `voiceisolate-rt`, `demucs`,
+`ss_2spk`, `ss_3spk`, `ss_whamr`, `sr48k`, `transcribe`. Add `-bg` to `frcrn`,
+`se48k` or `voiceisolate` to keep the removed background as a second output
+instead of discarding it. `voiceisolate-rt` runs the causal Voice Isolator
+through its live stream. `audio-tool --help` lists every mode with its aliases.
 
-`audio-tool-bench` measures the MLX and Core ML models on your own machine — 22
+`audio-tool-bench` measures the MLX and Core ML models on your own machine — 26
 cases, including Chatterbox TTS. The FluidAudio-backed and Apple-framework
 providers are deliberately out of scope, since their numbers describe those
 projects rather than this one. See [Docs/running-benchmarks.md](Docs/running-benchmarks.md).
