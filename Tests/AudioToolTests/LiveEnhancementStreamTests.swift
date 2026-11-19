@@ -155,7 +155,7 @@ struct LiveEnhancementStreamTests {
     /// The defect `enhanceStream` exists for, so the tests below are known to be
     /// testing something.
     @Test("A provider streamed directly is evicted by another admission")
-    func directStreamIsEvicted() async throws {
+    func testDirectStreamIsEvicted() async throws {
         let fixture = try await makeFixture()
         let (input, feed) = AsyncStream<AudioBuffer>.makeStream()
         var outputs = fixture.enhancer.stream(input).makeAsyncIterator()
@@ -173,7 +173,7 @@ struct LiveEnhancementStreamTests {
     }
 
     @Test("An open stream survives another model's admission, and is evictable once it ends")
-    func openStreamSurvivesAdmission() async throws {
+    func testOpenStreamSurvivesAdmission() async throws {
         let fixture = try await makeFixture()
         let (input, feed) = AsyncStream<AudioBuffer>.makeStream()
         var outputs = await fixture.engine
@@ -203,8 +203,32 @@ struct LiveEnhancementStreamTests {
         #expect(await fixture.enhancer.unloadCount == 1)
     }
 
+    @Test("A stream opened on an evicted model reloads it and keeps it")
+    func testStreamReloadsAnEvictedModel() async throws {
+        let fixture = try await makeFixture()
+        try await fixture.admitOther()
+        #expect(await fixture.enhancer.isLoaded == false)
+
+        let (input, feed) = AsyncStream<AudioBuffer>.makeStream()
+        var outputs = await fixture.engine
+            .enhanceStream(input, model: Self.model)
+            .makeAsyncIterator()
+        feed.yield(buffer(1))
+        let first = try await outputs.next()
+        #expect(first?.samples.first == 0.5)
+        #expect(await fixture.enhancer.isLoaded)
+        #expect(await fixture.leases == 1)
+
+        try await fixture.admitOther()
+        #expect(await fixture.enhancer.isLoaded)
+
+        feed.finish()
+        #expect(try await outputs.next() == nil)
+        #expect(await fixture.leases == 0)
+    }
+
     @Test("A provider error ends the stream and releases the lease")
-    func providerErrorReleasesLease() async throws {
+    func testProviderErrorReleasesLease() async throws {
         let fixture = try await makeFixture()
         let (input, feed) = AsyncStream<AudioBuffer>.makeStream()
         let output = await fixture.engine.enhanceStream(input, model: Self.model)
@@ -221,7 +245,7 @@ struct LiveEnhancementStreamTests {
     }
 
     @Test("A buffer at another rate ends the stream before reaching the provider")
-    func wrongRateIsRejected() async throws {
+    func testWrongRateIsRejected() async throws {
         let fixture = try await makeFixture()
         let (input, feed) = AsyncStream<AudioBuffer>.makeStream()
         let output = await fixture.engine.enhanceStream(input, model: Self.model)
@@ -247,13 +271,16 @@ struct LiveEnhancementStreamTests {
     }
 
     @Test("Cancelling the consumer releases the lease")
-    func consumerCancellationReleasesLease() async throws {
+    func testConsumerCancellationReleasesLease() async throws {
         let fixture = try await makeFixture()
         let (input, feed) = AsyncStream<AudioBuffer>.makeStream()
         let output = await fixture.engine.enhanceStream(input, model: Self.model)
         let (started, signalStarted) = AsyncStream<Void>.makeStream()
 
         let consumer = Task {
+            // Finished on every exit, so a stream that fails before its first
+            // output fails this test instead of hanging it.
+            defer { signalStarted.finish() }
             var outputs = output.makeAsyncIterator()
             _ = try await outputs.next()
             signalStarted.yield()
@@ -261,7 +288,15 @@ struct LiveEnhancementStreamTests {
         }
 
         feed.yield(buffer(1))
-        for await _ in started { break }
+        var didStart = false
+        for await _ in started {
+            didStart = true
+            break
+        }
+        guard didStart else {
+            Issue.record("the stream ended before its first output")
+            return
+        }
         try await fixture.admitOther()
         #expect(await fixture.enhancer.isLoaded)
 
@@ -272,7 +307,7 @@ struct LiveEnhancementStreamTests {
     }
 
     @Test("Dropping the stream releases the lease")
-    func droppingStreamReleasesLease() async throws {
+    func testDroppingStreamReleasesLease() async throws {
         let fixture = try await makeFixture()
         let (input, feed) = AsyncStream<AudioBuffer>.makeStream()
 
@@ -292,7 +327,7 @@ struct LiveEnhancementStreamTests {
     }
 
     @Test("Channels are adapted per buffer")
-    func channelsAreAdapted() async throws {
+    func testChannelsAreAdapted() async throws {
         let fixture = try await makeFixture()
         let (input, feed) = AsyncStream<AudioBuffer>.makeStream()
         let output = await fixture.engine.enhanceStream(input, model: Self.model)
@@ -309,7 +344,7 @@ struct LiveEnhancementStreamTests {
     }
 
     @Test("An unregistered model fails at once")
-    func unregisteredModelFails() async throws {
+    func testUnregisteredModelFails() async throws {
         let engine = AudioEngine()
         let (input, _) = AsyncStream<AudioBuffer>.makeStream()
         let output = await engine.enhanceStream(input, model: .voiceIsolatorRealtime)
@@ -319,7 +354,7 @@ struct LiveEnhancementStreamTests {
     }
 
     @Test("An enhancer outside residency management streams without a lease")
-    func unmanagedEnhancerStreams() async throws {
+    func testUnmanagedEnhancerStreams() async throws {
         let enhancer = MockEnhancer()
         enhancer.processDelay = .zero
         enhancer.scaleFactor = 0.5

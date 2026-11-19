@@ -43,6 +43,10 @@ trained checkpoints.
   genuinely carries model state across input buffers — KV-cached attention,
   Mamba state and a two-lane crossfade — rather than calling `process` once per
   chunk. `latencySamples()` reports what a playout buffer has to absorb.
+  Registered with an `AudioEngine`, stream through
+  `engine.enhanceStream(_:model: .voiceIsolatorRealtime)`, which keeps the model
+  resident until the stream ends; a `stream(_:)` called on the registered
+  provider directly can be evicted mid-stream when another model loads.
 
 Both default to **fp16**, which no other model here does: it is the precision the
 port computes in and was measured against the PyTorch reference at.

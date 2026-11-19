@@ -102,6 +102,18 @@ public actor AudioEngine {
         _ provider: Any,
         _ body: () async throws -> T
     ) async throws -> T {
+        try await Self.withLease(on: provider, from: modelManager, body)
+    }
+
+    /// ``withResidency(_:_:)`` for a caller in any isolation, including none: the
+    /// body runs where the caller does. ``enhanceStream(_:model:)`` takes its
+    /// claim through here from off the actor.
+    private static func withLease<T>(
+        on provider: Any,
+        from modelManager: ModelResidency,
+        isolation: isolated (any Actor)? = #isolation,
+        _ body: () async throws -> T
+    ) async throws -> T {
         guard let managed = provider as? any ManagedModel else {
             return try await body()
         }
@@ -415,6 +427,14 @@ public actor AudioEngine {
     /// Only an explicit ``unloadModel(_:)`` or ``unloadAllModels()`` still ends a
     /// stream early. That is deliberate, the same as for a batch call in flight.
     ///
+    /// Two consequences of the claim being a batch call's claim, held longer. A
+    /// stream opened while that model is being unloaded fails at once with
+    /// ``AudioToolError/resourceUnavailable(_:)`` rather than waiting for the
+    /// unload; open it again to reload the model. And while it is open, another
+    /// instance with the same ``ManagedModel/modelId`` cannot be used through the
+    /// engine - after re-registering a replacement, batch calls on it fail with
+    /// ``AudioToolError/pipelineConfigurationInvalid(_:)`` until this stream ends.
+    ///
     /// **Format.** Each buffer must already be at the enhancer's
     /// ``AudioProcessor/sampleRate``; a buffer at any other rate ends the stream
     /// with ``AudioToolError/sampleRateMismatch(expected:found:)`` before it
@@ -449,8 +469,10 @@ public actor AudioEngine {
         return AsyncThrowingStream { continuation in
             // Detached so the stream never runs on this actor. A batch call adapts
             // its whole input synchronously on the actor, and a live stream hopping
-            // through it once per buffer would stall behind that.
-            let producer = Task.detached {
+            // through it once per buffer would stall behind that. Detaching drops
+            // the caller's priority unless it is passed on, and a live source is
+            // the one place that priority matters.
+            let producer = Task.detached(priority: Task.currentPriority) {
                 do {
                     try await Self.runLiveEnhancement(
                         input,
@@ -467,25 +489,17 @@ public actor AudioEngine {
         }
     }
 
-    /// The stream's residency bracket. ``withResidency(_:_:)`` without the actor.
+    /// The stream's residency bracket: the same one every batch call takes, run
+    /// off the actor.
     private static func runLiveEnhancement(
         _ input: AsyncStream<AudioToolCore.AudioBuffer>,
         through enhancer: any SpeechEnhancer,
         residency: ModelResidency,
         into continuation: AsyncThrowingStream<AudioToolCore.AudioBuffer, Error>.Continuation
     ) async throws {
-        guard let managed = enhancer as? any ManagedModel else {
+        try await withLease(on: enhancer, from: residency) {
             try await forwardLiveEnhancement(input, through: enhancer, into: continuation)
-            return
         }
-        let lease = try await residency.beginUse(managed)
-        do {
-            try await forwardLiveEnhancement(input, through: enhancer, into: continuation)
-        } catch {
-            await residency.endUse(lease)
-            throw error
-        }
-        await residency.endUse(lease)
     }
 
     /// Pump `input` into the enhancer through a format check, and its output into

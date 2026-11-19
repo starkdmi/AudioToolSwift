@@ -94,7 +94,11 @@ straight through — nothing loads them for you, and you `load()` them yourself
 before registering.
 
 Input is adapted at the boundary — a 48 kHz stereo file handed to a 16 kHz mono
-model is resampled and downmixed once, and you get your own rate back.
+model is resampled and downmixed once, and you get your own rate back. Live
+streams (`enhanceStream`) are the exception for rate: their buffers must already
+be at the model's rate, because resampling a stream buffer by buffer puts
+artefacts at every buffer edge. Convert at the source, where the converter keeps
+its state.
 
 ### Pipelines
 

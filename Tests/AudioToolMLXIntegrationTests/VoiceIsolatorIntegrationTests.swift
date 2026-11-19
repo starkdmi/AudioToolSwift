@@ -212,10 +212,15 @@ final class VoiceIsolatorModelTests: IntegrationTestCase {
         return energy > 0 ? (error / energy).squareRoot() : .infinity
     }
 
+    /// A NaN on either side, or infinity on both, makes the result NaN rather than
+    /// being skipped. `max` alone would skip it - `max(worst, .nan)` is `worst` -
+    /// so non-finite output would read as agreement and pass a `== 0` check.
     private func maxAbsoluteDifference(_ lhs: [Float], _ rhs: [Float]) -> Float {
         var worst: Float = 0
         for index in 0..<min(lhs.count, rhs.count) {
-            worst = max(worst, abs(lhs[index] - rhs[index]))
+            let difference = abs(lhs[index] - rhs[index])
+            if difference.isNaN { return .nan }
+            worst = max(worst, difference)
         }
         return worst
     }
