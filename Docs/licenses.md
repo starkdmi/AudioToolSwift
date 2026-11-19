@@ -140,6 +140,7 @@ are not a blanket non-commercial licence, but they do bind distribution.
 | MossFormer2 SE, SR, 2-speaker and 3-speaker conversions under `starkdmi/MossFormer2_*_MLX` | Apache-2.0, from ClearerVoice code and the Alibaba model cards | Apache attribution and NOTICE material |
 | `starkdmi/MossFormer2_SS_2SPK_WHAMR_8K_MLX` | MIT, from base `alibabasglab/mossformer2-whamr-2spk` | The upstream MIT notice |
 | FRCRN `starkdmi/FRCRN_SE_16K_MLX` | Apache-2.0, from base `alibabasglab/FRCRN_SE_16K` | Apache attribution and NOTICE material |
+| Voice Isolator `starkdmi/VoiceIsolator_v1_48K_MLX` and `starkdmi/VoiceIsolator_v1_Realtime_48K_MLX` | Apache-2.0, from base `inworld/voice-isolator`, © 2026 Inworld AI | Apache attribution and NOTICE material, including the upstream Inworld notice carried in each repository |
 | USS `starkdmi/USS_MLX` | Apache-2.0, from ByteDance USS code and `RSNuts/Universal_Source_Separation` weights | Apache attribution and NOTICE material |
 | Demucs v4 / HTDemucs-ft `starkdmi/Demucs_MLX` | MIT, for both `adefossez/demucs` code and the official HTDemucs-ft weights | The MIT notice. Official source-specific checkpoints: `f7e0c4bc` (drums), `d12395a8` (bass), `92cfc3b6` (other), `04573f0d` (vocals) |
 | Kokoro `mlx-community/Kokoro-82M-{bf16,4bit,6bit,8bit}` | Apache-2.0, from `hexgrad/Kokoro-82M` and the inspected MLX variants | Model attribution, plus `Sources/Models/Kokoro/LICENSE` for the vendored port |
@@ -252,6 +253,7 @@ verified from the corresponding resolved checkout:
 | `mlx-swift-lm` | 2.29.3 | MIT |
 | `swift-transformers` | 1.1.9 | Apache-2.0 |
 | `SwiftAudio` | 1.5.0 | Apache-2.0 |
+| `VoiceIsolatorMLX` | 0.1.0 | Apache-2.0 |
 | `MisakiSwift` fork | 1.0.5-static.1 (`1ecaf9a6057ed8bdd69e5a37cdcc0b5cb30eb901`) | Apache-2.0 |
 | `MLXUtilsLibrary` | 0.0.6 | Apache-2.0 |
 | `FluidAudio` | 0.15.5 | Apache-2.0 |

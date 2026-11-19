@@ -131,13 +131,26 @@ public enum EnhancementModel: Sendable, Hashable {
     case mossformerSE48k  // MLX, 48kHz, ~30x RTF
     case mossformerGAN    // CoreML, 16kHz, ~3.5x RTF
     case frcrn            // MLX/CoreML, 16kHz, 5-11x RTF
-    
+
+    /// Inworld Voice Isolator, MLX, 48 kHz, offline.
+    ///
+    /// Non-causal: every frame sees its whole 8-second window.
+    case voiceIsolator
+
+    /// Inworld Voice Isolator, MLX, 48 kHz, causal.
+    ///
+    /// A different checkpoint from ``voiceIsolator``, not the same one run in a
+    /// different mode, which is why it is its own case: one cannot be substituted
+    /// for the other, and a caller asking for the realtime model and silently
+    /// getting the offline one would get 8 seconds of latency it did not ask for.
+    case voiceIsolatorRealtime
+
     /// Expected input sample rate for this model
     public var sampleRate: Int {
         switch self {
         case .mossformerSE16k, .mossformerGAN, .frcrn:
             return 16000
-        case .mossformerSE48k:
+        case .mossformerSE48k, .voiceIsolator, .voiceIsolatorRealtime:
             return 48000
         }
     }

@@ -26,6 +26,8 @@ Apple M1 Pro (16 GB), 30 s of audio, median of three timed runs.
 | Speech enhancement | MossFormer2 SE (fp16) | 48 kHz | 25.5x |
 | Speech enhancement | FRCRN | 16 kHz | 8.7x |
 | Speech enhancement | MossFormerGAN, Core ML (FP16) | 16 kHz | 4.2x |
+| Speech enhancement | Voice Isolator Realtime (fp16) | 48 kHz | 3.7x |
+| Speech enhancement | Voice Isolator (fp16) | 48 kHz | 3.2x |
 | Speaker separation | MossFormer2 SS, 2 speakers | 16 kHz | 1.7x |
 | Speaker separation | MossFormer2 SS, 3 speakers | 8 kHz | 3.1x |
 | Speaker separation | MossFormer2 SS, 2 speakers (WHAMR) | 8 kHz | 3.2x |

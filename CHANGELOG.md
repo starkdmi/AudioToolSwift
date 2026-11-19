@@ -3,6 +3,35 @@
 Notable changes per release. Dates are the tag date; unreleased work sits under
 the top heading until it ships.
 
+## Unreleased
+
+### Added
+
+- **Voice Isolator**, the [Inworld](https://huggingface.co/inworld/voice-isolator)
+  48 kHz speech isolation model, through the
+  [VoiceIsolatorMLX](https://github.com/starkdmi/VoiceIsolatorMLX) package — the
+  first model here that comes from a dependency rather than from
+  `Sources/Models/`. Two separately trained checkpoints, both pinned and
+  hash-verified like every other repository this package fetches:
+  - `VoiceIsolator48KProvider`, non-causal, 8-second context.
+  - `VoiceIsolatorRealtime48KProvider`, causal, 0/20/40 ms look-ahead. Its
+    `stream(_:)` is the first in this package that carries model state across
+    input buffers rather than calling `process` once per chunk, and
+    `latencySamples()` reports the algorithmic latency a playout buffer has to
+    absorb.
+- Both providers add `isolate(_:)` beside `process(_:)`. `process` validates its
+  48 kHz input as every provider does; `isolate` accepts any rate and lets the
+  library resample in and out with torchaudio's `kaiser_best` filter, which is
+  what the port was validated against and what avoids feeding the model the
+  spectral images an interpolating upsample leaves behind.
+- `EnhancementModel.voiceIsolator` and `.voiceIsolatorRealtime`, so both register
+  with `AudioEngine`; `MLXProviders` factory methods; `audio-tool` subcommands
+  `voiceisolate`, `voiceisolate-bg` and `voiceisolate-rt`; four
+  `audio-tool-bench` cases.
+
+Both default to **fp16**, which no other model here does: it is the precision the
+port computes in and was measured against the PyTorch reference at.
+
 ## 0.1.0 — 2026-08-17
 
 First public release. Everything below describes the state at the tag rather

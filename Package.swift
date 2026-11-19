@@ -120,6 +120,23 @@ let package = Package(
         // Resampling, STFT, and audio I/O.
         .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.5.0"),
 
+        // The Inworld Voice Isolator on MLX: the offline and the causal realtime
+        // checkpoint, the streaming session, and a kaiser_best resampler.
+        //
+        // The only model here that is not vendored under `Sources/Models`. It stays
+        // a package because it is published as one and has its own test suite and
+        // reference-parity figures; copying the source in would fork both.
+        //
+        // Its own requirement on mlx-swift is `0.29.1 ..< 0.33.0`, which contains
+        // the `.upToNextMinor(from: "0.29.1")` above, so the graph still resolves
+        // to the 0.29.x every vendored model target was built against.
+        //
+        // `exact:` rather than a range: the provider below depends on `isolate`
+        // resampling internally and on `IsolationStream`'s push/flush contract, and
+        // a minor bump that changed either would change this package's output with
+        // no signal. Bump deliberately, with the integration tests run.
+        .package(url: "https://github.com/starkdmi/VoiceIsolatorMLX", exact: "0.1.0"),
+
         // G2P for Kokoro TTS. A fork of mlalma/MisakiSwift whose only change is the
         // manifest - the Swift source at this revision is byte-identical to upstream
         // 1.0.5, and its 18 MB of pronunciation dictionaries and BART weights stay
@@ -347,6 +364,13 @@ let package = Package(
                 "MossFormer2SR",
                 "DemucsMLXSwift",
                 .product(name: "AudioUtils", package: "SwiftAudio"),
+                // VoiceIsolator's two providers live here rather than in a target
+                // of their own: they are MLX speech enhancement, so they want the
+                // process-wide `MLXCachePolicy`, the `MLXEnhancedWithBackground`
+                // return type, the `MLXProviders` factory and the `AudioEngine`
+                // registration extension that the other enhancers already use, and
+                // all five are internal to this module.
+                .product(name: "VoiceIsolatorMLX", package: "VoiceIsolatorMLX"),
             ],
             path: "Sources/AudioToolMLX",
             swiftSettings: commonSwiftSettings

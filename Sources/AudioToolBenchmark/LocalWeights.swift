@@ -91,6 +91,31 @@ public struct LocalWeights: Sendable {
         public static func uss(_ precision: ModelPrecisionName) -> String {
             "Models/uss_mlx_swift/USSSwift/Models/resunet30_\(precision.rawValue).safetensors"
         }
+
+        /// The two Voice Isolator checkpoints.
+        ///
+        /// These are the one place where the path above *is* a convention this
+        /// package invents, and the exception is worth stating rather than hiding.
+        /// Every other entry names where the research checkout already put a file,
+        /// because every other model was converted there. Voice Isolator was not:
+        /// it arrives as a SwiftPM dependency with its weights published straight
+        /// to the Hub, so there is no checkout path to name.
+        ///
+        /// It is still worth an entry. Without one the only way to measure these
+        /// two is to let `ModelDownloader` fetch 834 MB into the home directory,
+        /// which is exactly what `--weights-root` exists to avoid - and the
+        /// repository layout is mirrored here, so pointing the flag at a directory
+        /// holding `Models/voice_isolator_mlx/<repo>/model_<precision>.safetensors`
+        /// is enough.
+        public static func voiceIsolator(
+            _ precision: ModelPrecisionName,
+            realtime: Bool
+        ) -> String {
+            let repo = realtime
+                ? "VoiceIsolator_v1_Realtime_48K_MLX"
+                : "VoiceIsolator_v1_48K_MLX"
+            return "Models/voice_isolator_mlx/\(repo)/model_\(precision.rawValue).safetensors"
+        }
     }
 
     /// Precision names as the USS checkpoints spell them.
@@ -151,6 +176,13 @@ public struct LocalWeights: Sendable {
 
     public func uss(_ precision: ModelPrecisionName) -> String? {
         path(Layout.uss(precision))
+    }
+
+    public func voiceIsolator(
+        _ precision: ModelPrecisionName,
+        realtime: Bool
+    ) -> String? {
+        path(Layout.voiceIsolator(precision, realtime: realtime))
     }
 }
 

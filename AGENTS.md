@@ -213,7 +213,7 @@ by `MLXProcessLimitsTests`). `--gpu-cache-limit` and `--gpu-memory-limit` overri
 but only until a provider's `load()` reinstalls the production values - the report
 records both the requested and the effective figure.
 
-Scope is MLX and CoreML - 22 cases. FluidAudio-backed providers are excluded on
+Scope is MLX and CoreML - 26 cases. FluidAudio-backed providers are excluded on
 purpose: they measure a third-party pipeline. TTS *is* measured, in its own
 column, because its RTF counts audio generated rather than consumed
 (`RateBasis.output`) and the two denominators are not comparable.
@@ -246,6 +246,8 @@ explicit path, so development does not depend on any repo being published:
 
 ```swift
 FRCRNSE16KProvider(weightsPath: "...frcrn_se_16k.safetensors")
+VoiceIsolator48KProvider(weightsPath: "...model_fp16.safetensors")
+VoiceIsolatorRealtime48KProvider(weightsPath: "...model_fp16.safetensors")
 MossFormer2SE48KProvider(weightsPath: "...")
 MossFormer2SSProvider(model: .twoSpeaker, weightsPath: "...")
 MossFormer2SR48KProvider(weightsPath: "...", configPath: "...")
@@ -265,11 +267,31 @@ All three parts matter: the suite is gated on `RUN_INTEGRATION_TESTS` before it
 looks at the weights path, so passing only the path gives a green run in which
 every test skipped.
 
+The Voice Isolator model tests work the same way, with one variable per
+checkpoint, and run under `xcodebuild` as well - where the runner needs the
+`TEST_RUNNER_` prefix on every variable it should inherit:
+
+```bash
+TEST_RUNNER_RUN_INTEGRATION_TESTS=1 \
+TEST_RUNNER_AUDIOTOOL_VOICE_ISOLATOR_WEIGHTS=/path/VoiceIsolator_v1_48K_MLX/model_fp16.safetensors \
+TEST_RUNNER_AUDIOTOOL_VOICE_ISOLATOR_REALTIME_WEIGHTS=/path/VoiceIsolator_v1_Realtime_48K_MLX/model_fp16.safetensors \
+  xcodebuild test -scheme AudioToolSwift-Package -destination 'platform=macOS' \
+  -derivedDataPath .build/DerivedData \
+  -only-testing:AudioToolMLXIntegrationTests/VoiceIsolatorModelTests
+```
+
+Budget for the first run on a machine. VoiceIsolatorMLX builds several custom
+Metal kernels from source at first use, and that compilation is a one-off cost
+paid by whichever test happens to run first: measured here at **178 s** for the
+first case against 0.7-6.7 s for the eight after it. It is not a hang, and it is
+not in the benchmark's RTF - the benchmark loads in a child process per case and
+reports load time separately.
+
 ### Test Suites
 
 | Suite | Target | Description |
 |-------|--------|-------------|
-| `AudioToolMLXIntegrationTests` | MLX models | FRCRN, MossFormer2 SE/SS/SR |
+| `AudioToolMLXIntegrationTests` | MLX models | FRCRN, MossFormer2 SE/SS/SR, Voice Isolator |
 | `AudioToolUSSTests` | USS/Demucs/GAN | Background extraction tests |
 | `AudioToolFluidAudioTests` | VAD/Diarization | Silero VAD, Pyannote, Sortformer |
 | `AudioToolTests` | Core types | AudioBuffer, chunking, protocols |
@@ -280,8 +302,9 @@ every test skipped.
 swift run audio-tool -m <model> -i input.wav [-o output.wav]
 ```
 
-Available models: `frcrn`, `frcrn-bg`, `se48k`, `se48k-bg`, `demucs`, `ss_2spk`, `ss_3spk`,
-`ss_whamr`, `sr48k`, `streaming_verify`, `transcribe`
+Available models: `frcrn`, `frcrn-bg`, `se48k`, `se48k-bg`, `voiceisolate`,
+`voiceisolate-bg`, `voiceisolate-rt`, `demucs`, `ss_2spk`, `ss_3spk`, `ss_whamr`,
+`sr48k`, `streaming_verify`, `transcribe`
 
 The TTS and diarization subcommands were removed: they took no arguments and drove
 hardcoded fixtures rather than input files. Use `AudioToolTTS` directly until a real

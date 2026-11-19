@@ -18,6 +18,8 @@ Removes noise and reverberation from a single voice.
 | Model | Provider | Rate | Default | Size | Repository |
 | --- | --- | ---: | --- | ---: | --- |
 | MossFormer2 SE 48K | `MossFormer2SE48KProvider` | 48 kHz | fp32 | 211 MiB | `starkdmi/MossFormer2_SE_48K_MLX` |
+| Voice Isolator 48K | `VoiceIsolator48KProvider` | 48 kHz | fp16 | 152 MiB | `starkdmi/VoiceIsolator_v1_48K_MLX` |
+| Voice Isolator Realtime 48K | `VoiceIsolatorRealtime48KProvider` | 48 kHz | fp16 | 139 MiB | `starkdmi/VoiceIsolator_v1_Realtime_48K_MLX` |
 | FRCRN SE 16K | `FRCRNSE16KProvider` | 16 kHz | fp32 | 53 MiB | `starkdmi/FRCRN_SE_16K_MLX` |
 | MossFormerGAN SE 16K | `MossFormerGANCoreMLProvider` | 16 kHz | FP16 | 7.6 MiB | `starkdmi/MossFormer_GAN_SE_16K_CoreML` |
 
@@ -27,9 +29,35 @@ MossFormerGAN is compiled for Core ML, so its precision is fixed at conversion
 time and the two variants are separate packages; **FP16 is faster and uses 5.5x
 less memory** than FP32, the clearest precision win in the package.
 
-Both MossFormer2 SE and FRCRN can return the removed background as a second
-signal instead of discarding it (`-bg` in the CLI), which is what makes them
-usable for background extraction rather than only for cleanup.
+**Voice Isolator** is the [Inworld](https://huggingface.co/inworld/voice-isolator)
+model, ported in [VoiceIsolatorMLX](https://github.com/starkdmi/VoiceIsolatorMLX)
+— the only model here that comes from a package rather than from
+`Sources/Models/`. It is the one to reach for on 48 kHz material: it was trained
+at that rate rather than upsampled to it, and it is published in two separately
+trained checkpoints.
+
+- **Offline** (`VoiceIsolator48KProvider`) is non-causal — every frame sees its
+  whole 8-second window, and longer inputs render in windows crossfaded over 2 s.
+- **Realtime** (`VoiceIsolatorRealtime48KProvider`) is causal, with 0, 20 or 40 ms
+  of look-ahead. It is the only provider in this package whose `stream(_:)`
+  genuinely carries model state across input buffers — KV-cached attention,
+  Mamba state and a two-lane crossfade — rather than calling `process` once per
+  chunk. `latencySamples()` reports what a playout buffer has to absorb.
+
+Both default to **fp16**, which no other model here does: it is the precision the
+port computes in and was measured against the PyTorch reference at.
+
+Both Voice Isolator providers also expose `isolate(_:)` alongside `process(_:)`.
+`process` validates its 48 kHz input like every other provider; `isolate` takes
+audio at *any* rate and lets the library resample in and out with torchaudio's
+`kaiser_best` filter. Prefer it when the input is not already 48 kHz: an
+interpolating upsample leaves spectral images 25–32 dB down above the source
+band, and this model scales energy that is present rather than deciding some of
+it is a resampler artifact, so it passes those images through.
+
+MossFormer2 SE, FRCRN and both Voice Isolator providers can return the removed
+background as a second signal instead of discarding it (`-bg` in the CLI), which
+is what makes them usable for background extraction rather than only for cleanup.
 
 ## Speaker separation
 
@@ -175,6 +203,8 @@ entirely:
 
 ```swift
 MossFormer2SE48KProvider(weightsPath: "…/model_fp16.safetensors")
+VoiceIsolator48KProvider(weightsPath: "…/model_fp16.safetensors")
+VoiceIsolatorRealtime48KProvider(weightsPath: "…/model_fp16.safetensors")
 FRCRNSE16KProvider(weightsPath: "…/model_fp32.safetensors")
 MossFormer2SSProvider(model: .twoSpeaker, weightsPath: "…")
 MossFormer2SR48KProvider(weightsPath: "…", configPath: "…")

@@ -1,5 +1,5 @@
 {
-  "originHash" : "b8071eface89592b88611425cbaaebe0873bb051aabc4a42830899b444ce34ad",
+  "originHash" : "4d3ade8807c1948459b8dbe7bec70b5a603a476f7e9f957dc00763ac9bfcaf40",
   "pins" : [
     {
       "identity" : "fluidaudio",
@@ -107,6 +107,15 @@
       "state" : {
         "revision" : "9b0903df63992fda2d3001c70870ca139404a85e",
         "version" : "1.5.0"
+      }
+    },
+    {
+      "identity" : "voiceisolatormlx",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/starkdmi/VoiceIsolatorMLX",
+      "state" : {
+        "revision" : "3d4540560f546efd0b76bb86b49a9b3eecb8c74f",
+        "version" : "0.1.0"
       }
     },
     {

@@ -66,6 +66,19 @@ public enum ModelRepository {
     /// Demucs music separation.
     public static let demucs = "starkdmi/Demucs_MLX"
 
+    /// Voice Isolator, 48 kHz, offline.
+    ///
+    /// Every frame sees its whole 8-second window, so this is the quality
+    /// checkpoint and the one to use when the audio is already recorded.
+    public static let voiceIsolator48K = "starkdmi/VoiceIsolator_v1_48K_MLX"
+
+    /// Voice Isolator, 48 kHz, causal.
+    ///
+    /// A separately trained checkpoint rather than the same weights run
+    /// differently: `VoiceIsolator` refuses `.offline` on it and `.streaming` on
+    /// the one above. Two repositories because they are two models.
+    public static let voiceIsolatorRealtime48K = "starkdmi/VoiceIsolator_v1_Realtime_48K_MLX"
+
     /// MossFormerGAN speech enhancement, 16 kHz, compiled for Core ML.
     ///
     /// The only Core ML model this package downloads itself. It was the last

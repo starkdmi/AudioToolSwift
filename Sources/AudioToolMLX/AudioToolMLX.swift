@@ -35,7 +35,56 @@ public struct MLXProviders {
     public static func frcrnSE16K(weightsPath: String) -> FRCRNSE16KProvider {
         FRCRNSE16KProvider(weightsPath: weightsPath)
     }
-    
+
+    /// Create the offline Voice Isolator (48 kHz).
+    ///
+    /// - Parameter precision: `.fp16` (default) or `.fp32`. fp16 is what the model
+    ///   computes in upstream; see `Docs/model-precisions.md`.
+    public static func voiceIsolator48K(
+        precision: ModelPrecision = .fp16
+    ) -> VoiceIsolator48KProvider {
+        VoiceIsolator48KProvider(precision: precision)
+    }
+
+    /// Create the offline Voice Isolator with explicit weights path
+    public static func voiceIsolator48K(
+        weightsPath: String,
+        precision: ModelPrecision = .fp16
+    ) -> VoiceIsolator48KProvider {
+        VoiceIsolator48KProvider(weightsPath: weightsPath, precision: precision)
+    }
+
+    /// Create the causal Voice Isolator (48 kHz), for live audio.
+    ///
+    /// - Parameters:
+    ///   - precision: `.fp16` (default) or `.fp32`.
+    ///   - lookaheadFrames: One of
+    ///     ``VoiceIsolatorRealtime48KProvider/supportedLookaheadFrames`` - 0, 2 or 4
+    ///     frames, which is 0, 20 or 40 ms. `nil` takes the checkpoint's own
+    ///     default.
+    public static func voiceIsolatorRealtime48K(
+        precision: ModelPrecision = .fp16,
+        lookaheadFrames: Int? = nil
+    ) -> VoiceIsolatorRealtime48KProvider {
+        VoiceIsolatorRealtime48KProvider(
+            precision: precision,
+            lookaheadFrames: lookaheadFrames
+        )
+    }
+
+    /// Create the causal Voice Isolator with explicit weights path
+    public static func voiceIsolatorRealtime48K(
+        weightsPath: String,
+        precision: ModelPrecision = .fp16,
+        lookaheadFrames: Int? = nil
+    ) -> VoiceIsolatorRealtime48KProvider {
+        VoiceIsolatorRealtime48KProvider(
+            weightsPath: weightsPath,
+            precision: precision,
+            lookaheadFrames: lookaheadFrames
+        )
+    }
+
     // Note: MossFormer GAN SE 16K is now in AudioToolCoreML
     // Use CoreMLProviders.mossformerGANSE16K() instead
     
@@ -103,6 +152,25 @@ extension AudioEngine {
 
     /// Configure with MLX FRCRN provider
     public func configure(enhancer: FRCRNSE16KProvider, for model: EnhancementModel = .frcrn) async throws {
+        try await self.preload(enhancer)
+        self.register(enhancer: enhancer, for: model)
+    }
+
+    /// Configure with the offline Voice Isolator
+    public func configure(enhancer: VoiceIsolator48KProvider, for model: EnhancementModel = .voiceIsolator) async throws {
+        try await self.preload(enhancer)
+        self.register(enhancer: enhancer, for: model)
+    }
+
+    /// Configure with the causal Voice Isolator.
+    ///
+    /// Registering it makes `enhance(_:model:.voiceIsolatorRealtime)` work, which
+    /// runs a whole buffer through one session. The reason to reach for this model
+    /// - carrying state across live input buffers - is
+    /// ``VoiceIsolatorRealtime48KProvider/stream(_:)``, which the engine's
+    /// enhancement API has no shape for, so hold the provider as well as
+    /// registering it.
+    public func configure(enhancer: VoiceIsolatorRealtime48KProvider, for model: EnhancementModel = .voiceIsolatorRealtime) async throws {
         try await self.preload(enhancer)
         self.register(enhancer: enhancer, for: model)
     }

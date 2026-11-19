@@ -200,6 +200,74 @@ public final class ModelCatalog: @unchecked Sendable {
                 ]
             ),
 
+            // Two definitions rather than one with four variants: offline and
+            // realtime are separately trained checkpoints, one non-causal and one
+            // causal, and `VoiceIsolator` refuses the wrong mode for either. A
+            // single entry would offer a download screen a "precision" choice that
+            // silently also changed the latency and the algorithm.
+            //
+            // fp16 is listed first, so `defaultVariant` is fp16. It is the only
+            // model here whose default is not fp32: it is what the port computes in
+            // upstream and what its parity figures were measured at.
+            //
+            // Sizes are the blobs on the Hub at the pinned revisions, measured
+            // 2026-11-19. Neither repository publishes a `config.json`, so
+            // `requiredFiles` is narrower than `files` for the usual reason - see
+            // `ModelFiles.standardRequired`.
+            ModelDefinition(
+                id: "voice_isolator_48k",
+                name: "Voice Isolator 48K",
+                category: .speechEnhancement,
+                description: "Inworld Voice Isolator: 48 kHz speech isolation, offline, 8-second context",
+                variants: [
+                    ModelVariant(
+                        id: "voice_isolator_48k_fp16",
+                        name: "Voice Isolator 48K (FP16)",
+                        quantization: .fp16,
+                        sizeBytes: 159_659_684,
+                        repo: ModelRepository.voiceIsolator48K,
+                        files: ModelFiles.standard(.fp16),
+                        requiredFiles: ModelFiles.standardRequired(.fp16)
+                    ),
+                    ModelVariant(
+                        id: "voice_isolator_48k_fp32",
+                        name: "Voice Isolator 48K (FP32)",
+                        quantization: .fp32,
+                        sizeBytes: 285_365_088,
+                        repo: ModelRepository.voiceIsolator48K,
+                        files: ModelFiles.standard(.fp32),
+                        requiredFiles: ModelFiles.standardRequired(.fp32)
+                    ),
+                ]
+            ),
+
+            ModelDefinition(
+                id: "voice_isolator_realtime_48k",
+                name: "Voice Isolator Realtime 48K",
+                category: .speechEnhancement,
+                description: "Inworld Voice Isolator: 48 kHz speech isolation, causal, for live audio",
+                variants: [
+                    ModelVariant(
+                        id: "voice_isolator_realtime_48k_fp16",
+                        name: "Voice Isolator Realtime 48K (FP16)",
+                        quantization: .fp16,
+                        sizeBytes: 146_041_595,
+                        repo: ModelRepository.voiceIsolatorRealtime48K,
+                        files: ModelFiles.standard(.fp16),
+                        requiredFiles: ModelFiles.standardRequired(.fp16)
+                    ),
+                    ModelVariant(
+                        id: "voice_isolator_realtime_48k_fp32",
+                        name: "Voice Isolator Realtime 48K (FP32)",
+                        quantization: .fp32,
+                        sizeBytes: 265_034_687,
+                        repo: ModelRepository.voiceIsolatorRealtime48K,
+                        files: ModelFiles.standard(.fp32),
+                        requiredFiles: ModelFiles.standardRequired(.fp32)
+                    ),
+                ]
+            ),
+
             // MARK: Speech Separation
             ModelDefinition(
                 id: "mossformer2_ss",

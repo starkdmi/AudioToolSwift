@@ -26,9 +26,13 @@ Memory, and what the OS charges against a memory limit.
 | `mlx.frcrn_se_16k` | 16 kHz | 8.7x | 3.452 s | 2503 MiB | 2026-08-12 |
 | `coreml.mossformer_gan_se_16k.fp16` | 16 kHz | 4.2x | — | 302 MiB | see below |
 | `coreml.mossformer_gan_se_16k.fp32` | 16 kHz | 3.7x | — | 1656 MiB | see below |
+| `mlx.voice_isolator_realtime_48k.fp16` | 48 kHz | 3.7x | 8.115 s | 1700 MiB | 2026-11-19 |
 | `mlx.demucs.all_stems` | 44.1 kHz | 3.4x | 8.942 s | 3778 MiB | 2026-08-10 |
 | `mlx.mossformer2_ss.2spk_whamr` | 8 kHz | 3.2x | 9.271 s | 3833 MiB | 2026-08-12 |
+| `mlx.voice_isolator_48k.fp16` | 48 kHz | 3.2x | 9.430 s | 1094 MiB | 2026-11-19 |
 | `mlx.mossformer2_ss.3spk` | 8 kHz | 3.1x | 9.675 s | 4129 MiB | 2026-08-10 |
+| `mlx.voice_isolator_realtime_48k.fp32` | 48 kHz | 3.0x | 9.892 s | 2614 MiB | 2026-11-19 |
+| `mlx.voice_isolator_48k.fp32` | 48 kHz | 2.7x | 11.180 s | 1472 MiB | 2026-11-19 |
 | `mlx.mossformer2_sr_48k.fp32` | 16 → 48 kHz | 1.9x | 15.490 s | 4144 MiB | 2026-08-12 |
 | `mlx.mossformer2_sr_48k.int8` | 16 → 48 kHz | 1.9x | 15.497 s | 3983 MiB | 2026-08-12 |
 | `mlx.mossformer2_ss.2spk` | 16 kHz | 1.7x | 18.040 s | 5428 MiB | 2026-08-12 |

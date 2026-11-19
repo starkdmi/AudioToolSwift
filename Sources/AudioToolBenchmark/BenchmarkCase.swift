@@ -352,6 +352,72 @@ public enum BenchmarkCatalog {
             ))
         }
 
+        // Voice Isolator, both checkpoints at both published precisions.
+        //
+        // Four cases rather than two because fp16 is this model's *default*, and a
+        // default nobody measures against its own fp32 is a claim rather than a
+        // result. It is also the only model here whose fp16 checkpoint is the
+        // recommended one, so the comparison answers a question a caller actually
+        // faces.
+        //
+        // The realtime checkpoint is measured through `process`, which runs the
+        // whole buffer through one streaming session. That is the throughput
+        // number - what a file costs - and it is not the latency number, which is
+        // per-push and is reported by `latencySamples()` instead. A causal model
+        // measured by RTF alone looks merely slower than the offline one; the
+        // reason to choose it is not in this column.
+        for realtime in [false, true] {
+            for precision in VoiceIsolator48KProvider.supportedPrecisions {
+                let local = options.localWeights.voiceIsolator(
+                    precision == .fp16 ? .fp16 : .fp32,
+                    realtime: realtime
+                )
+                let repo = realtime
+                    ? VoiceIsolatorRealtime48KProvider.repo
+                    : VoiceIsolator48KProvider.repo
+                let files = ModelFiles.standardRequired(precision)
+                let suffix = realtime ? "_realtime_48k" : "_48k"
+                let name = realtime ? "Voice Isolator Realtime 48 kHz" : "Voice Isolator 48 kHz"
+
+                cases.append(BenchmarkCase(
+                    id: "mlx.voice_isolator\(suffix).\(precision.rawValue)",
+                    label: "\(name) (\(precision.rawValue.uppercased()))",
+                    category: "enhancement",
+                    backend: "mlx",
+                    sampleRate: 48000,
+                    // Measured peaks, 30 s at 48 kHz: 1094/1472 MiB offline and
+                    // 1700/2614 MiB realtime. The causal checkpoint is the
+                    // heavier of the two, which is not what its name suggests -
+                    // see `VoiceIsolatorRealtime48KProvider.estimatedMemoryBytes`.
+                    estimatedMemoryBytes: realtime
+                        ? (precision == .fp32 ? 2_750_000_000 : 1_800_000_000)
+                        : (precision == .fp32 ? 1_550_000_000 : 1_150_000_000),
+                    weightsPreCached: { local != nil || cached(repo, files) },
+                    weightsSource: { source(local: local, repo: repo, files: files) },
+                    makeWorkload: {
+                        if realtime {
+                            let provider = local.map {
+                                VoiceIsolatorRealtime48KProvider(weightsPath: $0, precision: precision)
+                            } ?? VoiceIsolatorRealtime48KProvider(precision: precision)
+                            return transform(
+                                load: { try await provider.load() },
+                                process: { try await provider.process($0) },
+                                unload: { await provider.unload() }
+                            )
+                        }
+                        let provider = local.map {
+                            VoiceIsolator48KProvider(weightsPath: $0, precision: precision)
+                        } ?? VoiceIsolator48KProvider(precision: precision)
+                        return transform(
+                            load: { try await provider.load() },
+                            process: { try await provider.process($0) },
+                            unload: { await provider.unload() }
+                        )
+                    }
+                ))
+            }
+        }
+
         // One case per compiled `.mlpackage`. CoreML fixes precision at conversion
         // time rather than at load, so fp32 and fp16 are two files and cannot be one
         // case with a parameter - which also means the comparison here is between two

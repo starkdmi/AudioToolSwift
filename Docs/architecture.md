@@ -24,6 +24,16 @@ only ones free of the Metal library constraint below.
 `AudioToolCore` is the only target everything shares, and it has no ML dependency
 at all — which is what keeps `swift test` on the core types fast and hermetic.
 
+One model is not under `Sources/Models/`: the Voice Isolator providers in
+`AudioToolMLX` wrap
+[VoiceIsolatorMLX](https://github.com/starkdmi/VoiceIsolatorMLX), an ordinary
+SwiftPM dependency. The rule the vendored layout follows is that a model
+implementation lives here when this repository is where it is maintained;
+VoiceIsolatorMLX is published and tested as its own package, with its own
+reference-parity figures, so copying it in would fork it. The provider seam is
+the same either way — an actor conforming to `SpeechEnhancer` — which is the
+point of having a seam.
+
 ## AudioToolCore
 
 **`AudioBuffer`** is the currency: an immutable value type holding interleaved

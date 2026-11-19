@@ -56,13 +56,21 @@ The gates live in `TestGate` (`Tests/TestSupport/TestGate.swift`):
 | `CI=1` | Loosen timing assertions. |
 | `AUDIOTOOL_TEST_OUTPUT_DIR=/path` | Where test artifacts go. Default is a per-run temporary directory the OS reaps. |
 
-Two suites additionally want weights you already have on disk, and **skip
+Three suites additionally want weights you already have on disk, and **skip
 silently without them** - a green run is not evidence they executed:
 
 | Variable | Description |
 |----------|-------------|
 | `AUDIOTOOL_USS_WEIGHTS=/path/resunet30_fp32.safetensors` | A resunet30 checkpoint. Without it the USS model tests skip (`Tests/AudioToolUSSTests/USSTestWeights.swift`). |
 | `AUDIOTOOL_DEMUCS_WEIGHTS=/path/to/dir` | Directory holding `<stem>.safetensors`. Without it `DemucsShapeTests` skips. |
+| `AUDIOTOOL_VOICE_ISOLATOR_WEIGHTS=/path/model_fp16.safetensors` | The offline Voice Isolator checkpoint. Without it the offline half of `VoiceIsolatorModelTests` skips. |
+| `AUDIOTOOL_VOICE_ISOLATOR_REALTIME_WEIGHTS=/path/model_fp16.safetensors` | The causal checkpoint, for the streaming half of the same suite. |
+
+`VoiceIsolatorModelTests` takes one variable per checkpoint because they are two
+separately trained models rather than two precisions of one; setting only one
+runs that half and skips the other. Its first case on a cold machine takes about
+three minutes while VoiceIsolatorMLX's custom Metal kernels compile, after which
+the remaining eight finish in seconds.
 
 ```bash
 AUDIOTOOL_USS_WEIGHTS=~/weights/resunet30_fp32.safetensors \

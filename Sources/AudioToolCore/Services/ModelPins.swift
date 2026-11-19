@@ -69,7 +69,8 @@ public enum ModelPins {
     /// ships.
     public static let unpublished: Set<String> = []
 
-    /// Fetched from the Hub on 2026-08-12 and frozen here.
+    /// Fetched from the Hub on 2026-08-12 and frozen here; the two VoiceIsolator
+    /// entries were added on 2026-11-19, when those repositories were published.
     ///
     /// Two repositories in the catalog are absent by design rather than oversight:
     /// FluidAudio downloads its own ASR, diarization and Sortformer models through
@@ -131,6 +132,31 @@ public enum ModelPins {
                 "bass.safetensors": "d71a63b45171e773f486c375d5079c37b65ff4787d80b3d9b4815ef6b327945b",
                 "other.safetensors": "65144751ac6661ffc26bf6fe7857853c90a8d2bea077061f0b7927197ecef5e7",
                 "vocals.safetensors": "3a92bc147648589974c9be14808fde04d5440fe24a66d8dc363da0e96302d21d",
+            ]
+        ),
+        // Published 2026-11-19, alongside github.com/starkdmi/VoiceIsolatorMLX.
+        //
+        // Both repositories publish fp16 and fp32 and no `config.json`: the
+        // architecture is read from the checkpoint's own tensor shapes, so
+        // `ModelFiles.standard` asks for a config neither repo has, exactly as it
+        // does for FRCRN and the three SS repos. An unmatched glob is not an error
+        // and `requiredFiles` is what decides loadability.
+        //
+        // fp16 is the default here, unlike everywhere else in this table. It is
+        // what `VoiceIsolator` computes in unless told otherwise, and what the
+        // port was measured at against the PyTorch reference.
+        "starkdmi/VoiceIsolator_v1_48K_MLX": ModelPin(
+            revision: "0bf480815ac77bba0429a0aae96859759560f441",
+            fileHashes: [
+                "model_fp16.safetensors": "ffb1f72732c430cab90228306a90f2bdc714eaa6f6ebab90196c60a6c1ee1d28",
+                "model_fp32.safetensors": "660c40d07e3837eb680dcd0c5ab8aa99bf4b16ea32af2383d00089cc442246ee",
+            ]
+        ),
+        "starkdmi/VoiceIsolator_v1_Realtime_48K_MLX": ModelPin(
+            revision: "ca5c8c95e0ef70735eb6498560fd06275e13fb38",
+            fileHashes: [
+                "model_fp16.safetensors": "1a8d376e432319ff59be506b9f805287357d659d6a47d4cc51d46b68e0a4af11",
+                "model_fp32.safetensors": "a72add45bcf0594e8bac631a62eca85d080677ac611612f26d2c898c58ee00a6",
             ]
         ),
         // Published 2026-08-12, by making an existing private repository public and

@@ -73,6 +73,11 @@ func printUsage() {
                                      MossFormer2 SE 48K (4s/25%/discard-edges)
       se48k-bg (se48kbg, mossformer2_se_bg)
                                      MossFormer2 SE 48K, also writes the background
+      voiceisolate (vi, isolate)     Voice Isolator 48K, offline (8s/2s crossfade)
+      voiceisolate-bg (vibg, voiceisolate_bg)
+                                     Voice Isolator 48K, also writes the background
+      voiceisolate-rt (virt, realtime)
+                                     Voice Isolator 48K causal, through its stream
       demucs (vocals)                Demucs vocals separation (7.8s/25%/triangular)
       ss_2spk (ss2spk, 2spk)         MossFormer2 SS 2-speaker (4s/25%/triangular)
       ss_3spk (ss3spk, 3spk)         MossFormer2 SS 3-speaker (4s/25%/triangular)
@@ -352,6 +357,124 @@ func runMossFormer2SEWithBackground(inputPath: String, outputPath: String, weigh
     try saver.save(MLXArray(result.background.samples), to: backgroundPath)
     print("✓ Saved: \(enhancedPath)")
     print("✓ Saved: \(backgroundPath)")
+}
+
+// MARK: - Voice Isolator
+
+/// Load mono audio at the isolator's own rate.
+///
+/// 48 kHz, like the SE 48K commands above, so `--weights` plus a 48 kHz input is
+/// the path with no resampling in it at all. When the input is *not* 48 kHz, note
+/// that this is the one place the CLI is worse than the API: `AudioLoader` converts
+/// here, whereas `VoiceIsolator48KProvider.isolate(_:)` would hand the model the
+/// original rate and let it convert with the filter it was validated against.
+func loadVoiceIsolatorInput(_ inputPath: String) throws -> AudioBuffer {
+    let loader = AudioLoader(config: AudioLoader.Configuration(targetSampleRate: 48000))
+    let audio = try loader.loadMono(from: URL(fileURLWithPath: inputPath))
+    eval(audio)
+    return AudioBuffer(samples: audio.asArray(Float.self), sampleRate: 48000, channels: 1)
+}
+
+func runVoiceIsolator(inputPath: String, outputPath: String, weightsPath: String?) async throws {
+    print("\n=== Voice Isolator 48K (offline) ===")
+    print("Windowing: 8s windows, 2s crossfade, by the model")
+
+    let provider = try explicitWeights(weightsPath).map { MLXProviders.voiceIsolator48K(weightsPath: $0) }
+        ?? MLXProviders.voiceIsolator48K()
+
+    print("Loading model (may download from HuggingFace)...")
+    try await provider.load()
+    print("Model ready")
+
+    print("Loading audio from: \(inputPath)")
+    let input = try loadVoiceIsolatorInput(inputPath)
+    print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
+
+    print("Processing...")
+    let startTime = Date()
+    let output = try await provider.process(input)
+    let processingTime = Date().timeIntervalSince(startTime)
+
+    print("Output: \(output.samples.count) samples (\(String(format: "%.2f", output.duration))s)")
+    print("RTF: \(String(format: "%.2f", input.duration / processingTime))x")
+
+    let saver = AudioSaver(config: AudioSaver.Configuration(sampleRate: 48000))
+    try saver.save(MLXArray(output.samples), to: outputPath)
+    print("✓ Saved: \(outputPath)")
+}
+
+func runVoiceIsolatorWithBackground(inputPath: String, outputPath: String, weightsPath: String?) async throws {
+    print("\n=== Voice Isolator 48K with Background Extraction ===")
+
+    let provider = try explicitWeights(weightsPath).map { MLXProviders.voiceIsolator48K(weightsPath: $0) }
+        ?? MLXProviders.voiceIsolator48K()
+
+    print("Loading model (may download from HuggingFace)...")
+    try await provider.load()
+    print("Model ready")
+
+    print("Loading audio from: \(inputPath)")
+    let input = try loadVoiceIsolatorInput(inputPath)
+    print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
+
+    print("Processing with background extraction...")
+    let startTime = Date()
+    let result = try await provider.processWithBackground(input)
+    let processingTime = Date().timeIntervalSince(startTime)
+
+    print("Enhanced: \(result.enhanced.samples.count) samples, max: \(String(format: "%.4f", result.enhanced.samples.max() ?? 0))")
+    print("Background: \(result.background.samples.count) samples, max: \(String(format: "%.4f", result.background.samples.max() ?? 0))")
+    print("RTF: \(String(format: "%.2f", input.duration / processingTime))x")
+
+    let saver = AudioSaver(config: AudioSaver.Configuration(sampleRate: 48000))
+    let basePath = (outputPath as NSString).deletingPathExtension
+    let enhancedPath = basePath + "_enhanced.wav"
+    let backgroundPath = basePath + "_background.wav"
+
+    try saver.save(MLXArray(result.enhanced.samples), to: enhancedPath)
+    try saver.save(MLXArray(result.background.samples), to: backgroundPath)
+    print("✓ Saved: \(enhancedPath)")
+    print("✓ Saved: \(backgroundPath)")
+}
+
+/// The causal checkpoint, driven through its streaming session.
+///
+/// Uses `processStream` rather than `process` because that is the mode this model
+/// exists for: the output arrives in pieces as they are finalized, and the session
+/// carries state across them, so what is printed here is also what a live caller
+/// would see arriving.
+func runVoiceIsolatorRealtime(inputPath: String, outputPath: String, weightsPath: String?) async throws {
+    print("\n=== Voice Isolator Realtime 48K (causal, streaming) ===")
+
+    let provider = try explicitWeights(weightsPath).map { MLXProviders.voiceIsolatorRealtime48K(weightsPath: $0) }
+        ?? MLXProviders.voiceIsolatorRealtime48K()
+
+    print("Loading model (may download from HuggingFace)...")
+    try await provider.load()
+    let latencyMs = Double(try await provider.latencySamples()) / 48.0
+    print("Model ready - algorithmic latency \(String(format: "%.0f", latencyMs)) ms")
+
+    print("Loading audio from: \(inputPath)")
+    let input = try loadVoiceIsolatorInput(inputPath)
+    print("Input: \(input.samples.count) samples (\(String(format: "%.2f", input.duration))s)")
+
+    print("Streaming...")
+    let startTime = Date()
+    var samples: [Float] = []
+    samples.reserveCapacity(input.samples.count)
+    var pieces = 0
+    for try await piece in provider.processStream(input) {
+        samples.append(contentsOf: piece.samples)
+        pieces += 1
+    }
+    let processingTime = Date().timeIntervalSince(startTime)
+
+    print("Output: \(samples.count) samples in \(pieces) pieces")
+    print("RTF: \(String(format: "%.2f", input.duration / processingTime))x")
+
+    let saver = AudioSaver(config: AudioSaver.Configuration(sampleRate: 48000))
+    try saver.save(MLXArray(samples), to: outputPath)
+    print("✓ Saved: \(outputPath)")
 }
 
 // MARK: - Demucs with Chunking
@@ -724,6 +847,12 @@ Task {
             try await runMossFormer2SE(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "se48k-bg", "se48kbg", "mossformer2_se_bg":
             try await runMossFormer2SEWithBackground(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
+        case "voiceisolate", "vi", "isolate":
+            try await runVoiceIsolator(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
+        case "voiceisolate-bg", "vibg", "voiceisolate_bg":
+            try await runVoiceIsolatorWithBackground(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
+        case "voiceisolate-rt", "virt", "realtime":
+            try await runVoiceIsolatorRealtime(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "demucs", "vocals":
             try await runDemucs(inputPath: inputPath, outputPath: outputPath, weightsPath: weightsPath)
         case "ss_2spk", "ss2spk", "2spk":

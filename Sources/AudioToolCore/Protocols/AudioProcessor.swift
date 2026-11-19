@@ -478,6 +478,8 @@ extension EnhancementModel: ModelIdentifier {
         case .mossformerSE48k: return "mossformer2_se_48k"
         case .mossformerGAN: return "mossformer_gan_se"
         case .frcrn: return "frcrn_se"
+        case .voiceIsolator: return "voice_isolator_48k"
+        case .voiceIsolatorRealtime: return "voice_isolator_realtime_48k"
         }
     }
 }
