@@ -3,7 +3,7 @@
 Notable changes per release. Dates are the tag date; unreleased work sits under
 the top heading until it ships.
 
-## Unreleased
+## 0.2.0 — 2026-11-19
 
 ### Added
 

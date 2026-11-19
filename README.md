@@ -49,7 +49,7 @@ pick — the smallest is rarely the right one.
 ## Install
 
 ```swift
-.package(url: "https://github.com/starkdmi/AudioToolSwift.git", from: "0.1.0")
+.package(url: "https://github.com/starkdmi/AudioToolSwift.git", from: "0.2.0")
 ```
 
 Then depend on the libraries you need — each backend is its own product, so an
