@@ -106,8 +106,9 @@ public actor AudioEngine {
     }
 
     /// ``withResidency(_:_:)`` for a caller in any isolation, including none: the
-    /// body runs where the caller does. ``enhanceStream(_:model:)`` takes its
-    /// claim through here from off the actor.
+    /// body runs where the caller does. ``enhanceStream(_:model:)`` and
+    /// ``streamSynthesis(_:voice:model:)`` take their claims through here from off
+    /// the actor.
     private static func withLease<T>(
         on provider: Any,
         from modelManager: ModelResidency,
@@ -467,9 +468,11 @@ public actor AudioEngine {
         }
         let residency = modelManager
         return AsyncThrowingStream { continuation in
-            // Detached so the stream never runs on this actor. A batch call adapts
-            // its whole input synchronously on the actor, and a live stream hopping
-            // through it once per buffer would stall behind that. Detaching drops
+            // Detached so no part of the stream runs on this actor - not its
+            // start, not the lease release before its end, and not its buffers,
+            // which a closure inheriting the actor would resume on after every
+            // await. A batch call adapts its whole input synchronously on the
+            // actor, and a live stream must not wait behind that. Detaching drops
             // the caller's priority unless it is passed on, and a live source is
             // the one place that priority matters.
             let producer = Task.detached(priority: Task.currentPriority) {
@@ -1149,6 +1152,10 @@ public actor AudioEngine {
     /// incrementally, while Kokoro and Chatterbox currently yield one buffer for the
     /// whole utterance.
     ///
+    /// Runs off the engine actor, as ``enhanceStream(_:model:)`` does: neither its
+    /// chunks nor its end wait behind a batch call that is adapting its input on
+    /// the actor.
+    ///
     /// - Parameters:
     ///   - text: Text to synthesize
     ///   - voice: Voice identifier
@@ -1164,10 +1171,17 @@ public actor AudioEngine {
                 continuation.finish(throwing: AudioToolError.modelNotLoaded(model.modelName))
             }
         }
+        let residency = modelManager
         return AsyncThrowingStream { continuation in
-            let producer = Task {
+            // Detached, at the caller's priority; see `enhanceStream`. A `Task {}`
+            // here inherits this actor. The loop itself escaped it only because
+            // its closure captures nothing isolated - which nonisolated(nonsending)
+            // by default would undo - but the task's start, and the lease release
+            // that precedes `finish()`, ran on the actor and waited behind
+            // whatever held it.
+            let producer = Task.detached(priority: Task.currentPriority) {
                 do {
-                    try await self.withResidency(synthesizer) {
+                    try await Self.withLease(on: synthesizer, from: residency) {
                         let upstream = synthesizer.streamSynthesis(text, voice: voice)
                         for try await chunk in upstream {
                             try Task.checkCancellation()

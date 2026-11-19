@@ -306,6 +306,36 @@ struct LiveEnhancementStreamTests {
         #expect(await fixture.enhancer.isLoaded == false)
     }
 
+    /// The reason the stream is detached: a batch call adapting its input holds
+    /// the engine actor, and live audio must not wait for it - neither its
+    /// buffers nor the lease release and end of stream.
+    @Test("Live buffers and the stream's end flow while the engine actor is busy")
+    func testStreamCompletesWhileEngineActorIsBusy() async throws {
+        let fixture = try await makeFixture()
+        let (input, feed) = AsyncStream<AudioBuffer>.makeStream()
+        let recorder = ChunkRecorder()
+        let consumer = recorder.record(
+            await fixture.engine.enhanceStream(input, model: Self.model)
+        )
+
+        feed.yield(buffer(1))
+        try await waitUntil("the first output") { await recorder.count == 1 }
+
+        try await whileEngineActorIsBlocked(fixture.engine, by: ActorBlockingEnhancer()) {
+            feed.yield(buffer(2))
+            try await waitUntil("an output while the engine actor is held") {
+                await recorder.count == 2
+            }
+            feed.finish()
+            try await waitUntil("the stream's end while the engine actor is held") {
+                await recorder.ended
+            }
+        }
+
+        try await consumer.value
+        #expect(await fixture.leases == 0)
+    }
+
     @Test("Dropping the stream releases the lease")
     func testDroppingStreamReleasesLease() async throws {
         let fixture = try await makeFixture()
